@@ -132,6 +132,7 @@ static bool s_build_pending, s_build_active, s_build_cancelled;
 static int s_build_x0, s_build_y0, s_build_x1, s_build_y1;
 static int s_build_scroll_x, s_build_scroll_y;
 static unsigned s_build_tool;
+static uint64_t s_build_release_frame;
 static bool s_map_mouse_accept_pending;
 static bool s_map_mouse_refresh_pending;
 static void commit_mouse_construction(void);
@@ -3913,7 +3914,10 @@ static bool run_one_frame(void) {
       if (cpu->pc == 0xada9) ScPopulationReport(&s_population, g_ram, true);
     }
     if (s_rom_fnv == SC_ROM_FNV_US) {
-      if (cpu->k==3 && (cpu->pc==0xce2e || cpu->pc==0xc8c8)) ScWorldReset(&s_world);
+      if (cpu->k==3 && (cpu->pc==0xce2e || cpu->pc==0xc8c8)) {
+        ScRendererBeginMapLoad(&s_custom_renderer);
+        ScWorldReset(&s_world);
+      }
       if (cpu->k==3 && cpu->pc==0xcf89) ScWorldMirror(&s_world,g_ram);
       ScWorldGuestStep(&s_world, cpu, g_ram);
       ScWorldGuestVehicles(&s_world, cpu, g_ram, g_snes->multiplyA);
@@ -6958,9 +6962,13 @@ static void commit_mouse_construction(void) {
       (int16_t)ram_w(0x01bd) != s_build_scroll_x || (int16_t)ram_w(0x01bf) != s_build_scroll_y)
     return;
   unsigned cost = 0;
+  uint64_t started = SDL_GetPerformanceCounter();
   ScBuildResult r = ScConstructionCommitWorld(g_ram, &s_world, s_rom_data, s_rom_size, &s_build_plan, &cost);
   fprintf(stderr, "[mouse build] %u placements, cost %u, %s\n", s_build_plan.count, cost,
       r == SC_BUILD_OK ? "committed" : r == SC_BUILD_FUNDS ? "insufficient funds" : "rejected");
+  if (getenv("SC_PERF")) fprintf(stderr, "[mouse latency] queue %llu frames, build %.2f ms\n",
+      (unsigned long long)(s_frames-s_build_release_frame),
+      (SDL_GetPerformanceCounter()-started)*1000.0/SDL_GetPerformanceFrequency());
   if (r != SC_BUILD_OK) g_ram[5] = 2; /* The game's normal reject sound. */
 }
 static void refresh_fast_power(void) {
@@ -10191,6 +10199,7 @@ int main(int argc, char **argv) {
            * release commits it; re-entry continues the same gesture. */
           if (!mouse_raw_left && previous_left && s_build_plan.count) {
             s_build_active = false; s_build_pending = true;
+            s_build_release_frame = s_frames;
           }
         }
       }
@@ -10317,8 +10326,8 @@ int main(int argc, char **argv) {
     if (!s_menu_open) {
       for (int ffi = 0; ffi < frames_this_iter; ffi++) {
         if (mouse_target_valid && !s_fast_cursor_enabled) {
-          g_ram[0x01eb] = (uint8_t)mouse_target_x;
-          g_ram[0x01ed] = (uint8_t)mouse_target_y;
+          g_ram[0x01eb] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_x<0?0:mouse_target_x>255?255:mouse_target_x);
+          g_ram[0x01ed] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_y<0?0:mouse_target_y>223?223:mouse_target_y);
         }
         if (!run_one_frame()) {
           fprintf(stderr, "frame %llu: opcode guard tripped (hang/runaway) -- stopping\n",
@@ -10571,23 +10580,9 @@ int main(int argc, char **argv) {
       quit = true;
     }
 
-    next_frame_deadline += (uint64_t)(kTargetFrameSeconds * (double)SDL_GetPerformanceFrequency());
-    uint64_t now = SDL_GetPerformanceCounter();
-    SC_PERF_ADD(kPerfDraw, draw_t0, now);
-    if (now < next_frame_deadline) {
-      double remaining_ms = (double)(next_frame_deadline - now) * 1000.0 /
-                             (double)SDL_GetPerformanceFrequency();
-      if (remaining_ms > 1.0) SDL_Delay((Uint32)(remaining_ms - 1.0));
-      while (SDL_GetPerformanceCounter() < next_frame_deadline) { /* spin for the last <1ms */ }
-    } else {
-      /* Running behind (e.g. this frame's work overran budget) -- don't
-       * try to catch up by presenting a burst of frames back-to-back;
-       * just resync the deadline to now so pacing doesn't accumulate
-       * drift after a one-off slow frame. */
-      next_frame_deadline = now;
-    }
+    const uint64_t draw_t1 = SDL_GetPerformanceCounter();
+    SC_PERF_ADD(kPerfDraw, draw_t0, draw_t1);
     const uint64_t present_t0 = perf_on ? SDL_GetPerformanceCounter() : 0;
-    SC_PERF_ADD(kPerfSleep, now, present_t0);
     /* SC_DUMP_DIR + SC_DUMP_INTERVAL, for the INTERACTIVE loop.
      *
      * The same pair has worked in run_qualification() for a long time, and I
@@ -10632,6 +10627,25 @@ int main(int argc, char **argv) {
       SC_PERF_ADD(kPerfPresent, present_t0, SDL_GetPerformanceCounter());
       perf_frames++;
     }
+    /* Present completed input and terrain immediately, then wait for the
+     * next frame. Sleeping before presentation added the unused CPU budget
+     * to input-to-display latency on every otherwise fast frame. */
+    next_frame_deadline += (uint64_t)(kTargetFrameSeconds * (double)SDL_GetPerformanceFrequency());
+    uint64_t now = SDL_GetPerformanceCounter();
+    const uint64_t sleep_t0 = now;
+    if (now < next_frame_deadline) {
+      double remaining_ms = (double)(next_frame_deadline - now) * 1000.0 /
+                             (double)SDL_GetPerformanceFrequency();
+      if (remaining_ms > 1.0) SDL_Delay((Uint32)(remaining_ms - 1.0));
+      while (SDL_GetPerformanceCounter() < next_frame_deadline) { /* spin for the last <1ms */ }
+    } else {
+      /* Running behind (e.g. this frame's work overran budget) -- don't
+       * try to catch up by presenting a burst of frames back-to-back;
+       * just resync the deadline to now so pacing doesn't accumulate
+       * drift after a one-off slow frame. */
+      next_frame_deadline = now;
+    }
+    SC_PERF_ADD(kPerfSleep, sleep_t0, SDL_GetPerformanceCounter());
     fps_window_frames++;
     double fps_window_elapsed = (double)(SDL_GetPerformanceCounter() - fps_window_start) /
                                  (double)SDL_GetPerformanceFrequency();

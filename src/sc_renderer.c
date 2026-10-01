@@ -122,7 +122,7 @@ static void find_lights(ScRenderer *r,const Ppu *p) {
 }
 static unsigned cell_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
                            int x,int y,bool overlay) {
-    bool large=r->world && r->world->active;
+    bool large=r->map_hold?r->held_large:r->world && r->world->active;
     unsigned width=large?SC_WORLD_WIDTH:120,height=large?SC_WORLD_HEIGHT:100;
     if (!r->rom || x<0 || y<0 || (unsigned)x>=width*8 || (unsigned)y>=height*8) return 0;
     unsigned offset_cell=((y/8)*width+x/8)*2;
@@ -183,27 +183,25 @@ static void track_objects(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     r->objects_valid=city;
 }
 static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
-    if (!city_live(r,p,ram)) { r->map_valid=r->map_hold=false; return; }
+    if (!city_live(r,p,ram)) {
+        if (r->map_valid) memset(r->changed_cells,0,sizeof r->changed_cells);
+        r->map_valid=r->map_hold=false; return;
+    }
     bool large=r->world && r->world->active;
     const uint8_t *map=large?r->world->tiles:ram+MAP;
     unsigned bytes=large?SC_WORLD_TILE_BYTES:24000;
     bool black=PPU_forcedBlank(p) || !PPU_brightness(p);
     if (r->map_valid) {
-        int step=0,total=0;
         for (unsigned i=0;i<bytes;i+=2) {
-            step+=((u16(map,i)^u16(r->previous_map,i))&1023)!=0;
-            total+=((u16(map,i)^u16(r->held_map,i))&1023)!=0;
-        }
-        if (!r->map_hold && step>300) {
-            r->map_hold=true; r->map_confirmed=r->map_dark=false;
-            r->map_quiet=r->map_age=0;
+            bool changed=((u16(map,i)^u16(r->previous_map,i))&1023)!=0;
+            if (changed && !r->map_hold) r->changed_cells[i/2]=1;
         }
         if (r->map_hold) {
-            if (total>4000) r->map_confirmed=true;
             if (black) r->map_dark=true;
-            if (step>300) r->map_quiet=0; else ++r->map_quiet;
-            if ((!black && r->map_dark) || ++r->map_age>900 ||
-                (!r->map_confirmed && r->map_quiet>=10)) r->map_hold=false;
+            if ((!black && r->map_dark) || ++r->map_age>900) {
+                r->map_hold=false;
+                memset(r->changed_cells,0,sizeof r->changed_cells);
+            }
         }
     }
     memcpy(r->previous_map,map,bytes);
@@ -212,6 +210,7 @@ static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
         memcpy(r->held_ppu,p,sizeof *p);
         r->held_x=r->scroll_x+r->scroll_adjust_x;
         r->held_y=r->scroll_y+r->scroll_adjust_y;
+        r->held_large=large;
     }
     r->map_valid=true;
 }
@@ -510,6 +509,12 @@ void ScRendererDestroy(ScRenderer *r) {
 void ScRendererResetHistory(ScRenderer *r) {
     r->scroll_valid=r->objects_valid=r->map_valid=r->map_hold=r->title_live=false;
     r->city_input=r->pointer_active=false;
+    memset(r->changed_cells,0,sizeof r->changed_cells);
+}
+void ScRendererBeginMapLoad(ScRenderer *r) {
+    if (!r->map_valid || r->map_hold) return;
+    r->map_hold=true; r->map_dark=false;
+    r->map_age=0;
 }
 static void render_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
     uint32_t *out=r->pixels+(size_t)(y+r->view.core_y)*r->view.width;
@@ -708,6 +713,51 @@ static uint32_t bare_city_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *
     unsigned over=cell_pixel(r,p,ram,sx+x+8,sy+y+9,true);
     if (over) ci=over;
     return composite_color(p,ci,ci?1:5,0,5,x);
+}
+static bool changed_cell(const ScRenderer *r,int x,int y) {
+    int width=r->world && r->world->active?240:120;
+    int height=r->world && r->world->active?200:100;
+    return x>=0 && y>=0 && x<width*8 && y<height*8 &&
+        r->changed_cells[(y/8)*width+x/8];
+}
+/* Construction and development update world cells before the SNES's small
+ * tile cache reaches them. Draw those cells from the same source as the
+ * margins, keeping native UI and the PPU's evaluated objects intact. Keep
+ * tracking edited cells until a map load; their live CHR still animates. */
+static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
+    if (!city_live(r,p,ram) || r->advisor_frame || r->map_hold ||
+        !(p->screenEnabled[0]&2)) return;
+    int sx=r->scroll_x+r->scroll_adjust_x+scroll_delta(p->hScroll[1],r->scroll_h);
+    int sy=r->scroll_y+r->scroll_adjust_y+scroll_delta(p->vScroll[1],r->scroll_v);
+    uint32_t *out=r->pixels+(size_t)(y+r->view.core_y)*r->view.width+r->view.core_x;
+    for (int x=0;x<256;++x) {
+        if (!changed_cell(r,sx+x,sy+y+1) && !changed_cell(r,sx+x+8,sy+y+9)) continue;
+        unsigned ci=cell_pixel(r,p,ram,sx+x,sy+y+1,false);
+        unsigned over=cell_pixel(r,p,ram,sx+x+8,sy+y+9,true);
+        if (over) ci=over;
+        unsigned samples[2]={0,0}; int owners[2]={5,5};
+        for (int sub=0;sub<2;++sub) {
+            unsigned rank=0;
+            if ((p->screenEnabled[sub]&2) &&
+                (!(p->screenWindowed[sub]&2) || !window_contains(p,1,x))) {
+                samples[sub]=ci; owners[sub]=ci?1:5; rank=ci?(over?11:7):0;
+            }
+            for (int layer=0;layer<=2;layer+=2) {
+                if (!(p->screenEnabled[sub]&(1<<layer)) ||
+                    ((p->screenWindowed[sub]&(1<<layer)) && window_contains(p,layer,x))) continue;
+                bool high=false;
+                unsigned pixel=bg_sample(p,layer,x,y+1,&high);
+                unsigned z=layer==0?(high?12:8):(high?(PPU_bg3priority(p)?15:3):1);
+                if (pixel && z>rank) { samples[sub]=pixel; owners[sub]=layer; rank=z; }
+            }
+            unsigned obj=p->objBuffer.data[x+kPpuExtraLeftRight];
+            if ((obj&255) && (obj>>12)>rank && (p->screenEnabled[sub]&16) &&
+                (!(p->screenWindowed[sub]&16) || !window_contains(p,4,x))) {
+                samples[sub]=obj&255; owners[sub]=(obj&255)<192?6:4;
+            }
+        }
+        out[x]=composite_color(p,samples[0],owners[0],samples[1],owners[1],x);
+    }
 }
 static void city_pointer(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     if (!r->pointer_active || !r->city_input || r->advisor_frame || r->map_hold) return;
@@ -911,6 +961,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
     if (r->advisor_frame) capture_advisor_row(r,p,line,native);
     else memcpy(r->pixels+(size_t)(line+r->view.core_y)*r->view.width+r->view.core_x+first,
                 native+first,(size_t)(end-first)*sizeof(*native));
+    fresh_city_row(r,p,ram,line);
     if (r->split_hud || r->pan_frame) city_hud_row(r,p,ram,line);
     if (city_live(r,p,ram) && !r->advisor_frame && u16(ram,0x1d7) &&
         (p->screenEnabled[0]&3)==3 && !u16(ram,0x379))

@@ -201,6 +201,30 @@ Live gameplay alignment, sustained city panning and crowded-city performance
 still need hands-on testing. Other narrative dialogue pages retain their
 original input behavior.
 
+## Placement responsiveness (Enhanced Beta 2)
+
+The host presents each completed frame before its pacing wait, avoiding the
+extra input-to-display delay from waiting with a finished frame queued.
+Committed construction and development cells render directly across the native
+viewport as well as its margins, with live tile graphics, roof overlays,
+native HUD/OBJ priority, windows and color math. They no longer wait for the
+original SNES tile cache to refresh. Bulk edits cannot trigger a city-load
+freeze; only the actual ROM city-load entry arms the fade hold.
+
+Construction still commits at the safe city input boundary. It does not
+accelerate the calendar or budgets. Recorded SDL/software-renderer checks ran
+at about 60.1 FPS: a 20-zone drag queued for one frame and committed in about
+1 ms; a 1,078-cell large-map bulldoze at 50x development queued for two frames
+and committed in about 2.6 ms. These fixtures establish placement latency,
+not a guarantee for every GPU or densely populated city. Screenshot capture
+adds its own one-off frame cost. `SC_PERF=1` logs queue frames, commit time and
+average/maximum frame-stage times for performance diagnosis.
+
+Renderer regressions verify first-frame edited terrain, northwest roofs,
+bulldozed terrain, unchanged unedited native pixels, low/high sprite priority,
+opaque HUD preservation, immutable PPU state, 5,000-cell edits without a
+load hold, and actual load holds releasing after the fade.
+
 ## Mouse reference and remaining verification
 
 The mouse target is the behavior described in

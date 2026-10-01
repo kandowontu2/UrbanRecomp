@@ -36,8 +36,9 @@ typedef struct ScRenderer {
     uint8_t object_y[128], object_grace[128];
     Ppu *held_ppu;
     uint8_t held_map[SC_WORLD_TILE_BYTES], previous_map[SC_WORLD_TILE_BYTES];
-    bool map_valid, map_hold, map_confirmed, map_dark;
-    int map_quiet, map_age, held_x, held_y;
+    uint8_t changed_cells[SC_WORLD_CELLS]; /* committed cells bypass stale native tile staging */
+    bool map_valid, map_hold, map_dark, held_large;
+    int map_age, held_x, held_y;
     uint8_t repaired_edges[224]; /* per row: bit 0 left 8 px, bit 1 right */
     bool sylt;                   /* the ninth scenario card is on */
     /* The vehicles kept for the margin (src/sc_vehicles.c), handed in by the
@@ -54,6 +55,8 @@ void ScRendererInit(ScRenderer *r, const uint8_t *rom, size_t size, bool is_us);
 bool ScRendererResize(ScRenderer *r, ScViewport view);
 void ScRendererDestroy(ScRenderer *r);
 void ScRendererResetHistory(ScRenderer *r);
+/* Only an actual guest city-load entry may freeze the previous terrain. */
+void ScRendererBeginMapLoad(ScRenderer *r);
 /* Called AFTER the stock PPU has drawn a line, BEFORE the guest advances.
  * Reads only: no guest writes, PPU replay, state forcing, or hidden frames. */
 void ScRendererLine(ScRenderer *r, const Ppu *ppu, const uint8_t *ram,

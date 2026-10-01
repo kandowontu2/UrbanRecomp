@@ -152,14 +152,19 @@ int main(void) {
     p->oam[0]=(100<<8)|128; p->highOam[0]=1;
     ScRendererLine(&r,p,ram,0,native);
     assert(!r.object_grace[0]);
+    /* Large legitimate edits must never be mistaken for a city load. */
+    for (int i=0;i<5000;++i) word(ram,0x10200+i*2,7);
+    ScRendererLine(&r,p,ram,0,native);
+    assert(!r.map_hold && r.changed_cells[4999]);
     /* In-game load writes a new map before the old city's fade ends. Keep
      * the prior map and palette until dark -> lit, then release together. */
     ScRendererLine(&r,p,ram,0,native);
     unsigned old_palette=r.held_ppu->cgram[1];
-    for (int i=0;i<5000;++i) word(ram,0x10200+i*2,7);
+    ScRendererBeginMapLoad(&r);
+    for (int i=0;i<5000;++i) word(ram,0x10200+i*2,8);
     p->cgram[1]=123; ram[0x1bd]=20;
     ScRendererLine(&r,p,ram,0,native);
-    assert(r.map_hold && r.map_confirmed && r.held_ppu->cgram[1]==old_palette);
+    assert(r.map_hold && r.held_ppu->cgram[1]==old_palette);
     p->inidisp=0x8f; ScRendererLine(&r,p,ram,0,native);
     assert(r.map_hold && r.map_dark && r.pixels[256]==0xff000000);
     p->inidisp=15; ScRendererLine(&r,p,ram,0,native);
@@ -181,6 +186,42 @@ int main(void) {
     for (int y=0;y<8;++y) p->vram[0x1008+y]=0xff;
     ScRendererLine(&r,p,ram,0,native);
     assert(r.repaired_edges[0]==2 && r.pixels[0]==0xffff0000);
+    /* Committed terrain appears in the native core on the first new frame,
+     * even while native VRAM still contains old tiles. Roofs touch the cell
+     * northwest of their owner. HUD/OBJ and unedited native pixels survive. */
+    p->screenEnabled[0]=2; p->bgTileAdr=0;
+    p->cgram[2]=31<<10;
+    word(rom,0x156a9+2,1); word(rom,0x14f2d+2,1);
+    for (int y=0;y<8;++y) p->vram[16+y]=0xff00;
+    word(ram,0x10200+2*(22*120+26),1);
+    memcpy(before,p,sizeof(*p));
+    ScRendererLine(&r,p,ram,0,native);
+    ScRendererLine(&r,p,ram,96,native);
+    assert(r.pixels[96*512+128]==0xff0000ff);
+    assert(r.pixels[96*512+144]==0xffff0000);
+    ScRendererLine(&r,p,ram,88,native);
+    assert(r.pixels[88*512+120]==0xff0000ff);
+    assert(!memcmp(before,p,sizeof(*p)));
+    p->screenEnabled[0]=18;
+    p->cgram[193]=31;
+    p->objBuffer.data[kPpuExtraLeftRight+128]=0x20c1;
+    ScRendererLine(&r,p,ram,96,native);
+    assert(r.pixels[96*512+128]==0xff0000ff); /* low OBJ remains behind city */
+    p->objBuffer.data[kPpuExtraLeftRight+128]=0xe0c1;
+    ScRendererLine(&r,p,ram,96,native);
+    assert(r.pixels[96*512+128]==0xffff0000);
+    p->screenEnabled[0]=3; p->bgTileAdr=2; p->bgXsc[0]=0x40;
+    p->cgram[1]=31;
+    p->vram[0x4000+12*32+16]=1;
+    for (int y=0;y<8;++y) p->vram[0x2010+y]=0xff;
+    ScRendererLine(&r,p,ram,96,native);
+    assert(r.pixels[96*512+128]==0xffff0000);
+    p->screenEnabled[0]=2;
+    p->cgram[1]=31<<5;
+    word(ram,0x10200+2*(22*120+26),0);
+    ScRendererLine(&r,p,ram,0,native);
+    ScRendererLine(&r,p,ram,96,native);
+    assert(r.pixels[96*512+128]==0xff00ff00);
     /* Center only the advisor's opaque BG3/OBJ pixels. The dimmed BG1 HUD
      * stays left, transparent page pixels reveal the stationary city, and
      * even black OBJ pixels remain opaque. Exercise both axes at once. */
