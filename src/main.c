@@ -22,6 +22,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stddef.h>
+#include <limits.h>
 
 /* Shared SDL2/SDL3 include boundary. SNESRECOMP_SDL3 is set by
  * snesrecomp_target_sdl() in CMakeLists.txt; the shim pulls in the right
@@ -98,6 +99,16 @@ uint8_t    g_ram[0x20000];
 #include "sc_titlesign.h"
 #include "sc_mapgen.h"
 #include "sc_decomp.h"
+#include "sc_development.h"
+#include "sc_population.h"
+#include "sc_mouse_ui.h"
+#include "sc_construction.h"
+#include "sc_world_guest.h"
+static ScWorld s_world;
+static ScWorldGuest s_world_guest;
+static bool s_large_maps;
+static char s_world_path[1100];
+static void world_saved_city(bool save);
 /* Declared, not #included: cpu_trace.h pulls in cpu_state.h, whose CpuState
  * collides with the interp816 core this target actually builds against.
  * Only present in a build configured with SNESRECOMP_TRACE=1. */
@@ -116,6 +127,16 @@ static ScRenderer s_custom_renderer;
 static const char *s_video_config = "sc-video.ini";
 static int s_window_width = 1024, s_window_height = 768;
 static ScVideoRect s_destination;
+static ScBuildPlan s_build_plan;
+static bool s_build_pending, s_build_active, s_build_cancelled;
+static int s_build_x0, s_build_y0, s_build_x1, s_build_y1;
+static int s_build_scroll_x, s_build_scroll_y;
+static unsigned s_build_tool;
+static bool s_map_mouse_accept_pending;
+static bool s_map_mouse_refresh_pending;
+static void commit_mouse_construction(void);
+static void refresh_fast_power(void);
+static uint16_t ram_w(uint32_t a);
 Snes      *g_snes;
 Ppu       *g_ppu;
 static Interp816 *g_cpu;
@@ -464,6 +485,8 @@ static int s_map_write_pc_count;
 
 static uint8_t bus_read(void *mem, uint32_t adr) {
   (void)mem;
+  uint8_t world_value;
+  if (ScWorldGuestRead(&s_world_guest, adr, &world_value)) return world_value;
   uint8_t v = snes_read(g_snes, adr);
   if (s_wram_map) wram_map_note(adr, false);
   uint16_t reg = (uint16_t)adr;
@@ -609,7 +632,7 @@ static void bus_write(void *mem, uint32_t adr, uint8_t v) {
       s_gfx_trace_hits++;
     }
   }
-  snes_write(g_snes, adr, v);
+  if (!ScWorldGuestWrite(&s_world_guest, adr, v)) snes_write(g_snes, adr, v);
 }
 
 /* SPC cycles per master clock: 32 per DSP sample at 32040 Hz, over the NTSC
@@ -2437,9 +2460,92 @@ static void sc_maybe_trigger_scenario_event(void) {
  * ROM sites we have never located. 16-bit, so both halves. */
 static bool s_fast_ticks = true;
 
-/* Guest frames per host frame while a mouse button is held -- see DRAG TURBO
- * in the main loop. 1 = off. */
+/* RCI development attempts per normal simulation visit; city time is unchanged. */
+static int s_development_speed = 1;
+static const int kDevelopmentSpeeds[] = {1, 2, 5, 10, 50};
+static const char *const kDevelopmentSpeedNames[] = {"NORMAL", "X2", "X5", "X10", "X50"};
+static ScDevelopment s_development;
+static ScPopulation s_population;
+static void population_saved_city(bool save);
+static char s_population_path[1100];
+
+static void population_saved_city(bool save) {
+  if (!ScSram_Active() || !*s_population_path || g_snes->cart->ramSize < 0x8000) {
+    if (!save) ScPopulationImport(&s_population, g_ram);
+    return;
+  }
+  uint8_t data[SC_POPULATION_CITIES_BYTES];
+  ScPopulationCitiesInit(data);
+  FILE *f = fopen(s_population_path, "rb");
+  if (f) {
+    bool ok = fread(data, 1, sizeof data, f) == sizeof data;
+    ok = fgetc(f) == EOF && ok; fclose(f);
+    if (!ok || !ScPopulationCitiesValid(data, sizeof data)) ScPopulationCitiesInit(data);
+  }
+  unsigned flag_addr = save ? 0x423 : 0x421;
+  unsigned slot = (g_ram[flag_addr] | (g_ram[flag_addr+1]<<8)) == 1 ? 0 : 1;
+  if (!save) {
+    if (!ScPopulationCityLoad(&s_population, data, sizeof data, g_snes->cart->ram, slot))
+      ScPopulationImport(&s_population, g_ram);
+    else ScPopulationMirror(&s_population, g_ram);
+    return;
+  }
+  if (g_snes->cart->ram[5+slot] != 1) return; /* failed native save */
+  ScPopulationCitySave(data, g_snes->cart->ram, slot, &s_population);
+  /* The native city save is complete at this PC. Flush it before metadata;
+   * a stale sidecar never matches a newly changed city after an interrupted save. */
+  ScSram_Flush();
+  char temporary[1120]; snprintf(temporary, sizeof temporary, "%s.tmp", s_population_path);
+  f = fopen(temporary, "wb");
+  bool ok = f && fwrite(data, 1, sizeof data, f) == sizeof data;
+  if (f) ok = fclose(f) == 0 && ok;
+#ifdef _WIN32
+  if (ok) ok = MoveFileExA(temporary, s_population_path,
+    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+  if (ok) ok = rename(temporary, s_population_path) == 0;
+#endif
+  if (!ok) { remove(temporary); fprintf(stderr, "population: could not save %s\n", s_population_path); }
+}
+
+/* Guest frames per host frame while a mouse button is held. 1 = off. */
 static int s_drag_turbo = 1;
+static void world_saved_city(bool save) {
+  if (!ScSram_Active() || !*s_world_path || g_snes->cart->ramSize<0x8000) return;
+  size_t size=ScWorldCitiesSize(); uint8_t *data=malloc(size);
+  if (!data) { fprintf(stderr,"world: save metadata allocation failed\n"); return; }
+  ScWorldCitiesInit(data);
+  FILE *f=fopen(s_world_path,"rb");
+  if (f) {
+    bool ok=fread(data,1,size,f)==size; ok=fgetc(f)==EOF && ok; fclose(f);
+    if (!ok || !ScWorldCitiesValid(data,size)) ScWorldCitiesInit(data);
+  }
+  unsigned addr=save?0x423:0x421;
+  unsigned slot=(g_ram[addr]|(g_ram[addr+1]<<8))==1?0:1;
+  if (!save) {
+    if (ScWorldCityLoad(&s_world,data,size,g_snes->cart->ram,slot)) {
+      fprintf(stderr,"world: loaded city slot %u (%s)\n",slot+1,s_world.active?"240x200":"120x100");
+      if (s_world.active) {
+        bool hud=(g_ram[0x1d7]|g_ram[0x1d8])!=0;
+        g_ram[0x1c5]=hud?215:210; g_ram[0x1c6]=0;
+        g_ram[0x1c9]=hud?178:174; g_ram[0x1ca]=0;
+      }
+    }
+    free(data); return;
+  }
+  if (g_snes->cart->ram[5+slot]!=1 || !ScWorldCitySave(data,g_snes->cart->ram,slot,&s_world)) { free(data); return; }
+  ScSram_Flush();
+  char temporary[1120]; snprintf(temporary,sizeof temporary,"%s.tmp",s_world_path);
+  f=fopen(temporary,"wb"); bool ok=f && fwrite(data,1,size,f)==size;
+  if (f) ok=fclose(f)==0 && ok;
+#ifdef _WIN32
+  if (ok) ok=MoveFileExA(temporary,s_world_path,MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;
+#else
+  if (ok) ok=rename(temporary,s_world_path)==0;
+#endif
+  if (!ok) { remove(temporary); fprintf(stderr,"world: could not save %s\n",s_world_path); }
+  free(data);
+}
 static const int kDragTurbos[] = { 1, 2, 3, 4, 6 };
 
 /* SC_NINTH=1: a ninth scenario slot, and the wider scroll it needs.
@@ -3255,8 +3361,8 @@ static void sc_classifier_hook(Interp816 *cpu) {
 
   if (cpu->pc == 0x8b36) {
     const uint16_t idx  = (uint16_t)(g_ram[0x0d63] | (g_ram[0x0d64] << 8));
-    const uint16_t cell = (uint16_t)(g_ram[0x10200 + idx] |
-                                     (g_ram[0x10201 + idx] << 8));
+    const uint16_t cell = s_world.active?ScWorldCell(&s_world,2*(idx/2%120),2*(idx/2/120)):
+      (uint16_t)(g_ram[0x10200 + idx] | (g_ram[0x10201 + idx] << 8));
     const uint16_t tile = (uint16_t)(cell & 0x03ff);
     s_cls_tile = tile;
     s_cls_pending = 0;
@@ -3400,7 +3506,9 @@ static bool run_one_frame(void) {
     scen_diag = getenv("SC_SCEN_DIAG") != NULL;
     brief_diag = getenv("SC_BRIEF_DIAG") != NULL;
   }
-  long guard = 20000000; /* runaway guard: caps opcodes/frame, mirrors ref_driver.c */
+  long guard = 20000000L * s_development_speed;
+  /* The extra attempts are bounded but can share one host frame; give
+   * them a proportional instruction allowance. Normal retains the old bar. */
   while (s_frames < target && guard-- > 0) {
     if (cpu->k == 0x00 && cpu->pc == 0x80b2) s_nmi_serviced++;
     /* SC_BANK_PROFILE=1: opcodes executed per bank, and how many frames the
@@ -3498,15 +3606,20 @@ static bool run_one_frame(void) {
         const char *e = getenv("SC_MAPGEN_FAST");
         fast = (e && *e) ? (*e != '0') : 1;   /* on; SC_MAPGEN_FAST=0 disables */
       }
-      if (fast) {
+      if (!fast && !s_large_maps) ScWorldReset(&s_world);
+      if (fast || s_large_maps) {
         static ScMapGenState gs;
         ScMapGenPrng pr;
         pr.s0 = (uint16_t)(g_ram[0x59] | (g_ram[0x5a] << 8));
         pr.s1 = (uint16_t)(g_ram[0x5b] | (g_ram[0x5c] << 8));
         pr.t  = (uint16_t)(g_ram[0x5d] | (g_ram[0x5e] << 8));
-        sc_mapgen_generate(&pr, &gs);
+        if (s_large_maps && s_rom_fnv==SC_ROM_FNV_US) {
+          ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
+        } else {
+          ScWorldReset(&s_world); sc_mapgen_generate(&pr, &gs);
+        }
         /* The map is at $7F0200 -- bank 7F, so 0x10200 into WRAM. */
-        for (unsigned i = 0; i < SC_MAPGEN_CELLS; i++) {
+        for (unsigned i = 0; !s_world.active && i < SC_MAPGEN_CELLS; i++) {
           g_ram[0x10200 + 2 * i]     = (uint8_t)(gs.map[i] & 0xff);
           g_ram[0x10200 + 2 * i + 1] = (uint8_t)((gs.map[i] >> 8) & 0xff);
         }
@@ -3527,8 +3640,9 @@ static bool run_one_frame(void) {
 
         if (getenv("SC_MAPGEN_FAST_DIAG")) {
           unsigned nz = 0;
-          for (unsigned i = 0; i < SC_MAPGEN_CELLS; i++)
-            if (gs.map[i] & 0x3ff) nz++;
+          unsigned cells=s_world.active?SC_WORLD_CELLS:SC_MAPGEN_CELLS;
+          for (unsigned i = 0; i < cells; i++)
+            if ((s_world.active?ScWorldCell(&s_world,i%240,i/240):gs.map[i]) & 0x3ff) nz++;
           fprintf(stderr, "[mapgen_fast] %u cells, %lu draws, prng %04X/%04X, "
                           "return %02X:%04X\n",
                   nz, g_sc_mapgen_prng_steps, (unsigned)pr.s0, (unsigned)pr.s1,
@@ -3549,6 +3663,25 @@ static bool run_one_frame(void) {
      *
      * 03:ce61 is the scenario equivalent -- map in place, about to return. */
     if (s_ninth_scenario) ninth_scenario_hook(cpu->k, cpu->pc);
+    if (s_build_pending && s_rom_is_us && cpu->k == 1 && cpu->pc == 0x897f &&
+        cpu->dp == 0 && cpu->db == 0 && host_map_screen_live())
+      commit_mouse_construction();
+    if (s_rom_is_us && s_development_speed>1 && cpu->k==1 && cpu->pc==0x897f &&
+        cpu->dp==0 && cpu->db==0 && host_map_screen_live() && !ram_w(0xd7))
+      refresh_fast_power();
+    if (s_rom_is_us && cpu->k == 3 && cpu->pc == 0xd3e0 && g_ram[0x0b2d] == 1 &&
+        (s_map_mouse_refresh_pending || s_map_mouse_accept_pending)) {
+      if (g_ram[0x0b31]) {
+        /* Keyboard navigation normally enters 03:d695 on reaching OK:
+         * finish a changed map number before accepting this preview. */
+        cpu->pc = 0xd695; cpu->mf = true; cpu->xf = true;
+        s_map_mouse_refresh_pending = false;
+      } else if (s_map_mouse_accept_pending) {
+        g_ram[0xca] |= 0x80;
+        s_map_mouse_accept_pending = false;
+        s_map_mouse_refresh_pending = false;
+      }
+    }
     if (scen_diag && cpu->k == 0x03 &&
         (cpu->pc == 0xc518 || cpu->pc == 0xc5a2 || cpu->pc == 0xe30a ||
          cpu->pc == 0xcf31 || cpu->pc == 0xce2e || cpu->pc == 0xce5e ||
@@ -3775,6 +3908,36 @@ static bool run_one_frame(void) {
       s_pc_history_head = (s_pc_history_head + 1) % SC_PC_HISTORY_SIZE;
       if (s_pc_history_filled < SC_PC_HISTORY_SIZE) s_pc_history_filled++;
     }
+    if (s_rom_fnv == SC_ROM_FNV_US && cpu->k == 2) {
+      if (cpu->pc == 0xad69) ScPopulationReport(&s_population, g_ram, false);
+      if (cpu->pc == 0xada9) ScPopulationReport(&s_population, g_ram, true);
+    }
+    if (s_rom_fnv == SC_ROM_FNV_US) {
+      if (cpu->k==3 && (cpu->pc==0xce2e || cpu->pc==0xc8c8)) ScWorldReset(&s_world);
+      if (cpu->k==3 && cpu->pc==0xcf89) ScWorldMirror(&s_world,g_ram);
+      ScWorldGuestStep(&s_world, cpu, g_ram);
+      ScWorldGuestVehicles(&s_world, cpu, g_ram, g_snes->multiplyA);
+    }
+    if (s_rom_fnv == SC_ROM_FNV_US && cpu->k == 3) {
+      if (cpu->pc == 0xcbe2) population_saved_city(true);
+      if (cpu->pc == 0xc8dd) population_saved_city(false);
+      if (cpu->pc == 0xc8dd) world_saved_city(false);
+      if (cpu->pc == 0xcbe2) world_saved_city(true);
+      if (cpu->pc == 0xce61) ScPopulationImport(&s_population, g_ram);
+      if (cpu->pc == 0xc73c) ScPopulationImport(&s_population, g_ram);
+      uint16_t population_pc = ScPopulationStep(&s_population, g_ram, cpu->pc, cpu->dp);
+      if (population_pc != cpu->pc) {
+        cpu->y = (uint16_t)ScPopulationClass(s_population.value);
+        cpu->a = (uint16_t)((g_ram[0xba7] | (g_ram[0xba8]<<8)) - 7);
+        cpu->c = s_population.value >= 500000;
+        cpu->mf = false; cpu->xf = false;
+      }
+      cpu->pc = population_pc;
+      uint16_t next_pc = ScDevelopmentStepWorld(&s_development, &s_world, g_ram, cpu->pc,
+                                          cpu->dp, cpu->sp, s_development_speed);
+      if (next_pc != cpu->pc) { cpu->mf = false; cpu->xf = false; }
+      cpu->pc = next_pc;
+    }
     sc_note_executed_pc(((uint32_t)cpu->k << 16) | cpu->pc,
                         cpu->mf ? 1 : 0, cpu->xf ? 1 : 0);
     if (s_pc_capture_after > 0) {
@@ -3792,7 +3955,14 @@ static bool run_one_frame(void) {
         fprintf(stderr, "failed to write WRAM dump to %s\n", path);
       s_dump_pc_armed = false;
     }
+    const bool development_work = cpu->k == 3 && s_development.repeating &&
+      !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i);
+    ScWorldGuestBegin(&s_world_guest, &s_world, cpu, g_snes->cart->rom, g_snes->cart->romSize);
     int cyc = interp816_runOpcode(cpu);
+    /* Extra development attempts are host work, like the native map
+     * generator. They do not advance the SNES beam, audio clock or calendar
+     * cadence. The original attempt and final PLD/RTS retain normal timing. */
+    if (development_work) continue;
     if (cyc <= 0) cyc = 1;
     int master = cyc * 8;
     g_master_cycles += (uint64_t)master;
@@ -6170,7 +6340,7 @@ static void file_sli_read(SaveLoadInfo *sli, void *data, size_t n) {
  * States without the header still load, with a warning: they are what every
  * bug report so far was filed against. */
 enum { kScPpuBusBytes = offsetof(Ppu, extraLeftCur) - offsetof(Ppu, vramPointer) };
-static const uint32_t kScStateHeader[] = {0x54534353u /* "SCST" */, 1,
+static const uint32_t kScStateHeader[] = {0x54534353u /* "SCST" */, 4,
                                           kScPpuBusBytes, sizeof(s_hdma)};
 
 static bool save_state(const char *path) {
@@ -6187,6 +6357,17 @@ static bool save_state(const char *path) {
   fs.base.func(&fs.base, &g_ppu->vramPointer, kScPpuBusBytes);
   fs.base.func(&fs.base, &g_master_cycles, sizeof(g_master_cycles));
   fs.base.func(&fs.base, s_hdma, sizeof(s_hdma));
+  uint32_t development_size = sizeof(s_development);
+  fs.base.func(&fs.base, &development_size, sizeof(development_size));
+  fs.base.func(&fs.base, &s_development, sizeof(s_development));
+  uint8_t population_data[SC_POPULATION_BYTES];
+  ScPopulationEncode(&s_population, population_data);
+  fs.base.func(&fs.base, population_data, sizeof population_data);
+  size_t world_size=ScWorldEncodedSize();
+  uint8_t *world_data=malloc(world_size);
+  if (!world_data || !ScWorldEncode(&s_world,world_data,world_size)) fs.ok=false;
+  else fs.base.func(&fs.base,world_data,world_size);
+  free(world_data);
   bool ok = fs.ok;
   return fclose(f) == 0 && ok;
 }
@@ -6197,7 +6378,8 @@ static bool load_state(const char *path) {
   uint32_t header[4];
   bool versioned = fread(header, 1, sizeof(header), f) == sizeof(header) &&
                    header[0] == kScStateHeader[0];
-  if (versioned && memcmp(header, kScStateHeader, sizeof(header)) != 0) {
+  if (versioned && ((header[1] < 1 || header[1] > 4) ||
+      header[2] != kScStateHeader[2] || header[3] != kScStateHeader[3])) {
     fprintf(stderr, "state: %s is from a build with another layout "
                     "(version %u, %u latch bytes, %u HDMA bytes); save it again "
                     "with this build\n", path, (unsigned)header[1],
@@ -6219,10 +6401,34 @@ static bool load_state(const char *path) {
   snes_saveload(g_snes, &fs.base);
   interp816_saveload(g_cpu, &fs.base);
   fs.base.func(&fs.base, &s_frames, sizeof(s_frames));
+  ScDevelopmentReset(&s_development);
+  ScWorldReset(&s_world); memset(&s_world_guest,0,sizeof s_world_guest);
+  ScPopulationImport(&s_population, g_ram);
   if (versioned) {
     fs.base.func(&fs.base, &g_ppu->vramPointer, kScPpuBusBytes);
     fs.base.func(&fs.base, &g_master_cycles, sizeof(g_master_cycles));
     fs.base.func(&fs.base, s_hdma, sizeof(s_hdma));
+    if (header[1] >= 2) {
+      uint32_t development_size = 0;
+      fs.base.func(&fs.base, &development_size, sizeof(development_size));
+      if (development_size != sizeof(s_development)) fs.ok = false;
+      fs.base.func(&fs.base, &s_development, sizeof(s_development));
+      if (s_development.remaining < 0 || s_development.remaining > 50) fs.ok = false;
+    }
+    if (header[1] >= 3) {
+      uint8_t population_data[SC_POPULATION_BYTES];
+      fs.base.func(&fs.base, population_data, sizeof population_data);
+      if (!fs.ok || !ScPopulationDecode(&s_population, population_data, sizeof population_data)) fs.ok = false;
+    }
+    if (header[1] >= 4) {
+      size_t size=ScWorldEncodedSize(); uint8_t *data=malloc(size);
+      if (!data) fs.ok=false;
+      else {
+        fs.base.func(&fs.base,data,size);
+        if (!fs.ok || !ScWorldDecode(&s_world,data,size)) fs.ok=false;
+        free(data);
+      }
+    }
   }
   g_ppu->lastBrightnessMult = 0xff;   /* rebuild the brightness tables */
   ScRendererResetHistory(&s_custom_renderer);
@@ -6247,6 +6453,11 @@ static bool load_state(const char *path) {
 #ifdef SC_AOT_TIER
   if (ok && sc_fiber_active()) ScFiberDrive_AdoptInterpState(g_cpu);
 #endif
+  if (ok) {
+    s_build_active = s_build_pending = s_build_cancelled = false;
+    s_map_mouse_accept_pending = false;
+    s_map_mouse_refresh_pending = false;
+  }
   return ok;
 }
 
@@ -6370,32 +6581,20 @@ static int s_scenario_override;
 static const int kScenarioOverrides[] = { 0, 6, 7 };
 static const char *const kScenarioOverrideNames[] = { "OFF", "LAS VEGAS", "FREE PLAY" };
 
-/* Population override, for exercising the population milestone messages.
- * Population is 32-bit little-endian at $0BA5 (low word) + $0BA7 (high
- * word) -- both halves matter, since the city-class ladder at 03:81d8
- * tests the high word first. Held every frame while active, because the
- * simulation rewrites population continuously and a one-shot poke would
- * be overwritten before the milestone check next runs.
- *
- * -1 means off. 0 is a real selectable value (it is one of the levels
- * worth testing), which is why "off" cannot just be 0 here.
- *
- * The values are the class thresholds from 03:81d8 -- 2000/10000/50000/
- * 100000/500000 -- plus 600000, which is NOT a threshold in the ROM (no
- * such constant exists in any encoding) but is included precisely so the
- * claim can be tested in-game rather than argued from disassembly. */
+/* Population override for exercising milestones and the extended display.
+ * Assign the authoritative 64-bit value and its native compatibility mirror
+ * every frame while active; the next simulation sweep otherwise recalculates
+ * population from zone capacities. INT_MAX represents the ten-billion profile
+ * in this int-valued menu; ScPopulationSet receives the actual 64-bit limit. */
 static int s_pop_override = -1;
-static const int kPopOverrides[] = { -1, 0, 2000, 10000, 50000, 100000, 500000, 600000 };
+static const int kPopOverrides[] = { -1, 0, 2000, 10000, 50000, 100000, 500000, 600000,
+                                    1000000, 1000000000, INT_MAX };
+static const char *const kPopOverrideNames[] = { "OFF", "0", "2000", "10000", "50000", "100000",
+    "500000", "600000", "1000000", "1000000000", "9999999999" };
 
-/* City class override ($0deb, 0-5 = Village/Town/City/Capital/Metropolis/
- * Megalopolis). This is what the milestone triggers actually test, and
- * setting population alone does NOT move it: measured, $0deb stayed at 3
- * for 2500 frames with population frozen at 500000. $0deb is persistent
- * state rather than a per-frame derivation -- 03:c96e loads it from SRAM
- * $700036 on save-load, and 03:ce94 seeds it per scenario from the table
- * at $03cee9. The ladder at 03:81d8 that derives it from population runs
- * only occasionally. So to exercise the milestone messages, drive this
- * directly. -1 = off. */
+/* City class override ($0deb, 0-5 = Village through Megalopolis). SET POP
+ * now derives this as well; an explicit class override applies afterward to
+ * let milestone tests use a class independently of the population profile. */
 static int s_class_override = -1;
 static const int kClassOverrides[] = { -1, 0, 1, 2, 3, 4, 5 };
 
@@ -6511,11 +6710,8 @@ static void apply_freezes(void) {
   if (s_unlock_all) apply_unlock_all();
   if (s_scenario_override) g_ram[0x0040] = (uint8_t)s_scenario_override;
   if (s_pop_override >= 0) {
-    uint32_t p = (uint32_t)s_pop_override;
-    g_ram[0x0ba5] = (uint8_t)p;
-    g_ram[0x0ba6] = (uint8_t)(p >> 8);
-    g_ram[0x0ba7] = (uint8_t)(p >> 16);
-    g_ram[0x0ba8] = (uint8_t)(p >> 24);
+    ScPopulationSet(&s_population, g_ram,
+      s_pop_override == INT_MAX ? SC_POPULATION_MAX : (uint64_t)s_pop_override);
   }
   if (s_class_override >= 0) g_ram[0x0deb] = (uint8_t)s_class_override;
 }
@@ -6536,24 +6732,10 @@ static void apply_frame_input(uint64_t frame) {
   g_snes->input2_currentState = input2;
 }
 
-/* ── host-mouse cursor control, ported from the community mouse patch
- * by Selicre (https://github.com/Selicre/simcity-mouse, main.asm/mouse.asm).
- * That patch hooks the NMI to bit-bang an actual SNES mouse's serial
- * protocol on controller port 2 and accumulates the result into two WRAM
- * bytes it identified by testing: $7E01EB (X) and $7E01ED (Y) -- the same
- * $01eb,X "cursor-offset ladder" this project's own D-pad investigation
- * found and fixed for the Comprehensive/Information overlay screen (see
- * docs/INVESTIGATION_dpad.md, variant 6). Rather than apply the original
- * ASM patch (which would mean shipping a modified ROM binary, contrary to
- * this project being ROM-free, and would require an NMI-vector splice
- * this recomp's C driver doesn't need), this ports just the destination
- * semantics: since we already have direct WRAM access every frame, skip
- * the serial-read entirely and drive the same two accumulator bytes from
- * the real host mouse instead. Upstream's own README calls this "lots of
- * jank" (menus visually desync until the D-pad is used, no button
- * support, occasional resets to origin) -- ported as-is, same caveats
- * apply here. Toggle with F3 (see SDL_SCANCODE_F3 above). */
-static bool s_mouse_enabled;
+/* Desktop mouse coordinates follow the actual rendered viewport. The
+ * guest input surface can be offset inside the wider canvas, and menus
+ * use a different anchor from the city HUD. */
+static bool s_mouse_enabled = true;
 
 /* Fast D-pad cursor (opt-in, F9): rather than reverse-engineer and patch
  * the ROM's own throttled cursor cadence (see docs/INVESTIGATION_
@@ -6674,6 +6856,15 @@ static bool setting_get(const SettingDesc *d) {
     default: return false;
   }
 }
+static void save_large_map_setting(void) {
+  ScSettings settings;
+  if (ScSettingsLoad(&settings,kScSettingsPath)) {
+    settings.large_maps=s_large_maps;
+    if (!ScSettingsSave(&settings,kScSettingsPath)) fprintf(stderr,"settings: could not save larger-map preference\n");
+  }
+  fprintf(stderr,"new city map size: %s\n",s_large_maps?"240x200":"120x100");
+}
+static void toggle_large_maps(void) { s_large_maps=!s_large_maps; save_large_map_setting(); }
 
 static void setting_activate(SettingDesc *d) {
   switch (d->kind) {
@@ -6689,6 +6880,7 @@ static void setting_activate(SettingDesc *d) {
       break;
     }
   }
+  if (d->field==&s_large_maps) save_large_map_setting();
 }
 
 static void menu_action_save_slot1(void) {
@@ -6758,6 +6950,40 @@ static void trigger_disaster_bit(unsigned bit, const char *what) {
  * duration of a triggered event. Set in main() once the ROM is read. */
 static uint8_t *s_rom_data;
 static uint32_t s_rom_size;
+static void commit_mouse_construction(void) {
+  /* Only the city input boundary calls this; the guest holds no simulation
+   * cell or partially computed budget at this point. */
+  s_build_pending = false;
+  if (ram_w(0xd7) || ram_w(0x020d) != s_build_plan.tool ||
+      (int16_t)ram_w(0x01bd) != s_build_scroll_x || (int16_t)ram_w(0x01bf) != s_build_scroll_y)
+    return;
+  unsigned cost = 0;
+  ScBuildResult r = ScConstructionCommitWorld(g_ram, &s_world, s_rom_data, s_rom_size, &s_build_plan, &cost);
+  fprintf(stderr, "[mouse build] %u placements, cost %u, %s\n", s_build_plan.count, cost,
+      r == SC_BUILD_OK ? "committed" : r == SC_BUILD_FUNDS ? "insufficient funds" : "rejected");
+  if (r != SC_BUILD_OK) g_ram[5] = 2; /* The game's normal reject sound. */
+}
+static void refresh_fast_power(void) {
+  static uint64_t checked_frame;
+  static uint32_t last_hash;
+  static bool have_hash;
+  unsigned interval=60/(unsigned)s_development_speed;
+  if (!interval) interval=1;
+  if (have_hash && s_frames-checked_frame<interval) return;
+  checked_frame=s_frames;
+  unsigned count=s_world.active?SC_WORLD_CELLS:12000;
+  const uint8_t *tiles=s_world.active?s_world.tiles:g_ram+0x10200;
+  uint32_t hash=2166136261u;
+  for (unsigned i=0;i<count;++i) {
+    unsigned tile=(tiles[2*i]|tiles[2*i+1]<<8)&1023;
+    hash=(hash^(tile&255))*16777619u; hash=(hash^(tile>>8))*16777619u;
+  }
+  hash=(hash^(s_world.active?1:0))*16777619u;
+  if (have_hash && hash==last_hash) return;
+  if (ScConstructionRefreshPower(g_ram,&s_world,s_rom_data,s_rom_size)) {
+    have_hash=true; last_hash=hash;
+  }
+}
 
 static struct {
   bool        armed;
@@ -6962,6 +7188,9 @@ static SettingDesc s_settings[] = {
    * render_settings_menu()'s width math. */
   { "QOL",                   kSettingHeader, NULL, 0, NULL, NULL, 0 },
   { "MOUSE CURSOR",          kSettingBool, &s_mouse_enabled,       0,    NULL, NULL, 0 },
+  { "DEVELOPMENT SPEED",     kSettingCycle, &s_development_speed, 0, NULL,
+    kDevelopmentSpeeds, 5, kDevelopmentSpeedNames },
+  { "LARGE NEW MAPS",        kSettingBool, &s_large_maps, 0, NULL, NULL, 0 },
   { "FAST TICKS",            kSettingBool, &s_fast_ticks,          0,    NULL, NULL, 0 },
   { "DRAG TURBO",            kSettingCycle, &s_drag_turbo,          0,    NULL,
     kDragTurbos, (int)(sizeof(kDragTurbos) / sizeof(kDragTurbos[0])) },
@@ -6981,7 +7210,7 @@ static SettingDesc s_settings[] = {
   { "CHEAT VALVE MAX",       kSettingBit,  &g_ram[0x0425],         0x04, NULL, NULL, 0 },
   { "CHEAT WATER",           kSettingBit,  &g_ram[0x0425],         0x08, NULL, NULL, 0 },
   { "SET POP",               kSettingCycle, &s_pop_override,        0,    NULL,
-    kPopOverrides, (int)(sizeof(kPopOverrides) / sizeof(kPopOverrides[0])) },
+    kPopOverrides, (int)(sizeof(kPopOverrides) / sizeof(kPopOverrides[0])), kPopOverrideNames },
   { "SET CLASS",             kSettingCycle, &s_class_override,      0,    NULL,
     kClassOverrides, (int)(sizeof(kClassOverrides) / sizeof(kClassOverrides[0])) },
   { "CLR MILESTONE",         kSettingAction, NULL, 0, menu_action_clear_milestones, NULL, 0 },
@@ -7078,6 +7307,29 @@ static int text_width(int px, const char *s) {
   return n > 0 ? n * 6 * px - px : 0;
 }
 
+typedef struct SettingsLayout { int px, line_h, pad, x, y, w, h; } SettingsLayout;
+static SettingsLayout settings_layout(int out_w, int out_h) {
+  const int lines = (int)kSettingCount + 6 + (s_menu_preview ? 4 : 0);
+  int px = out_h / (6 * (lines + 1));
+  if (px > 4) px = 4;
+  if (px < 1) px = 1;
+  SettingsLayout r = {px, 6*px, 3*px, 0, 0, out_w*3/4, 6*px*(lines+1)};
+  r.x = (out_w-r.w)/2; r.y = (out_h-r.h)/2;
+  return r;
+}
+static int settings_mouse_row(SDL_Window *window, SDL_Renderer *renderer, double wx, double wy) {
+  int ww, wh, dw, dh;
+  SDL_GetWindowSize(window, &ww, &wh); SDL_GetRendererOutputSize(renderer, &dw, &dh);
+  if (ww<=0 || wh<=0 || dw<=0 || dh<=0) return -1;
+  double x=wx*dw/ww, y=wy*dh/wh;
+  SettingsLayout r=settings_layout(dw,dh);
+  int first_y=r.y+r.pad+2*r.line_h;
+  if (x<r.x+r.pad || x>=r.x+r.w-r.pad || y<first_y ||
+      y>=first_y+(int)kSettingCount*r.line_h) return -1;
+  int row=(int)((y-first_y)/r.line_h);
+  return s_settings[row].kind==kSettingHeader ? -1 : row;
+}
+
 static void render_settings_menu(SDL_Renderer *renderer) {
   int out_w = 0, out_h = 0;
   SDL_GetRendererOutputSize(renderer, &out_w, &out_h);
@@ -7088,16 +7340,9 @@ static void render_settings_menu(SDL_Renderer *renderer) {
    * silently clips the title off the top of the window. That is exactly what
    * adding the six disaster triggers did. Shrink to fit instead, capped at
    * the original 4 so short lists look unchanged. */
-  const int lines = (int)kSettingCount + 6 + (s_menu_preview ? 4 : 0);
-  int px = out_h / (6 * (lines + 1));
-  if (px > 4) px = 4;
-  if (px < 1) px = 1;
-  const int line_h = 6 * px;   /* glyph height (5) + 1 row of spacing */
-  const int pad = 3 * px;
-  int menu_w = out_w * 3 / 4;
-  int menu_h = pad * 2 + line_h * ((int)kSettingCount + 6 + (s_menu_preview ? 4 : 0));
-  int menu_x = (out_w - menu_w) / 2;
-  int menu_y = (out_h - menu_h) / 2;
+  SettingsLayout layout=settings_layout(out_w,out_h);
+  int px=layout.px, line_h=layout.line_h, pad=layout.pad;
+  int menu_w=layout.w, menu_h=layout.h, menu_x=layout.x, menu_y=layout.y;
 
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
   SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
@@ -7153,9 +7398,9 @@ static void render_settings_menu(SDL_Renderer *renderer) {
   SDL_SetRenderDrawColor(renderer, 180, 180, 180, 255);
   draw_text(renderer, menu_x + pad, ty, px - 1, "UP DOWN SELECT");
   ty += line_h - px;
-  draw_text(renderer, menu_x + pad, ty, px - 1, "ENTER TOGGLE");
+  draw_text(renderer, menu_x + pad, ty, px > 1 ? px - 1 : 1, "ENTER OR CLICK TOGGLE");
   ty += line_h - px;
-  draw_text(renderer, menu_x + pad, ty, px - 1, "F10 CLOSE");
+  draw_text(renderer, menu_x + pad, ty, px - 1, "F12 CLOSE");
 
   /* Under SC_MENU_PREVIEW only: render the full glyph set so a single
    * preview screenshot verifies every character, not just the ones the
@@ -7923,6 +8168,18 @@ static int run_qualification(uint64_t frames) {
 
   uint64_t stall_run = 0, stall_max = 0;
   for (uint64_t f = 0; f < frames; f++) {
+    /* Qualification-only construction fixture, through the same safe-boundary
+     * queue used by an actual mouse release. No direct mid-simulation writes. */
+    const char *build_test = getenv("SC_BUILD_TEST");
+    if (build_test && s_rom_is_us) {
+      unsigned long long at; unsigned tool; int x0,y0,x1,y1;
+      if (sscanf(build_test,"%llu:%u:%d:%d:%d:%d",&at,&tool,&x0,&y0,&x1,&y1)==6 && f==at &&
+          host_map_screen_live() && ScConstructionPlanWorld(&s_build_plan,&s_world,tool,x0,y0,x1,y1)) {
+        ram_set_w(0x020d,(uint16_t)tool);
+        s_build_scroll_x=(int16_t)ram_w(0x01bd); s_build_scroll_y=(int16_t)ram_w(0x01bf);
+        s_build_pending=true;
+      }
+    }
     apply_frame_input(f);
     apply_freezes();
     if (!run_one_frame()) {
@@ -8305,6 +8562,8 @@ int main(int argc, char **argv) {
       const char *cs = getenv("SC_MAPGEN_CARRY");
       const char *as = getenv("SC_MAPGEN_A");
       const unsigned idx = (unsigned)strtoul(st, NULL, 0);
+      const bool large = getenv("SC_MAPGEN_LARGE") && *getenv("SC_MAPGEN_LARGE") == '1';
+      const unsigned cells = large ? SC_MAPGEN_MAX_CELLS : SC_MAPGEN_CELLS;
       static ScMapGenState gs;
       ScMapGenPrng pr;
       { const char *pv = getenv("SC_MAPGEN_PREV");
@@ -8322,19 +8581,22 @@ int main(int argc, char **argv) {
          * passes make the match worse, and the second wipes the first's work.
          * Kept only as a sweep knob; 1 is correct. */
         g_sc_mapgen_prng_steps = 0;
-        for (unsigned r = 0; r < reps; r++) sc_mapgen_generate(&pr, &gs); }
+        for (unsigned r = 0; r < reps; r++) {
+          if (large) sc_mapgen_generate_large(&pr, &gs);
+          else sc_mapgen_generate(&pr, &gs);
+        } }
       if (outp && *outp) {
         FILE *f = fopen(outp, "wb");
         /* With SC_MAPGEN_SNAP_AT, write the map as it stood after exactly that
          * many draws rather than the finished one. */
         if (f) {
-          fwrite(g_sc_mapgen_snapped ? g_sc_mapgen_snap : gs.map,
-                 2, SC_MAPGEN_CELLS, f);
+          fwrite(!large && g_sc_mapgen_snapped ? g_sc_mapgen_snap : gs.map,
+                 2, cells, f);
           fclose(f);
         }
       }
       { unsigned hist[64] = {0}, nz = 0;
-        for (unsigned i = 0; i < SC_MAPGEN_CELLS; i++) {
+        for (unsigned i = 0; i < cells; i++) {
           const unsigned v = gs.map[i] & 0x3ffu;
           if (v) nz++;
           if (v < 64) hist[v]++;
@@ -8474,6 +8736,16 @@ int main(int argc, char **argv) {
     } }
   { const char *e = getenv("SC_MAP_WRITE_TRACE"); if (e && *e) s_map_write_trace = true; }
   { const char *e = getenv("SC_VIEW_WATCH"); if (e && *e) s_view_watch = true; }
+  { const char *e = getenv("SC_DEVELOPMENT_SPEED");
+    if (e && *e) {
+      int value = atoi(e);
+      for (unsigned i = 0; i < sizeof(kDevelopmentSpeeds)/sizeof(kDevelopmentSpeeds[0]); ++i)
+        if (value == kDevelopmentSpeeds[i]) s_development_speed = value;
+    }
+  }
+  { const char *e = getenv("SC_POPULATION_TEST");
+    if (e && *e == '1') s_pop_override = INT_MAX;
+  }
   { const char *e = getenv("SC_MENU_PREVIEW");
     if (e && *e) { s_menu_preview = true; s_menu_open = true; } }
   { const char *e = getenv("SC_FREEZE"); if (e && *e) parse_freezes(e); }
@@ -8617,6 +8889,7 @@ int main(int argc, char **argv) {
     s_rom_is_us = (fp == 0xec01686au);
     s_rom_fnv = fp;
     ScMapView_SetRomIsUs(s_rom_is_us);
+    ScMapView_SetWorld(&s_world);
     fprintf(stderr, "rom: %s  region=%s (%02x)  fnv=%08x%s\n",
             rom_path, name, region, fp, s_rom_is_us ? "  [AOT-compatible]" : "");
 
@@ -9210,6 +9483,10 @@ int main(int argc, char **argv) {
   PpuBeginDrawing(g_ppu, s_video_pixels, (size_t)s_video_pitch, s_render_flags);
   host_map_init();
   ScRendererInit(&s_custom_renderer, g_snes->cart->rom, rom_size, s_rom_is_us);
+  s_custom_renderer.population=&s_population;
+  { const char *large=getenv("SC_LARGE_MAPS");
+    s_large_maps=large?atoi(large)!=0:s_launch_settings.large_maps!=0; }
+  s_custom_renderer.world=&s_world;
   s_custom_renderer.sylt = s_ninth_scenario;   /* its pin and mark */
   if (!ScRendererResize(&s_custom_renderer,
         ScVideoViewport(&s_custom_video, s_window_width, s_window_height))) return 1;
@@ -9246,6 +9523,21 @@ int main(int argc, char **argv) {
   }
 
   if (qualify_frames) {
+    /* Diagnostic fixture for exercising the expanded game before exposing
+     * the new-city option. Old cities keep their top-left tiles and fields. */
+    if (getenv("SC_WORLD_TEST") && !s_world.active && s_rom_is_us) {
+      ScMapGenPrng pr={0}; sc_mapgen_prng_seed_from_spin(&pr,0xc7);
+      ScWorldGenerate(&s_world,&pr);
+      for (unsigned y=0;y<100;++y) memcpy(s_world.tiles+y*480,g_ram+0x10200+y*240,240);
+      for (unsigned i=0;i<SC_WORLD_FIELDS;++i) {
+        const ScWorldField *field=&ScWorldFields[i];
+        unsigned bytes=field->stock_width*field->element_bytes;
+        for (unsigned y=0;y<field->stock_height;++y)
+          memcpy(s_world.fields[i]+y*field->width*field->element_bytes,g_ram+0x10000+field->base+y*bytes,bytes);
+      }
+      g_ram[0x1c5]=215; g_ram[0x1c6]=0; g_ram[0x1c9]=178; g_ram[0x1ca]=0;
+      fprintf(stderr,"world: diagnostic 240x200 city enabled\n");
+    }
     return run_qualification(qualify_frames);
   }
 
@@ -9269,7 +9561,10 @@ int main(int argc, char **argv) {
                         : s_rom_fnv == SC_ROM_FNV_JP ? "jp" : "rom";
         snprintf(path, sizeof path, "urbanrecomp-%s.srm", tag);
       }
-      ScSram_Open(g_snes->cart->ram, g_snes->cart->ramSize, path);
+      if (ScSram_Open(g_snes->cart->ram, g_snes->cart->ramSize, path)) {
+        snprintf(s_population_path, sizeof s_population_path, "%s.population", path);
+        snprintf(s_world_path, sizeof s_world_path, "%s.world", path);
+      }
     } }
 
   /* SDL3 returns true on success where SDL2 returned 0, so a bare `!= 0`
@@ -9386,6 +9681,10 @@ int main(int argc, char **argv) {
       if (!got) break;
       if (ev.type == SDL_QUIT) quit = true;
       if (getenv("SC_SCRIPTED_INPUT")) continue; /* owned UI regression window */
+      if (s_rom_is_us && ram_w(0x14)==3 && ev.type==SDL_KEYDOWN &&
+          !ev.key.repeat && SC_EVENT_SCANCODE(ev)==SDL_SCANCODE_L) {
+        toggle_large_maps(); continue;
+      }
       if (ev.type == SDL_KEYDOWN && !ev.key.repeat && SC_EVENT_SCANCODE(ev)==SDL_SCANCODE_F11) {
         s_fullscreen=!s_fullscreen;
 #if SNESRECOMP_SDL3
@@ -9442,13 +9741,9 @@ int main(int argc, char **argv) {
         }
       }
 
-      /* F3: toggle host-mouse cursor control (see apply_mouse_delta below).
-       * Off by default -- it's a ported experimental community patch, and
-       * incidental OS mouse movement over the window shouldn't silently
-       * steer the game cursor unless asked for. */
+      /* F3: toggle absolute desktop mouse control (enabled by default). */
       if (ev.type == SDL_KEYDOWN && SC_EVENT_SCANCODE(ev) == SDL_SCANCODE_F3 && !ev.key.repeat) {
         s_mouse_enabled = !s_mouse_enabled;
-        if (s_mouse_enabled) SDL_GetRelativeMouseState(NULL, NULL); /* discard stale accumulated delta */
         fprintf(stderr, "[F3] mouse cursor control %s\n", s_mouse_enabled ? "ON" : "OFF");
       }
       /* F9: toggle the fast D-pad cursor (see apply_mouse_delta/
@@ -9458,13 +9753,14 @@ int main(int argc, char **argv) {
         s_fast_cursor_enabled = !s_fast_cursor_enabled;
         fprintf(stderr, "[F9] fast D-pad cursor %s\n", s_fast_cursor_enabled ? "ON" : "OFF");
       }
-      /* F10: settings menu (see the "minimal in-game settings menu" block
+      /* F10/F12: settings menu (see the "minimal in-game settings menu" block
        * above) -- toggles a host-side overlay listing this project's
        * existing toggles/actions in one generic, table-driven list instead
        * of each needing its own memorized hotkey. */
-      if (ev.type == SDL_KEYDOWN && SC_EVENT_SCANCODE(ev) == SDL_SCANCODE_F10 && !ev.key.repeat) {
+      if (ev.type == SDL_KEYDOWN && (SC_EVENT_SCANCODE(ev) == SDL_SCANCODE_F10 ||
+          SC_EVENT_SCANCODE(ev) == SDL_SCANCODE_F12) && !ev.key.repeat) {
         s_menu_open = !s_menu_open;
-        fprintf(stderr, "[F10] settings menu %s\n", s_menu_open ? "OPEN" : "CLOSED");
+        fprintf(stderr, "[F10/F12] settings menu %s\n", s_menu_open ? "OPEN" : "CLOSED");
       }
       if (s_menu_open && ev.type == SDL_KEYDOWN) {
         switch (SC_EVENT_SCANCODE(ev)) {
@@ -9597,144 +9893,164 @@ int main(int argc, char **argv) {
     bool scripted_input = getenv("SC_SCRIPTED_INPUT") != NULL;
     static const uint8_t empty_keys[512] = {0};
     if (scripted_input) keys = empty_keys;
-    /* Throw away the pointer delta that accumulated while the window was not
-     * ours.
-     *
-     * SDL_GetRelativeMouseState() reports movement since the LAST call, and
-     * it keeps accumulating while the window is unfocused or the pointer is
-     * outside it. Alt-tab away, move the mouse across the desktop, come back,
-     * and the next call returns that whole journey in one delta -- so the
-     * cursor jumps somewhere far from where the pointer actually is.
-     * Reported from play as the mouse "not on spot when the cursor gets back
-     * to the window".
-     *
-     * The F3 toggle already does exactly this discard for the same reason.
-     * This is that, on regaining focus or the pointer re-entering.
-     *
-     * Polled from the window flags rather than handled as an event, because
-     * the event spelling differs between SDL2 and SDL3 (SDL_WINDOWEVENT with
-     * a sub-type vs SDL_EVENT_WINDOW_*) while these two flags do not. This
-     * file has already been bitten three times by SDL2/SDL3 renames that keep
-     * compiling, so the version-neutral spelling is the safer one. */
-    { static bool had_focus = true;
+    /* Absolute SDL pointer coordinates are mapped through the rendered view. */
+    const uint8_t cursor_before_mouse_x = g_ram[0x01eb];
+    const uint8_t cursor_before_mouse_y = g_ram[0x01ed];
+    bool mouse_target_valid = false;
+    bool mouse_ui_handled = false, mouse_ui_hit = false;
+    bool mouse_ui_select = false;
+    bool mouse_raw_left = false;
+    bool mouse_world_hit = false;
+    bool mouse_navigation_hit = false;
+    uint16_t mouse_edge_input = 0;
+    int mouse_target_x = 0, mouse_target_y = 0;
+    int mouse_city_x = 0, mouse_city_y = 0;
+    bool mouse_city_hit = false;
+    s_custom_renderer.pointer_active = false;
+    uint32_t mouse_buttons = 0;
+    if (s_mouse_enabled && !scripted_input && !s_menu_open) {
       const uint32_t wf = (uint32_t)SDL_GetWindowFlags(window);
-      const bool has_focus = (wf & (SDL_WINDOW_INPUT_FOCUS |
-                                    SDL_WINDOW_MOUSE_FOCUS)) != 0;
-      if (has_focus && !had_focus) {
+      bool focused = (wf & SDL_WINDOW_INPUT_FOCUS) &&
+                           ((wf & SDL_WINDOW_MOUSE_FOCUS) || s_build_active);
+      double mx, my;
 #if SNESRECOMP_SDL3
-        { float fx = 0.0f, fy = 0.0f; SDL_GetRelativeMouseState(&fx, &fy); }
+      float fx = 0, fy = 0;
+      mouse_buttons = SDL_GetMouseState(&fx, &fy);
+      mx = fx; my = fy;
 #else
-        SDL_GetRelativeMouseState(NULL, NULL);
+      int ix = 0, iy = 0;
+      mouse_buttons = SDL_GetMouseState(&ix, &iy);
+      mx = ix; my = iy;
 #endif
+      int ww = 0, wh = 0;
+      SDL_GetWindowSize(window, &ww, &wh);
+      mouse_raw_left = focused && (mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT));
+      /* Menus are centered even when the city HUD is anchored at top left.
+       * The renderer's live view is the authority for the displayed frame. */
+      ScViewport pointer_view = s_custom_video.enabled ?
+                                s_custom_renderer.view : viewport;
+      /* Recorded canvas-space pointer events exercise this same windowed
+       * input path under the dummy SDL driver, including captured releases. */
+      const char *mouse_test=getenv("SC_MOUSE_INPUT");
+      if (mouse_test) {
+        static unsigned tick;
+        unsigned at,buttons=0; double x=-1000,y=-1000; int consumed;
+        const char *event=mouse_test;
+        while (sscanf(event,"%u:%lf:%lf:%u%n",&at,&mx,&my,&buttons,&consumed)==4) {
+          if (at>tick) break;
+          x=mx; y=my; mouse_buttons=buttons;
+          event+=consumed;
+          if (*event++!=',') break;
+        }
+        ++tick;
+        mx=(s_destination.x+x*s_destination.w/pointer_view.width)*ww/drawable_w;
+        my=(s_destination.y+y*s_destination.h/pointer_view.height)*wh/drawable_h;
+        focused=true;
+        mouse_raw_left=(mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT))!=0;
+        const char *tool=getenv("SC_MOUSE_TOOL");
+        if (tool) ram_set_w(0x20d,(uint16_t)atoi(tool));
       }
-      had_focus = has_focus; }
-    if (s_mouse_enabled && !scripted_input) {
-      /* SDL reports the pointer delta in HOST SCREEN pixels; the cursor lives
-       * in SNES pixels. Feeding one straight into the other made the cursor
-       * move `scale` times too fast -- 3x at the default window size. Reported
-       * from play as "the mouse input seems way too fast", on every region,
-       * not just the one it was noticed on.
-       *
-       * Divide by the live window scale rather than the `scale` variable, so a
-       * resized or fullscreened window stays correct. The remainder is carried
-       * rather than truncated, or slow movement below one SNES pixel per frame
-       * would be silently dropped and the cursor would feel sticky. */
-      /* SDL3 changed this to float* -- SDL_GetRelativeMouseState(float*,float*).
-       * Passing int* is not an error in MSVC C, only warning C4133, so it built
-       * clean under a grep that matched "error C" and the SDL3 build spent the
-       * whole time reinterpreting float bits as ints. The deltas were garbage,
-       * clamped to +/-127, which is why the cursor was "way too fast in every
-       * setting" -- no sensitivity could scale a nonsense number.
-       *
-       * Third time this family of change has bitten: SDL_Init returning bool,
-       * SDL_Rect becoming SDL_FRect, and now this. SDL_ENABLE_OLD_NAMES keeps
-       * the NAME working, which is exactly what makes it dangerous. */
-      int mdx = 0, mdy = 0;
-#if SNESRECOMP_SDL3
-      { float fx = 0.0f, fy = 0.0f;
-        SDL_GetRelativeMouseState(&fx, &fy);
-        mdx = (int)fx; mdy = (int)fy; }
-#else
-      SDL_GetRelativeMouseState(&mdx, &mdy);
-#endif
-      if (mdx || mdy) {
-        int ow = 0, oh = 0;
-#if SNESRECOMP_SDL3
-        SDL_GetRenderOutputSize(renderer, &ow, &oh);
-#else
-        SDL_GetRendererOutputSize(renderer, &ow, &oh);
-#endif
-        int window_w = 0, window_h = 0;
-        SDL_GetWindowSize(window, &window_w, &window_h);
-        double dpi_x = window_w > 0 ? (double)ow / window_w : 1;
-        double dpi_y = window_h > 0 ? (double)oh / window_h : 1;
-        double sx = s_destination.w > 0 ? (double)s_destination.w / viewport.width / dpi_x : scale;
-        double sy = s_destination.h > 0 ? (double)s_destination.h / viewport.height / dpi_y : scale;
-        if (sx < 1.0) sx = 1.0;
-        if (sy < 1.0) sy = 1.0;
-        const double sens = (double)s_mouse_sensitivity / 100.0;
-        static double acc_x, acc_y;
-        acc_x += (double)mdx * sens / sx;
-        acc_y += (double)mdy * sens / sy;
-        int step_x = (int)acc_x, step_y = (int)acc_y;
-        acc_x -= step_x; acc_y -= step_y;
-        /* Right button held = pan the map, not move the cursor.
-         *
-         * That mirrors what the ROM itself does: holding A deactivates the
-         * cursor and turns the D-pad into a map scroll (01:afbe's ladder over
-         * $01bd/$01bf). Driving $01eb/$01ed while the game is trying to scroll
-         * fought that routine -- the direction arrows appeared but only the
-         * cursor moved.
-         *
-         * $01bd/$01bf are the confirmed scroll pair, clamped by 01:a0c4
-         * against bounds in $01c5-$01cb, which are read here rather than
-         * assumed. Scroll is in map tiles, so the SNES-pixel delta is divided
-         * down; SC_PAN_DIV tunes it. */
-        if (SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_RIGHT)) {
-          /* Pan by driving the ROM's OWN scroll, not by poking $01bd/$01bf.
-           *
-           * Writing the scroll pair directly tore the map even at one tile per
-           * frame, because the ROM updates its tilemap in step with that value
-           * during its own frame work -- a host write lands at an arbitrary
-           * point and the map redraws half-updated.
-           *
-           * Holding A is exactly the game's own "deactivate cursor, move the
-           * map" mode (01:8d8a -> 01:afbe). Synthesising A plus a direction
-           * makes the ROM scroll itself, so the update is coordinated and
-           * tear-free by construction, at whatever rate the game supports. */
-          static double pacc_x, pacc_y;
-          static int pan_div = -1;
-          if (pan_div < 0) {
-            const char *e = getenv("SC_PAN_DIV");
-            pan_div = (e && *e) ? atoi(e) : 8;
-            if (pan_div < 1) pan_div = 1;
+      const bool inside = focused && (s_custom_video.enabled ?
+          ScRendererWindowToGuest(&s_custom_renderer,s_destination,ww,wh,drawable_w,drawable_h,
+              mx,my,&mouse_target_x,&mouse_target_y,&mouse_navigation_hit) :
+          ScVideoWindowToGuest(pointer_view,s_destination,ww,wh,drawable_w,drawable_h,
+              mx,my,&mouse_target_x,&mouse_target_y));
+      mouse_city_hit=inside && !mouse_navigation_hit && s_custom_video.enabled &&
+          ScRendererCityPoint(&s_custom_renderer,g_ram,mouse_target_x,mouse_target_y,
+              &mouse_city_x,&mouse_city_y);
+      static bool panning;
+      static bool last_inside;
+      static int last_x, last_y;
+      static double pan_x, pan_y;
+      static unsigned pan_clock;
+      const bool right = focused && (mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT));
+      if (right && !mouse_raw_left && !s_build_active &&
+          (inside || panning) && host_map_screen_live()) {
+        if (!panning) { pan_x = mx; pan_y = my; pan_clock = 0; }
+        panning = true;
+        /* A held displacement keeps scrolling: no need to keep dragging.
+         * Scale in guest pixels so DPI and window size do not change feel. */
+        double dx = ww > 0 && s_destination.w > 0 ?
+            (mx-pan_x) * drawable_w / ww * pointer_view.width / s_destination.w : 0;
+        double dy = wh > 0 && s_destination.h > 0 ?
+            (my-pan_y) * drawable_h / wh * pointer_view.height / s_destination.h : 0;
+        dx *= (double)s_mouse_sensitivity / 100;
+        dy *= (double)s_mouse_sensitivity / 100;
+        double distance = fabs(dx) > fabs(dy) ? fabs(dx) : fabs(dy);
+        distance *= s_pan_max_tiles;
+        unsigned interval = distance >= 48 ? 1 : distance >= 24 ? 2 : 4;
+        s_pan_dir = 0;
+        if (pan_clock++ % interval == 0) {
+          if (dx < -4) s_pan_dir |= kPad_Left;
+          if (dx > 4) s_pan_dir |= kPad_Right;
+          if (dy < -4) s_pan_dir |= kPad_Up;
+          if (dy > 4) s_pan_dir |= kPad_Down;
+        }
+        s_pan_dir_frames = s_pan_dir ? 1 : 0;
+        s_mouse_dir_frames = 0;
+      } else {
+        panning = false;
+        s_pan_dir_frames = 0;
+        if (inside) {
+          int dx = last_inside ? mouse_target_x - last_x : 0;
+          int dy = last_inside ? mouse_target_y - last_y : 0;
+          /* Write the full absolute position, never clamp the travel delta:
+           * a jump across the viewport must land correctly in one frame. */
+          /* The ROM pointer remains byte sized. Host construction uses the
+           * full world coordinate, never this safe native cursor proxy. */
+          g_ram[0x01eb] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_x<0?0:mouse_target_x>255?255:mouse_target_x);
+          g_ram[0x01ed] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_y<0?0:mouse_target_y>223?223:mouse_target_y);
+          if (mouse_city_hit && !right && ram_w(0x020d)<=14) {
+            s_custom_renderer.pointer_active=true;
+            s_custom_renderer.pointer_x=mouse_target_x;
+            s_custom_renderer.pointer_y=mouse_target_y;
           }
-          pacc_x += (double)step_x / pan_div;
-          pacc_y += (double)step_y / pan_div;
-          int px = (int)pacc_x, py = (int)pacc_y;
-          pacc_x -= px; pacc_y -= py;
-          s_pan_dir = 0;
-          if (px < 0) s_pan_dir |= kPad_Left;
-          if (px > 0) s_pan_dir |= kPad_Right;
-          if (py < 0) s_pan_dir |= kPad_Up;
-          if (py > 0) s_pan_dir |= kPad_Down;
-          if (s_pan_dir) s_pan_dir_frames = 2;
-        } else if (step_x || step_y) {
-          apply_mouse_delta(step_x, step_y);
-          /* Remember the direction of travel. While a button is held the ROM
-           * needs to see the cursor MOVE through its own path -- poking
-           * $01eb/$01ed behind its back moves the sprite but never raises the
-           * "cursor moved" event its drag handling keys off, which is why
-           * holding the button only acted once instead of continuously. The
-           * synthesised d-pad below closes that gap. */
+          mouse_target_valid = true;
+          mouse_world_hit=s_rom_is_us && ram_w(0x14)==3 && mouse_target_x>=64 &&
+            mouse_target_x<224 && mouse_target_y>=196 && mouse_target_y<212;
           s_mouse_dir = 0;
-          if (step_x < 0) s_mouse_dir |= kPad_Left;
-          if (step_x > 0) s_mouse_dir |= kPad_Right;
-          if (step_y < 0) s_mouse_dir |= kPad_Up;
-          if (step_y > 0) s_mouse_dir |= kPad_Down;
-          s_mouse_dir_frames = 2;   /* survive a frame the pointer did not move */
+          if (dx < 0) s_mouse_dir |= kPad_Left;
+          if (dx > 0) s_mouse_dir |= kPad_Right;
+          if (dy < 0) s_mouse_dir |= kPad_Up;
+          if (dy > 0) s_mouse_dir |= kPad_Down;
+          s_mouse_dir_frames = s_mouse_dir ? 1 : 0;
+          if (s_rom_is_us) {
+            ScMouseUiResult ui = ScMouseUiPoint(g_ram, mouse_target_x, mouse_target_y,
+                false, s_ninth_scenario);
+            mouse_ui_select = dx || dy || (mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT));
+            mouse_ui_handled = ui.handled; mouse_ui_hit = ui.hit;
+            if (mouse_navigation_hit) { mouse_ui_handled=true; mouse_ui_hit=false; }
+            if (ui.handled) s_mouse_dir_frames = 0;
+          }
+          static unsigned edge_clock;
+          const bool buttons_up = !(mouse_buttons &
+              (SDL_BUTTON(SDL_BUTTON_LEFT) | SDL_BUTTON(SDL_BUTTON_RIGHT)));
+          int edge = mouse_target_x < 8 ? -1 : mouse_target_x >= 248 ? 1 : 0;
+          if (buttons_up && edge && g_ram[0x14] == 11 && s_rom_is_us) {
+            if (edge_clock++ % 30 == 0)
+              ScMouseUiScenarioScroll(g_ram, edge, s_ninth_scenario);
+          } else {
+            edge_clock = 0;
+          }
+          if (buttons_up && host_map_screen_live()) {
+            /* The visible HUD occupies the top and left edges. */
+            const bool hud_hidden = !(g_ram[0x01d7] | g_ram[0x01d8]);
+            int canvas_x=mouse_target_x+pointer_view.core_x;
+            int canvas_y=mouse_target_y+pointer_view.core_y;
+            if (canvas_x >= pointer_view.width-8) mouse_edge_input |= kPad_Right;
+            if (canvas_y >= pointer_view.height-8) mouse_edge_input |= kPad_Down;
+            if ((hud_hidden || pointer_view.core_x>0) && canvas_x < 8) mouse_edge_input |= kPad_Left;
+            if ((hud_hidden || pointer_view.core_y>0) && canvas_y < 8) mouse_edge_input |= kPad_Up;
+            if (mouse_edge_input) mouse_edge_input |= kPad_A;
+          }
+        } else {
+          /* Letterboxing is outside the rendered input surface. */
+          if (!s_build_active) mouse_buttons = 0;
+          s_mouse_dir_frames = 0;
         }
       }
+      last_inside = inside; last_x = mouse_target_x; last_y = mouse_target_y;
+      if (!focused) { mouse_buttons = 0; panning = false; }
     }
     if (s_fast_cursor_enabled) {
       /* Host-driven, independent of the ROM's own cadence -- see
@@ -9816,7 +10132,91 @@ int main(int argc, char **argv) {
      * Note these are the SERIAL-order pad bits (kPad_B = $0001, kPad_A =
      * $0100), not the $4218/$4219 hardware layout -- see
      * docs/HANDOVER_metal_marines.md #1. */
-    { const uint32_t mb = SDL_GetMouseState(NULL, NULL);
+    /* A keyboard direction owns the guest cursor while held. Do not reset
+     * its movement to the desktop pointer at the start of the next frame. */
+    if (input & (kPad_Left | kPad_Right | kPad_Up | kPad_Down)) {
+      g_ram[0x01eb] = cursor_before_mouse_x;
+      g_ram[0x01ed] = cursor_before_mouse_y;
+      mouse_target_valid = false;
+      s_custom_renderer.pointer_active = false;
+      s_mouse_dir_frames = 0;
+      mouse_edge_input = 0;
+    } else if (!mouse_world_hit && mouse_ui_handled && mouse_ui_select) {
+      ScMouseUiPoint(g_ram, mouse_target_x, mouse_target_y, true, s_ninth_scenario);
+      if (g_ram[0x14] == 5 && g_ram[0x0b2d] == 1 && g_ram[0x0b31])
+        s_map_mouse_refresh_pending = true;
+      if (g_ram[0x14] == 5 && g_ram[0x0b2d] == 1 && g_ram[0x0b31] &&
+          (mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT)))
+        s_map_mouse_accept_pending = true;
+    }
+    if (g_ram[0x14] != 5 || g_ram[0x0b2d] != 1) {
+      s_map_mouse_accept_pending = false; s_map_mouse_refresh_pending = false;
+    }
+    {
+      static bool previous_left;
+      if (mouse_world_hit) {
+        if (mouse_raw_left && !previous_left) toggle_large_maps();
+        mouse_ui_handled=true; mouse_ui_hit=false; mouse_ui_select=false;
+        s_mouse_dir_frames=0;
+      }
+      const bool right = mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT);
+      const bool hud_hidden = !ram_w(0x01d7);
+      const bool on_land = s_custom_video.enabled ? mouse_city_hit :
+          hud_hidden || (mouse_target_x >= 56 && mouse_target_y >= 48);
+      const bool supported = s_mouse_enabled && s_rom_is_us && !sc_fiber_active() &&
+          mouse_target_valid && !mouse_navigation_hit && host_map_screen_live() && !ram_w(0xd7) && on_land &&
+          ram_w(0x020d) <= 14 && !s_menu_open && !scripted_input;
+      if (!host_map_screen_live()) s_build_pending = false;
+      if (mouse_raw_left && !previous_left && supported && !s_build_pending && !right) {
+        s_build_tool = ram_w(0x020d);
+        s_build_scroll_x = (int16_t)ram_w(0x01bd); s_build_scroll_y = (int16_t)ram_w(0x01bf);
+        s_build_x0 = s_custom_video.enabled ? mouse_city_x : s_build_scroll_x + mouse_target_x / 8;
+        s_build_y0 = s_custom_video.enabled ? mouse_city_y : s_build_scroll_y + mouse_target_y / 8;
+        s_build_active = true; s_build_cancelled = false;
+        SDL_CaptureMouse(true);
+      }
+      if (s_build_active) {
+        if (right || !host_map_screen_live() || ram_w(0x379) || s_menu_open ||
+            ram_w(0x020d) != s_build_tool ||
+            (int16_t)ram_w(0x01bd) != s_build_scroll_x || (int16_t)ram_w(0x01bf) != s_build_scroll_y) {
+          s_build_active = false; s_build_cancelled = true;
+        } else {
+          if (supported) {
+            s_build_x1 = s_custom_video.enabled ? mouse_city_x : s_build_scroll_x + mouse_target_x / 8;
+            s_build_y1 = s_custom_video.enabled ? mouse_city_y : s_build_scroll_y + mouse_target_y / 8;
+            ScConstructionPlanWorld(&s_build_plan, &s_world, s_build_tool,
+                s_build_x0, s_build_y0, s_build_x1, s_build_y1);
+          }
+          /* Leaving the canvas/HUD retains the last valid plan. Captured
+           * release commits it; re-entry continues the same gesture. */
+          if (!mouse_raw_left && previous_left && s_build_plan.count) {
+            s_build_active = false; s_build_pending = true;
+          }
+        }
+      }
+      if (s_menu_open && (ev.type == SDL_MOUSEMOTION ||
+          (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT))) {
+        double x = ev.type == SDL_MOUSEMOTION ? ev.motion.x : ev.button.x;
+        double y = ev.type == SDL_MOUSEMOTION ? ev.motion.y : ev.button.y;
+        int row = settings_mouse_row(window, renderer, x, y);
+        if (row >= 0) {
+          s_menu_selected = row;
+          if (ev.type == SDL_MOUSEBUTTONDOWN) setting_activate(&s_settings[row]);
+        }
+      }
+      if (s_build_active || s_build_cancelled || s_build_pending) {
+        mouse_edge_input = 0; s_pan_dir_frames = 0; s_mouse_dir_frames = 0;
+      }
+      if (s_custom_video.enabled && (s_build_active || s_build_pending)) {
+        s_custom_renderer.pointer_active=true;
+        s_custom_renderer.pointer_x=s_build_x1*8-s_custom_renderer.scroll_x-s_custom_renderer.scroll_adjust_x;
+        s_custom_renderer.pointer_y=s_build_y1*8-s_custom_renderer.scroll_y-s_custom_renderer.scroll_adjust_y;
+      }
+      if (!mouse_raw_left) s_build_cancelled = false;
+      previous_left = mouse_raw_left;
+      if (!s_build_active) SDL_CaptureMouse(false);
+    }
+    { const uint32_t mb = s_mouse_enabled ? mouse_buttons : SDL_GetMouseState(NULL, NULL);
       /* On a MENU, feed the synthesised d-pad without waiting for a button.
        *
        * apply_mouse_delta() pokes $01eb/$01ed, and that is what moves the
@@ -9834,21 +10234,24 @@ int main(int argc, char **argv) {
        * false for exactly the pages that report $14 == 0 without BG2, which
        * are the menu pages this is for. */
       const bool mouse_on_menu = !host_map_screen_live();
-      if (s_mouse_enabled && s_mouse_dir_frames > 0 &&
-          ((mb & SDL_BUTTON(SDL_BUTTON_LEFT)) || mouse_on_menu)) {
+      if (s_mouse_enabled && s_mouse_dir_frames > 0 && mouse_on_menu) {
         input |= s_mouse_dir;
         s_mouse_dir_frames--;
       } else if (s_mouse_dir_frames > 0) {
         s_mouse_dir_frames--;
       }
-      if (mb & SDL_BUTTON(SDL_BUTTON_LEFT))  input |= kPad_B;
+      if ((mb & SDL_BUTTON(SDL_BUTTON_LEFT)) &&
+          (!mouse_ui_handled || mouse_ui_hit) &&
+          !(s_custom_video.enabled && mouse_city_hit && ram_w(0x020d)>14) &&
+          !s_build_active && !s_build_pending && !s_build_cancelled) input |= kPad_B;
       /* Right button drives the map pan directly (see the pan block in the
        * mouse handler) rather than feeding A, so it does not also trigger the
        * ROM's own hold-A scroll and double up. */
-      if (mb & SDL_BUTTON(SDL_BUTTON_RIGHT)) {
+      if ((mb & SDL_BUTTON(SDL_BUTTON_RIGHT)) && !s_build_cancelled) {
         input |= kPad_A;                      /* the game's own pan modifier */
         if (s_pan_dir_frames > 0) { input |= s_pan_dir; s_pan_dir_frames--; }
       } }
+    input |= mouse_edge_input;
     /* Don't feed the keyboard to the game while the settings menu is open:
      * the menu navigates with Up/Down/Left/Right/Enter, which are also the
      * SNES D-pad and Start bindings. The game is frozen so nothing acts on
@@ -9913,6 +10316,10 @@ int main(int argc, char **argv) {
     bool guard_tripped = false;
     if (!s_menu_open) {
       for (int ffi = 0; ffi < frames_this_iter; ffi++) {
+        if (mouse_target_valid && !s_fast_cursor_enabled) {
+          g_ram[0x01eb] = (uint8_t)mouse_target_x;
+          g_ram[0x01ed] = (uint8_t)mouse_target_y;
+        }
         if (!run_one_frame()) {
           fprintf(stderr, "frame %llu: opcode guard tripped (hang/runaway) -- stopping\n",
                   (unsigned long long)s_frames);
@@ -10065,16 +10472,40 @@ int main(int argc, char **argv) {
       const int width = s_custom_video.enabled ? s_custom_renderer.view.width : s_video_w;
       const int height = s_custom_video.enabled ? s_custom_renderer.view.height : kVideoHeight;
       const int row_bytes = width * 4;
-      for (int y = 0; y < height; y++)
+      for (int y = 0; y < height; y++) {
         memcpy((uint8_t *)pixels + (size_t)y * pitch,
           s_custom_video.enabled ? (const uint8_t *)(s_custom_renderer.pixels + (size_t)y * width) :
           s_video_pixels + (size_t)y * s_video_pitch, (size_t)row_bytes);
+        if (!s_custom_video.enabled && host_map_screen_live() && ram_w(0x1d7))
+          ScRendererPopulationRow(&s_custom_renderer,g_ppu,viewport,false,y,
+              (uint32_t *)((uint8_t *)pixels+(size_t)y*pitch));
+      }
     }
     if (_lok) SDL_UnlockTexture(texture);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     ScRect dest = SC_RECT(s_destination.x, s_destination.y, s_destination.w, s_destination.h);
     bool _cok = SDL_RenderCopy(renderer, texture, NULL, &dest) SC_SDL_OK;
+    if ((s_build_active || s_build_pending) && host_map_screen_live() && !s_menu_open) {
+      ScViewport v = s_custom_video.enabled ? s_custom_renderer.view : viewport;
+      double sx = (double)s_destination.w / v.width;
+      double sy = (double)s_destination.h / v.height;
+      static const int large_steps[]={4,4,6,4,4};
+      int step = s_build_tool>=10 && s_build_tool<=14?large_steps[s_build_tool-10]:s_build_tool>=5?3:1;
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(renderer, 255, 230, 60, 220);
+      for (unsigned i = 0; i < s_build_plan.count; ++i) {
+        int gx = s_build_plan.cells[i].x * 8 - (s_custom_video.enabled ?
+            s_custom_renderer.scroll_x+s_custom_renderer.scroll_adjust_x : s_build_scroll_x*8);
+        int gy = s_build_plan.cells[i].y * 8 - (s_custom_video.enabled ?
+            s_custom_renderer.scroll_y+s_custom_renderer.scroll_adjust_y : s_build_scroll_y*8);
+        if (gx+v.core_x < 0 || gy+v.core_y < 0 ||
+            gx+v.core_x+step*8 > v.width || gy+v.core_y+step*8 > v.height) continue;
+        ScRect r = SC_RECT(s_destination.x + (v.core_x + gx) * sx,
+                          s_destination.y + (v.core_y + gy) * sy, step * 8 * sx, step * 8 * sy);
+        SDL_RenderDrawRect(renderer, &r);
+      }
+    }
     /* Validation hook: publish only complete presented frames, atomically.
      * No guest work is performed for a capture, including during resizing. */
     if (s_custom_video.enabled) {
@@ -10099,6 +10530,17 @@ int main(int argc, char **argv) {
       if (diag < 99 && (s_frames % 60) == 0) {
         fprintf(stderr, "[sdl] lock=%d pitch=%d expect=%d copy=%d err=%s\n",
                 (int)_lok, pitch, (int)s_video_pitch, (int)_cok, SDL_GetError()); } }
+    if (s_rom_is_us && ram_w(0x14)==3 && !s_menu_open) {
+      ScViewport v=s_custom_video.enabled?s_custom_renderer.view:viewport;
+      double sx=s_destination.w/v.width,sy=s_destination.h/v.height;
+      ScRect button=SC_RECT(s_destination.x+(v.core_x+64)*sx,
+        s_destination.y+(v.core_y+196)*sy,160*sx,16*sy);
+      SDL_SetRenderDrawColor(renderer,54,37,13,255); SDL_RenderFillRect(renderer,&button);
+      SDL_SetRenderDrawColor(renderer,255,255,232,255); SDL_RenderDrawRect(renderer,&button);
+      int px=(int)sy; if(px<1) px=1;
+      draw_text(renderer,(int)button.x+4*px,(int)button.y+5*px,px,
+        s_large_maps?"L LARGE MAPS ON 240X200":"L LARGE MAPS OFF 120X100");
+    }
     if (s_menu_open) render_settings_menu(renderer);
     if (s_replay_open) render_replay_menu(renderer);
 

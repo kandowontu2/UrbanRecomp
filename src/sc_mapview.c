@@ -43,12 +43,14 @@ extern Snes    *g_snes;
 #define SC_TILE_ADDR 0x0156A9u
 #define SC_TILU_ADDR (SC_TILE_ADDR - 0x77Cu)
 
-#define SC_MAP_W 120
-#define SC_MAP_H 100
+static const ScWorld *s_world;
+#define SC_MAP_W (s_world && s_world->active?SC_WORLD_WIDTH:120)
+#define SC_MAP_H (s_world && s_world->active?SC_WORLD_HEIGHT:100)
 
 static bool s_rom_is_us;
 
 void ScMapView_SetRomIsUs(bool is_us) { s_rom_is_us = is_us; }
+void ScMapView_SetWorld(const ScWorld *world) { s_world=world; }
 
 static uint16_t ram_u16(uint32_t off) {
     return (uint16_t)(g_ram[off] | (g_ram[off + 1] << 8));
@@ -64,15 +66,18 @@ void ScMapView_SetSource(const uint8_t *map, const uint8_t *pal) {
 }
 
 void ScMapView_Snapshot(uint8_t *map, uint8_t *pal) {
-    memcpy(map, g_ram + SC_MAP_OFF, SC_MAPVIEW_MAP_BYTES);
+    unsigned bytes=SC_MAP_W*SC_MAP_H*2;
+    memcpy(map,s_world && s_world->active?s_world->tiles:g_ram+SC_MAP_OFF,bytes);
+    memset(map+bytes,0,SC_MAPVIEW_MAP_BYTES-bytes);
     memcpy(pal, g_ram + SC_PAL_OFF, SC_MAPVIEW_PAL_BYTES);
 }
 
 int ScMapView_ChangedCells(const uint8_t *map) {
     int n = 0;
-    for (unsigned i = 0; i < SC_MAPVIEW_MAP_BYTES; i += 2) {
+    for (unsigned i = 0; i < SC_MAP_W*SC_MAP_H*2; i += 2) {
         const unsigned a = (unsigned)(map[i] | (map[i + 1] << 8)) & 0x03FFu;
-        const unsigned b = ram_u16(SC_MAP_OFF + i) & 0x03FFu;
+        const unsigned b = (s_world && s_world->active?
+          (s_world->tiles[i]|(s_world->tiles[i+1]<<8)):ram_u16(SC_MAP_OFF+i))&0x03ff;
         n += a != b;
     }
     return n;
@@ -80,6 +85,7 @@ int ScMapView_ChangedCells(const uint8_t *map) {
 
 static uint16_t map_u16(uint32_t i) {
     if (s_map_src) return (uint16_t)(s_map_src[i] | (s_map_src[i + 1] << 8));
+    if (s_world && s_world->active) return s_world->tiles[i]|(s_world->tiles[i+1]<<8);
     return ram_u16(SC_MAP_OFF + i);
 }
 
@@ -89,8 +95,8 @@ static uint16_t pal_u16(uint32_t i) {
 }
 
 void ScMapView_GetScroll(int *sx, int *sy) {
-    if (sx) *sx = (int8_t)g_ram[SC_SCROLL_X];
-    if (sy) *sy = (int8_t)g_ram[SC_SCROLL_Y];
+    if (sx) *sx = (int16_t)ram_u16(SC_SCROLL_X);
+    if (sy) *sy = (int16_t)ram_u16(SC_SCROLL_Y);
 }
 
 /* BGR555 -> ARGB8888, through the PPU's master-brightness table.

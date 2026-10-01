@@ -19,3 +19,8 @@ ScViewport ScVideoViewport(const ScVideoSettings *settings, int width, int heigh
 ScVideoRect ScVideoDestination(ScViewport view, int width, int height);
 bool ScVideoToGuest(ScViewport view, ScVideoRect destination, double x, double y,
                    int *guest_x, int *guest_y);
+/* SDL pointer coordinates are window units; destination is drawable pixels.
+ * Use the rendered viewport (including its live menu anchor). */
+bool ScVideoWindowToGuest(ScViewport view, ScVideoRect destination,
+                          int window_w, int window_h, int drawable_w, int drawable_h,
+                          double x, double y, int *guest_x, int *guest_y);

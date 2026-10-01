@@ -27,6 +27,8 @@ saves/
 *.srm
 *.srm.bak
 *.srm.tmp
+*.srm.population*
+*.srm.world*
 
 # IDE
 .vs/

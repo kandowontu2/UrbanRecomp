@@ -144,6 +144,7 @@ bool ScSettingsLoad(ScSettings *s, const char *path) {
     else if (!strcmp(key, "enable_audio")) s->enable_audio = atoi(val) != 0;
     else if (!strcmp(key, "widescreen")) s->widescreen = atoi(val) != 0;
     else if (!strcmp(key, "sylt")) s->sylt = atoi(val) != 0;
+    else if (!strcmp(key, "large_maps")) s->large_maps = atoi(val) != 0;
     else if (!strcmp(key, "language")) {
       for (int i = 0; i < SC_LANG_COUNT; i++)
         if (!strcmp(val, kLanguageCodes[i])) s->language = i;
@@ -163,10 +164,10 @@ bool ScSettingsSave(const ScSettings *s, const char *path) {
              "[Launcher]\nrom=%s\nskip_launcher=%d\n"
              "[Display]\nwindow_scale=%d\nfullscreen=%d\nlinear_filter=%d\nwidescreen=%d\n"
              "[Audio]\nenable_audio=%d\n"
-             "[Game]\nlanguage=%s\nsylt=%d\n",
+             "[Game]\nlanguage=%s\nsylt=%d\nlarge_maps=%d\n",
           s->rom, s->skip_launcher, s->window_scale, s->fullscreen,
           s->linear_filter, s->widescreen, s->enable_audio,
-          kLanguageCodes[clamp(s->language, 0, SC_LANG_COUNT - 1)], s->sylt);
+          kLanguageCodes[clamp(s->language, 0, SC_LANG_COUNT - 1)], s->sylt, s->large_maps);
   bool ok = fclose(f) == 0;
   if (ok) {
     remove(path);
@@ -188,6 +189,7 @@ static void set_default_env(const char *name, const char *value) {
 void ScSettingsApply(const ScSettings *s) {
   set_default_env("SC_WIDESCREEN", s->widescreen ? "96" : "0");
   set_default_env("SC_NINTH", s->sylt ? "1" : "0");
+  set_default_env("SC_LARGE_MAPS", s->large_maps ? "1" : "0");
   if (s->language != SC_LANG_ENGLISH) {
     char blob[64], packets[64];
     translation_files(s->language, blob, sizeof blob, packets, sizeof packets);

@@ -19,6 +19,12 @@ and simulation retain their native coordinates. The original view can be
 centered or placed at the top left during gameplay. Top left keeps the toolbar
 and status display anchored while added city space grows rightward or downward.
 The title, standalone menus and advisor pop-ups stay centered in both modes.
+In a wide city view, a continuous header keeps date/menu controls on the left
+and population, money and RCI demand at the far right. The navigation minimap
+also sits at the right edge, with a camera rectangle scaled to the saved city's
+dimensions and current canvas. Its navigation arrows follow the wider canvas,
+and mouse targeting follows the moved groups. Native-size rendering retains
+its original status layout.
 The window is resizable; **F11** toggles
 fullscreen. **F10** still opens the game's existing settings menu.
 

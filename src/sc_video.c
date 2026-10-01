@@ -113,3 +113,9 @@ bool ScVideoToGuest(ScViewport v, ScVideoRect d, double x, double y, int *gx, in
     if (gy) *gy = py;
     return px >= 0 && px < 256 && py >= 0 && py < 224;
 }
+bool ScVideoWindowToGuest(ScViewport v, ScVideoRect d,
+                          int ww, int wh, int dw, int dh,
+                          double x, double y, int *gx, int *gy) {
+    if (ww <= 0 || wh <= 0 || dw <= 0 || dh <= 0) return false;
+    return ScVideoToGuest(v, d, x * dw / ww, y * dh / wh, gx, gy);
+}

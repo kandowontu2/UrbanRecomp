@@ -18,6 +18,21 @@ is simply "the game".
 > works -- the launcher lets you pick the file, and the tools recognise it
 > by its contents.
 
+**Enhanced fork:** this repository builds on
+[blackerking/UrbanRecomp](https://github.com/blackerking/UrbanRecomp), preserving
+its history, credits and licenses. It adds F12 development speeds (Normal,
+2x, 5x, 10x, 50x), faster refresh of changed power networks, 64-bit population
+accounting up to 9,999,999,999, playable 240x200 maps, and full-canvas mouse
+construction with retained off-screen drags. Widescreen status and navigation
+controls now align with the wider city view.
+
+Download the Windows x64 package from
+[this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
+Extract it and open `UrbanRecomp.exe`, then select your own clean US ROM.
+The enhancements require the verified US ROM and the interpreter execution
+path. The first enhanced release is a prerelease; see
+[features, controls, save compatibility and testing limits](docs/PC_ENHANCEMENTS.md).
+
 **Adaptive Widescreen, the default renderer:** the shared Mods launcher offers
 Fit to window, Fit height, Fit width, and 4:3 through 32:9 presets (21:9 out of
 the box) while keeping the full original view visible; switching it off there
@@ -48,10 +63,12 @@ fiber and the migration steps -- is in
 **No full disassembly.** This project will not produce a complete, labelled
 disassembly of the game. Another fan project already works on that:
 [Vitor Vilela's SA-1 version](https://www.patreon.com/vitorvilela/posts/simcity-sa-1-112786310).
-No information from that project, or from its ROM, was used here --
-deliberately. We know the project exists, but have never used it. Vitor Vilela,
+The original project developed its ROM research independently. This enhanced
+fork follows mouse behavior publicly described in
+[Vitor Vilela's SA-1 Beta 2 post](https://www.patreon.com/vitorvilela/posts/simcity-sa-1-2-168886217).
+No SA-1 patch bytes or third-party ROM data have been imported. Vitor Vilela,
 or anyone else, is welcome to bring the improvements made here into their own
-work.
+work, subject to the licenses of the relevant components.
 
 ### Graphics/text export tool
 

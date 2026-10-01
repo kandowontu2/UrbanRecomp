@@ -1,5 +1,5 @@
-URBAN RECOMP
-============
+URBAN RECOMP ENHANCED - 1.2.0 BETA 1
+===================================
 
 Urban Recomp runs the Super Nintendo city builder SimCity (1991) natively on
 Windows, with widescreen, a launcher, mouse control and an in-game settings
@@ -7,7 +7,16 @@ menu. It is an unofficial fan project, not affiliated with Electronic Arts,
 Maxis or Nintendo. It contains no game data: you need your own copy of the
 US cartridge.
 
-Source, documentation and issues: https://github.com/blackerking/UrbanRecomp
+Enhanced fork, documentation and issues: https://github.com/kandowontu2/UrbanRecomp
+Original project and credits: https://github.com/blackerking/UrbanRecomp
+
+F12 development speed: Normal, 2x, 5x, 10x and 50x, with faster power refresh
+when accelerated. Calendar and budgets keep their normal schedule.
+64-bit calculated population up to 9,999,999,999, playable 240x200 maps
+(four times the area), full-widescreen mouse construction, retained off-screen
+drags, and corrected widescreen HUD/minimap placement. See PC_ENHANCEMENTS.md.
+These features require the verified clean US ROM and the interpreter build.
+This first enhanced build is a prerelease; hands-on gameplay testing is ongoing.
 
 
 START
@@ -37,7 +46,8 @@ Tab          fast-forward (hold)
 Shift+1..0   save state to slot 1-0, 1..0 load it
 F3           mouse moves the game cursor
 F9           fast cursor
-F10          settings menu: comfort options, cheats, disaster triggers,
+F12 / F10    settings menu: development speed, large maps, comfort options,
+             cheats, disaster triggers,
              save states -- the game pauses while it is open
 
 
@@ -48,6 +58,12 @@ Cities saved in the game are kept in urbanrecomp-us.srm in this folder, a
 plain SRAM image like other SNES emulators write. The file as it was at the
 last start is kept as urbanrecomp-us.srm.bak. Save states are separate files
 (savestate_<digit>.bin) and do not change your saved cities.
+
+Keep urbanrecomp-us.srm.population and urbanrecomp-us.srm.world beside the
+SRAM file: they store expanded population/history and large-map data for the
+two in-game city slots. Copy all three files together when moving your saves.
+Legacy saves remain loadable. Older upstream builds cannot preserve this
+fork's extended values or full large-map world; back up saves before switching.
 
 
 GERMAN AND FRENCH

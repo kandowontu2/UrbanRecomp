@@ -11,9 +11,11 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "sc_world.h"
 
 /* True when the loaded ROM is the one the tile tables were mapped against. */
 void ScMapView_SetRomIsUs(bool is_us);
+void ScMapView_SetWorld(const ScWorld *world);
 
 /* Render `cols` x `rows` map cells starting at cell (sx, sy) into `out` as
  * ARGB8888 with `pitch` bytes per row. Returns false if the ROM is not the US
@@ -23,7 +25,7 @@ bool ScMapView_Render(uint8_t *out, int pitch, int cols, int rows,
 
 /* The map ($7F0200, 120x100 words) and palette ($7E2440, 256 words) as
  * ScMapView_Snapshot copies them. */
-#define SC_MAPVIEW_MAP_BYTES 24000u
+#define SC_MAPVIEW_MAP_BYTES SC_WORLD_TILE_BYTES
 #define SC_MAPVIEW_PAL_BYTES 512u
 
 /* Draw from these copies instead of WRAM; NULL, NULL draws WRAM again. */

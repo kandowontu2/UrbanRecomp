@@ -38,14 +38,30 @@ It bundles:
 recomp-ui's own notices for these are in `recomp-ui/assets/common/fonts/NOTICE.md`
 and `recomp-ui/assets/common/img/NOTICE.md`.
 
-## SDL2 -- zlib licence
+## SDL2 / SDL3 -- zlib licence
 
-`SDL2.dll`. Copyright (C) 1997-2025 Sam Lantinga.
+`SDL2.dll` or `SDL3.dll`, depending on the build. Copyright (C) 1997-2026
+Sam Lantinga. Full text: `licenses/SDL-LICENSE.txt`. The enhanced Windows
+prerelease ships SDL 3.4.16; source: <https://github.com/libsdl-org/SDL/releases/tag/release-3.4.16>.
 
 ## Microsoft Visual C++ runtime
 
 `vcruntime140.dll`, `vcruntime140_1.dll` and `msvcp140.dll` in the Windows
 package are redistributable files of Microsoft Visual Studio 2022.
+These files are used by MSVC packages; the enhanced MinGW package instead
+ships the runtimes listed below.
+
+## MinGW GCC runtime
+
+The enhanced Windows package is built with GCC 13.2.0 and ships
+`libgcc_s_seh-1.dll` and `libstdc++-6.dll`. Their GPLv3 and GCC Runtime Library
+Exception texts are included as `licenses/GCC-COPYING3.txt` and
+`licenses/GCC-RUNTIME-EXCEPTION.txt`.
+GCC 13.2.0 source: <https://ftp.gnu.org/gnu/gcc/gcc-13.2.0/gcc-13.2.0.tar.xz>.
+
+`libwinpthread-1.dll` is the mingw-w64 winpthreads runtime. Its notices are in
+`licenses/winpthreads-COPYING.txt`; source:
+<https://github.com/mingw-w64/mingw-w64/tree/master/mingw-w64-libraries/winpthreads>.
 
 ## Sylt
 

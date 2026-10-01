@@ -2,6 +2,7 @@
 #include "snes/ppu.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 enum { MAP = 0x10200, TILES = 0x156a9, OVERLAYS = TILES - 0x77c, CELL_TYPES = 0x77c/2 };
 static unsigned u16(const uint8_t *data, size_t offset) {
@@ -121,9 +122,12 @@ static void find_lights(ScRenderer *r,const Ppu *p) {
 }
 static unsigned cell_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
                            int x,int y,bool overlay) {
-    if (!r->rom || x<0 || y<0 || x>=960 || y>=800) return 0;
-    unsigned offset_cell=((y/8)*120+x/8)*2;
-    unsigned cell=(r->map_hold ? u16(r->held_map,offset_cell) : u16(ram,MAP+offset_cell))&1023;
+    bool large=r->world && r->world->active;
+    unsigned width=large?SC_WORLD_WIDTH:120,height=large?SC_WORLD_HEIGHT:100;
+    if (!r->rom || x<0 || y<0 || (unsigned)x>=width*8 || (unsigned)y>=height*8) return 0;
+    unsigned offset_cell=((y/8)*width+x/8)*2;
+    const uint8_t *map=large?r->world->tiles:ram+MAP;
+    unsigned cell=u16(r->map_hold?r->held_map:map,offset_cell)&1023;
     if (cell>=CELL_TYPES) return 0;
     size_t offset=(overlay ? OVERLAYS : TILES)+cell*2;
     if (offset+1 >= r->rom_size) return 0;
@@ -140,7 +144,7 @@ static bool city_live(const ScRenderer *r,const Ppu *p,const uint8_t *ram) {
 static void track_scroll(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     if (!city_live(r,p,ram)) { r->scroll_valid=false; return; }
     int h=p->hScroll[1]&255,v=p->vScroll[1]&255;
-    int x=(int8_t)ram[0x1bd]*8+(h&7),y=(int8_t)ram[0x1bf]*8+(v&7);
+    int x=(int16_t)u16(ram,0x1bd)*8+(h&7),y=(int16_t)u16(ram,0x1bf)*8+(v&7);
     if (r->scroll_valid) {
         int dx=scroll_delta(h,r->scroll_h),dy=scroll_delta(v,r->scroll_v);
         if (abs(dx)<32 && abs(dy)<32) {
@@ -180,11 +184,13 @@ static void track_objects(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
 }
 static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     if (!city_live(r,p,ram)) { r->map_valid=r->map_hold=false; return; }
-    const uint8_t *map=ram+MAP;
+    bool large=r->world && r->world->active;
+    const uint8_t *map=large?r->world->tiles:ram+MAP;
+    unsigned bytes=large?SC_WORLD_TILE_BYTES:24000;
     bool black=PPU_forcedBlank(p) || !PPU_brightness(p);
     if (r->map_valid) {
         int step=0,total=0;
-        for (int i=0;i<24000;i+=2) {
+        for (unsigned i=0;i<bytes;i+=2) {
             step+=((u16(map,i)^u16(r->previous_map,i))&1023)!=0;
             total+=((u16(map,i)^u16(r->held_map,i))&1023)!=0;
         }
@@ -200,9 +206,9 @@ static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
                 (!r->map_confirmed && r->map_quiet>=10)) r->map_hold=false;
         }
     }
-    memcpy(r->previous_map,map,sizeof r->previous_map);
+    memcpy(r->previous_map,map,bytes);
     if (!r->map_hold) {
-        memcpy(r->held_map,map,sizeof r->held_map);
+        memcpy(r->held_map,map,bytes);
         memcpy(r->held_ppu,p,sizeof *p);
         r->held_x=r->scroll_x+r->scroll_adjust_x;
         r->held_y=r->scroll_y+r->scroll_adjust_y;
@@ -233,6 +239,7 @@ static void object_row(const ScRenderer *r,const Ppu *p,int y,uint16_t *pixels) 
     int first=PPU_objPriority(p) ? (p->oamaddl&0xfe)/2 : 0;
     for (int rank=127;rank>=0;--rank) {
         int slot=(first+rank)&127;
+        if (r->pan_frame && slot>=39 && slot<=52 && slot!=50) continue;
         if (!r->object_grace[slot]) continue; /* parked HUD/cursor copies */
         /* Row 0 is on line Y, as the PPU draws it (it evaluates a line's
          * sprites one line early). y+1 put every margin sprite a row above
@@ -249,7 +256,9 @@ static void object_row(const ScRenderer *r,const Ppu *p,int y,uint16_t *pixels) 
     }
 }
 uint32_t ScRendererMapPixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,int x,int y) {
-    if (!r->rom_is_us || !r->rom || x<0 || y<0 || x>=960 || y>=800)
+    bool large=r->world && r->world->active;
+    if (!r->rom_is_us || !r->rom || x<0 || y<0 ||
+        x>=(large?240:120)*8 || y>=(large?200:100)*8)
         return color(p,0);
     unsigned ci=cell_pixel(r,p,ram,x,y,false);
     /* Both tables reference the city CHR (BG2). Roofs extend one whole
@@ -500,6 +509,7 @@ void ScRendererDestroy(ScRenderer *r) {
 }
 void ScRendererResetHistory(ScRenderer *r) {
     r->scroll_valid=r->objects_valid=r->map_valid=r->map_hold=r->title_live=false;
+    r->city_input=r->pointer_active=false;
 }
 static void render_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
     uint32_t *out=r->pixels+(size_t)(y+r->view.core_y)*r->view.width;
@@ -635,6 +645,216 @@ static void place_advisor(ScRenderer *r) {
         if (pixel) r->pixels[(size_t)(y+dy)*r->view.width+x+dx]=pixel;
     }
 }
+static bool in_rect(int x,int y,int left,int top,int width,int height) {
+    return x>=left && x<left+width && y>=top && y<top+height;
+}
+static int right_shift(const ScRenderer *r) {
+    return (r->split_hud || (r->pan_frame && r->view.width>256))?
+        r->view.width-r->view.core_x-256:0;
+}
+static void arrow_shift(const ScRenderer *r,int slot,int *dx,int *dy) {
+    *dx=*dy=0;
+    if (r->view.width<=256) return;
+    if (slot==49) *dx=right_shift(r);
+    else {
+        *dx=(r->view.width+r->view.core_x+(r->split_hud?56:0))/2-r->view.core_x-142;
+        if (slot==52) *dy=r->view.height-r->view.core_y-224;
+    }
+}
+bool ScRendererWindowToGuest(const ScRenderer *r,ScVideoRect d,
+                            int ww,int wh,int dw,int dh,double x,double y,int *gx,int *gy,bool *navigation) {
+    if (navigation) *navigation=false;
+    if (ww<=0 || wh<=0 || d.w<=0 || d.h<=0) return false;
+    double px=x*dw/ww,py=y*dh/wh;
+    if (px<d.x || px>=d.x+d.w || py<d.y || py>=d.y+d.h) return false;
+    int cx=(int)((px-d.x)*r->view.width/d.w)-r->view.core_x;
+    int cy=(int)((py-d.y)*r->view.height/d.h)-r->view.core_y;
+    int dx=right_shift(r);
+    if (r->split_hud && in_rect(cx,cy,144+dx,0,112,46)) cx-=dx;
+    else if (r->pan_frame && in_rect(cx,cy,190+dx,46,48,48)) {
+        cx-=dx;
+        if (navigation) *navigation=true;
+    }
+    else if (r->pan_frame && r->view.width>256) {
+        const int slots[]={49,51,52},xs[]={214,134,134},ys[]={118,62,174};
+        for (int i=0;i<3;++i) {
+            int ax,ay; arrow_shift(r,slots[i],&ax,&ay);
+            if (in_rect(cx,cy,xs[i]+ax,ys[i]+ay,16,16)) {
+                cx-=ax; cy-=ay;
+                if (navigation) *navigation=true;
+                break;
+            }
+        }
+    }
+    if (!(r->city_input && !r->advisor_frame) &&
+        (cx<0 || cx>=256 || cy<0 || cy>=224)) return false;
+    *gx=cx; *gy=cy; return true;
+}
+bool ScRendererCityPoint(const ScRenderer *r,const uint8_t *ram,
+                         int x,int y,int *wx,int *wy) {
+    if (!r->city_input || r->advisor_frame || r->map_hold) return false;
+    if (x+r->view.core_x<0 || x+r->view.core_x>=r->view.width ||
+        y+r->view.core_y<0 || y+r->view.core_y>=r->view.height) return false;
+    if (u16(ram,0x1d7) && ((y>=0 && y<46) || in_rect(x,y,0,46,56,178))) return false;
+    int px=r->scroll_x+r->scroll_adjust_x+x,py=r->scroll_y+r->scroll_adjust_y+y;
+    int width=r->world && r->world->active?240:120;
+    int height=r->world && r->world->active?200:100;
+    if (px<0 || py<0 || px>=width*8 || py>=height*8) return false;
+    *wx=px/8; *wy=py/8; return true;
+}
+static uint32_t bare_city_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,int x,int y) {
+    int sx=r->scroll_x+r->scroll_adjust_x,sy=r->scroll_y+r->scroll_adjust_y;
+    unsigned ci=cell_pixel(r,p,ram,sx+x,sy+y+1,false);
+    unsigned over=cell_pixel(r,p,ram,sx+x+8,sy+y+9,true);
+    if (over) ci=over;
+    return composite_color(p,ci,ci?1:5,0,5,x);
+}
+static void city_pointer(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
+    if (!r->pointer_active || !r->city_input || r->advisor_frame || r->map_hold) return;
+    int wx,wy;
+    if (!ScRendererCityPoint(r,ram,r->pointer_x,r->pointer_y,&wx,&wy)) return;
+    /* OAM can lag the RAM pointer while the simulation owns the guest CPU.
+     * Anchor to the emitted corner, not to that newer pointer byte. */
+    int dx=wx*8-r->scroll_x-r->scroll_adjust_x-3-sprite_x(p,0);
+    int dy=wy*8-r->scroll_y-r->scroll_adjust_y-5-(p->oam[0]>>8);
+    /* Reuse the live four-piece construction cursor. Its native byte-sized
+     * position is only a proxy; clear that copy and move the sprites across
+     * the host canvas without changing OAM or the game's camera. */
+    for (int slot=0;slot<4;++slot) {
+        int ox=sprite_x(p,slot),oy=(p->oam[slot*2]>>8)-1;
+        if (ox>=256) ox-=512;
+        for (int y=0;y<8;++y) for (int x=0;x<8;++x) {
+            unsigned ci=sprite_pixel(p,slot,x,y);
+            int ax=r->view.core_x+ox+x,ay=r->view.core_y+oy+y;
+            if (ci && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
+                r->pixels[(size_t)ay*r->view.width+ax]=bare_city_pixel(r,p,ram,ox+x,oy+y);
+        }
+    }
+    for (int slot=3;slot>=0;--slot) {
+        int ox=sprite_x(p,slot),oy=(p->oam[slot*2]>>8)-1;
+        if (ox>=256) ox-=512;
+        for (int y=0;y<8;++y) for (int x=0;x<8;++x) {
+            unsigned ci=sprite_pixel(p,slot,x,y);
+            int ax=r->view.core_x+ox+x+dx,ay=r->view.core_y+oy+y+dy;
+            if (ci && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
+                r->pixels[(size_t)ay*r->view.width+ax]=composite_color(p,ci,ci<192?6:4,0,5,ox+x);
+        }
+    }
+}
+static uint32_t hud_ground(const Ppu *p) {
+    if (PPU_forcedBlank(p)) return 0xff000000;
+    return 0xff000000 | (uint32_t)p->brightnessMult[6]<<16 |
+        (uint32_t)p->brightnessMult[4]<<8 | p->brightnessMult[1];
+}
+static bool population_extended(const ScRenderer *r) {
+    return r->rom_is_us && r->population && r->population->valid && r->population->value>999999;
+}
+void ScRendererPopulationRow(const ScRenderer *r,const Ppu *p,ScViewport v,
+                             bool split,int y,uint32_t *out) {
+    if (!population_extended(r)) return;
+    char digits[24]; snprintf(digits,sizeof digits,"%llu",(unsigned long long)r->population->value);
+    int count=(int)strlen(digits),extra=(count-6)*8;
+    int shift=split?v.width-v.core_x-256:0;
+    /* Narrow views have space beside the date, above the toolbar. Keep the
+     * full-size font there rather than squeezing it into six digit slots. */
+    int top=split && shift>=extra?22:10;
+    int first=v.core_x+shift+211-count*8,icon=first-16;
+    if (y>=22 && y<30) {
+        int left=v.core_x+shift+147,right=v.core_x+shift+212;
+        for (int x=left;x<right && x<v.width;++x) if (x>=0) out[x]=hud_ground(p);
+    }
+    if (y<top || y>=top+8) return;
+    for (int x=icon;x<v.core_x+shift+212 && x<v.width;++x) if (x>=0) out[x]=hud_ground(p);
+    for (int glyph=-2;glyph<count;++glyph) {
+        unsigned attr=glyph<0?p->oam[(19+glyph+2)*2+1]:
+            (p->oam[53]&0xff00)|rom_read((void *)r,0x0085e1+(unsigned)(digits[glyph]-'0'));
+        int left=glyph<0?icon+(glyph+2)*8:first+glyph*8;
+        for (int x=0;x<8;++x) {
+            unsigned ci=sprite_word_pixel(p,attr,8,x,y-top);
+            if (ci && left+x>=0 && left+x<v.width)
+                out[left+x]=composite_color(p,ci,ci<192?6:4,0,5,203);
+        }
+    }
+}
+ScVideoRect ScRendererMinimapView(const ScRenderer *r,const uint8_t *ram) {
+    bool large=r->world && r->world->active;
+    int width=(large?240:120)*8,height=(large?200:100)*8;
+    int x0=r->scroll_x+r->scroll_adjust_x+
+        (r->view.core_x?-r->view.core_x:u16(ram,0x1d7)?56:0);
+    int y0=r->scroll_y+r->scroll_adjust_y+
+        (r->view.core_y?-r->view.core_y:u16(ram,0x1d7)?46:0);
+    int x1=r->scroll_x+r->scroll_adjust_x+r->view.width-r->view.core_x;
+    int y1=r->scroll_y+r->scroll_adjust_y+r->view.height-r->view.core_y;
+    if (x0<0) x0=0;
+    if (y0<0) y0=0;
+    if (x1>width) x1=width;
+    if (y1>height) y1=height;
+    if (x0>=x1 || y0>=y1) return (ScVideoRect){0,0,0,0};
+    int left=x0*30/width,top=y0*25/height;
+    return (ScVideoRect){r->view.core_x+200+right_shift(r)+left,
+        r->view.core_y+56+top,(x1*30+width-1)/width-left,
+        (y1*25+height-1)/height-top};
+}
+/* Preserve the original HUD artwork, but compose its independent groups at
+ * the canvas edges. The minimap frame's sprites exclude the old position mark;
+ * its new rectangle is projected from the same camera and world as the city. */
+static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
+    uint32_t *out=r->pixels+(size_t)(y+r->view.core_y)*r->view.width;
+    int shift=right_shift(r),core=r->view.core_x;
+    if (r->split_hud && y<46) {
+        for (int x=0;x<r->view.width;++x) out[x]=hud_ground(p);
+        /* Date/menu sprites stay at the left; RCI and financial sprites move
+         * together. Capture no terrain from behind the native status text. */
+        for (int slot=71;slot>=0;--slot) {
+            if (slot>33 && slot<64) continue;
+            if (population_extended(r) && slot>=19 && slot<=26) continue;
+            int ox=sprite_x(p,slot),row=(y-(p->oam[slot*2]>>8))&255;
+            if (row>=64 || ox>=256) continue;
+            int dx=(slot>=4 && slot<=10) || (slot>=19 && slot<=33)?shift:0;
+            if (slot<=3 && ox>=144) dx=shift;
+            for (int x=0;x<64;++x) {
+                int target=core+ox+x+dx;
+                unsigned ci=sprite_pixel(p,slot,x,row);
+                if (ci && target>=0 && target<r->view.width)
+                    out[target]=composite_color(p,ci,ci<192?6:4,0,5,ox+x);
+            }
+        }
+    }
+    if (!r->pan_frame) return;
+    for (int slot=39;slot<=52;++slot) {
+        if (slot==50) continue; /* left arrow stays beside the toolbar */
+        int ox=sprite_x(p,slot); if (ox>=256) ox-=512;
+        int row=(y-(p->oam[slot*2]>>8))&255;
+        if (row>=64) continue;
+        for (int x=0;x<64;++x) if (sprite_pixel(p,slot,x,row)) {
+            int source=ox+x,target=core+source;
+            if (target>=0 && target<r->view.width)
+                out[target]=bare_city_pixel(r,p,ram,source,y);
+        }
+    }
+    /* Earlier OAM slots win. The mini frame and arrows are opaque UI sprites. */
+    for (int slot=52;slot>=40;--slot) {
+        if (slot==50) continue;
+        int dx=0,dy=0;
+        if (slot<=48) dx=shift; else arrow_shift(r,slot,&dx,&dy);
+        int row=(y-dy-(p->oam[slot*2]>>8))&255;
+        if (row>=64) continue;
+        int ox=sprite_x(p,slot);
+        for (int x=0;x<64;++x) {
+            int target=core+ox+x+dx;
+            unsigned ci=sprite_pixel(p,slot,x,row);
+            if (ci && target>=0 && target<r->view.width)
+                out[target]=composite_color(p,ci,ci<192?6:4,0,5,ox+x);
+        }
+    }
+    ScVideoRect marker=ScRendererMinimapView(r,ram);
+    int row=y+r->view.core_y,white=p->brightnessMult[31];
+    uint32_t ink=PPU_forcedBlank(p)?0xff000000:0xff000000|(white*0x010101);
+    if (row>=marker.y && row<marker.y+marker.h)
+        for (int x=marker.x;x<marker.x+marker.w;++x)
+            if (row==marker.y || row==marker.y+marker.h-1 || x==marker.x || x==marker.x+marker.w-1)
+                out[x]=ink;
+}
 void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const uint32_t *native) {
     if (!r->pixels || !p || !ram || !native || line<0 || line>=224) return;
     if (line==0) {
@@ -657,6 +877,13 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         r->advisor_frame=city_live(r,p,ram) && (p->screenEnabled[0]&31)==20 &&
             (p->screenEnabled[1]&31)==3 && !(PPU_mathEnabled(p)&20) &&
             (r->view.core_x!=(r->view.width-256)/2 || r->view.core_y!=(r->view.height-224)/2);
+        bool hud=city_live(r,p,ram) && !r->advisor_frame && u16(ram,0x1d7) &&
+            (p->screenEnabled[0]&3)==3 && !u16(ram,0x379);
+        r->split_hud=hud && r->view.width>256;
+        r->pan_frame=city_live(r,p,ram) && !r->advisor_frame && !u16(ram,0x379) &&
+            (p->screenEnabled[0]&16) && (p->oam[81]&255)==0x66 && (p->oam[80]>>8)==46;
+        r->city_input=city_live(r,p,ram) && !r->advisor_frame && !u16(ram,0x379) &&
+            !u16(ram,0xd7) && !ram[0x391];
         find_lights(r,p);
         r->selector_count=0;
         if (ScSelector_OnScreen(ram[0x14])) {
@@ -684,9 +911,15 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
     if (r->advisor_frame) capture_advisor_row(r,p,line,native);
     else memcpy(r->pixels+(size_t)(line+r->view.core_y)*r->view.width+r->view.core_x+first,
                 native+first,(size_t)(end-first)*sizeof(*native));
+    if (r->split_hud || r->pan_frame) city_hud_row(r,p,ram,line);
+    if (city_live(r,p,ram) && !r->advisor_frame && u16(ram,0x1d7) &&
+        (p->screenEnabled[0]&3)==3 && !u16(ram,0x379))
+        ScRendererPopulationRow(r,p,r->view,r->split_hud,line,
+            r->pixels+(size_t)(line+r->view.core_y)*r->view.width);
     if (line==223) {
         for (int y=224;y<r->view.height-r->view.core_y;++y) render_row(r,p,ram,y);
         fill_flat_margins(r);
         if (r->advisor_frame) place_advisor(r);
+        city_pointer(r,p,ram);
     }
 }

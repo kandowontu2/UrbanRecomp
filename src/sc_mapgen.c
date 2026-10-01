@@ -38,6 +38,14 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* Geometry belongs to each generation, so a large map cannot leak its
+ * stride into a subsequent stock generation or the standalone helpers. */
+static unsigned map_width(const ScMapGenState *st) { return st->width==240 && st->height==200 ? 240 : 120; }
+static unsigned map_height(const ScMapGenState *st) { return st->width==240 && st->height==200 ? 200 : 100; }
+static int map_bounds(const ScMapGenState *st, int x, int y) {
+    return x>=0 && y>=0 && (unsigned)x<map_width(st) && (unsigned)y<map_height(st);
+}
+
 /* ── PRNG ──────────────────────────────────────────────────────────────────
  *
  * 00:824f, reached through the JSL wrapper at 00:824b:
@@ -258,9 +266,9 @@ void sc_mapgen_feature_centre(ScMapGenPrng *p, ScMapGenState *st) {
      * top-left corner and stamped a blob there that the ROM never draws. The
      * second and third walks looked right only because $f5b9 resets the
      * position from $0457/$0459 before each of them. */
-    st->x0 = (uint16_t)(sc_mapgen_rand_below(p, 0x0028) + 0x0028u);   /* $0457 */
+    st->x0 = (uint16_t)(sc_mapgen_rand_below(p, map_width(st)/3) + map_width(st)/3);   /* $0457 */
     st->cur_x = st->x0;                                               /* $043b */
-    st->y0 = (uint16_t)(sc_mapgen_rand_below(p, 0x0021) + 0x0021u);   /* $0459 */
+    st->y0 = (uint16_t)(sc_mapgen_rand_below(p, map_height(st)/3) + map_height(st)/3);   /* $0459 */
     st->cur_y = st->y0;                                               /* $043d */
 }
 
@@ -285,11 +293,11 @@ void sc_mapgen_feature_centre(ScMapGenPrng *p, ScMapGenState *st) {
  * so the stream position depends on the count drawn first. Getting that order
  * wrong desynchronises everything after it. */
 void sc_mapgen_feature_scatter(ScMapGenPrng *p, ScMapGenState *st) {
-    uint16_t count = (uint16_t)(sc_mapgen_rand_below(p, 0x0064) + 0x0032u);
+    uint16_t count = (uint16_t)((sc_mapgen_rand_below(p, 0x0064) + 0x0032u) * (map_width(st)==240 ? 4 : 1));
     st->count = count;
     while (count) {
-        st->px = sc_mapgen_rand_below(p, 0x0077);   /* $044b, 0..119 */
-        st->py = sc_mapgen_rand_below(p, 0x0063);   /* $044d, 0..99  */
+        st->px = sc_mapgen_rand_below(p, map_width(st)-1);   /* $044b, 0..119 */
+        st->py = sc_mapgen_rand_below(p, map_height(st)-1);   /* $044d, 0..99  */
         sc_mapgen_walk(p, st);   /* $f3d3: each placement spawns a walk */
         count--;
     }
@@ -330,14 +338,14 @@ void sc_mapgen_feature_scatter(ScMapGenPrng *p, ScMapGenState *st) {
  * a few more cells past the left or top edge. Computing the probe as
  * (int)cur_x + 4 instead gives 65539, fails, and stops the walk immediately.
  * That single difference made our walks about half the guest's length. */
-static int sc_mapgen_probe_in_bounds(uint16_t x, uint16_t y,
+static int sc_mapgen_probe_in_bounds(const ScMapGenState *st, uint16_t x, uint16_t y,
                                      uint16_t offx, uint16_t offy) {
     const uint16_t px = (uint16_t)(x + offx);
     const uint16_t py = (uint16_t)(y + offy);
     if (px & 0x8000u) return 0;                   /* BMI */
-    if (px >= SC_MAPGEN_W) return 0;              /* CMP #$0078 / BCS */
+    if (px >= map_width(st)) return 0;              /* CMP #$0078 / BCS */
     if (py & 0x8000u) return 0;                   /* BMI */
-    if (py >= SC_MAPGEN_H) return 0;              /* CMP #$0064 / BCS */
+    if (py >= map_height(st)) return 0;              /* CMP #$0064 / BCS */
     return 1;
 }
 
@@ -379,7 +387,7 @@ void sc_mapgen_feature_path(ScMapGenPrng *p, ScMapGenState *st) {
  * further before snapping back to its base bearing. */
 void sc_mapgen_path_walk_narrow(ScMapGenPrng *p, ScMapGenState *st) {
     for (;;) {
-        if (!sc_mapgen_probe_in_bounds(st->cur_x, st->cur_y, 3, 3)) return;
+        if (!sc_mapgen_probe_in_bounds(st, st->cur_x, st->cur_y, 3, 3)) return;
         sc_mapgen_stamp_blob_small(st);                 /* JSR $f794 */
 
         const uint16_t r = sc_mapgen_prng_step(p);
@@ -422,10 +430,10 @@ void sc_mapgen_path_walk_narrow(ScMapGenPrng *p, ScMapGenState *st) {
  * then per blob 3 (x, y, and the direct draw for the 1-in-4). The direct draw
  * happens EVERY blob, not only when it branches. */
 void sc_mapgen_feature_clusters(ScMapGenPrng *p, ScMapGenState *st) {
-    unsigned clusters = sc_mapgen_rand_below(p, 0x000a) + 1u;      /* $0445 */
+    unsigned clusters = (sc_mapgen_rand_below(p, 0x000a) + 1u) * (map_width(st)==240 ? 4 : 1);      /* $0445 */
     while (clusters) {
-        const uint16_t cx = (uint16_t)(sc_mapgen_rand_below(p, 0x0063) + 0x000au);
-        const uint16_t cy = (uint16_t)(sc_mapgen_rand_below(p, 0x0050) + 0x000au);
+        const uint16_t cx = (uint16_t)(sc_mapgen_rand_below(p, map_width(st)-21) + 0x000au);
+        const uint16_t cy = (uint16_t)(sc_mapgen_rand_below(p, map_height(st)-20) + 0x000au);
         unsigned blobs = sc_mapgen_rand_below(p, 0x000c) + 2u;     /* $0443 */
         st->cx = cx; st->cy = cy;
         while (blobs) {
@@ -468,7 +476,8 @@ void sc_mapgen_feature_clusters(ScMapGenPrng *p, ScMapGenState *st) {
  * The `$b1` bit-7 bracket around the whole thing looks like a
  * generation-in-progress flag; it is reproduced because it is cheap, not
  * because its effect is understood. */
-void sc_mapgen_generate(ScMapGenPrng *p, ScMapGenState *st) {
+static void generate(ScMapGenPrng *p, ScMapGenState *st, int large) {
+    st->width=large?240:120; st->height=large?200:100;
     g_sc_mapgen_cur = st;
     const unsigned pick = sc_mapgen_prng_step(p) & 0x00ffu;
     if (pick < 0x0056u) {
@@ -483,8 +492,24 @@ void sc_mapgen_generate(ScMapGenPrng *p, ScMapGenState *st) {
     /* Snapshot around each routine. The nonzero total alone cannot tell a pass
      * that rewrites existing cells from one that writes nothing at all --
      * which is exactly the open question about $f444. */
-    static uint16_t sc_before[SC_MAPGEN_CELLS];
-#define SC_PHASE(slot, call) do {                                                      const unsigned long s_ = g_sc_mapgen_prng_steps;                               unsigned c_ = 0, ch_ = 0, cl_ = 0, i_;                                         memcpy(sc_before, st->map, sizeof sc_before);                                  call;                                                                          for (i_ = 0; i_ < SC_MAPGEN_CELLS; i_++) {                                         if (st->map[i_] & 0x3ffu) c_++;                                                if ((st->map[i_] & 0x3ffu) != (sc_before[i_] & 0x3ffu)) {                          ch_++;                                                                         if (!(st->map[i_] & 0x3ffu)) cl_++;                                        }                                                                          }                                                                              g_sc_mapgen_phase_steps[slot]   = g_sc_mapgen_prng_steps - s_;                 g_sc_mapgen_phase_cells[slot]   = c_;                                          g_sc_mapgen_phase_changed[slot] = ch_;                                         g_sc_mapgen_phase_cleared[slot] = cl_;                                     } while (0)
+    static uint16_t sc_before[SC_MAPGEN_MAX_CELLS];
+#define SC_PHASE(slot, call) do { \
+    const unsigned long steps_before = g_sc_mapgen_prng_steps; \
+    const unsigned cells = map_width(st)*map_height(st); \
+    unsigned populated=0, changed=0, cleared=0; \
+    memcpy(sc_before,st->map,cells*sizeof *sc_before); \
+    call; \
+    for (unsigned i=0;i<cells;++i) { \
+        if (st->map[i]&0x3ffu) ++populated; \
+        if ((st->map[i]&0x3ffu)!=(sc_before[i]&0x3ffu)) { \
+            ++changed; if (!(st->map[i]&0x3ffu)) ++cleared; \
+        } \
+    } \
+    g_sc_mapgen_phase_steps[slot]=g_sc_mapgen_prng_steps-steps_before; \
+    g_sc_mapgen_phase_cells[slot]=populated; \
+    g_sc_mapgen_phase_changed[slot]=changed; \
+    g_sc_mapgen_phase_cleared[slot]=cleared; \
+} while (0)
     SC_PHASE(0, sc_mapgen_feature_centre(p, st));    /* $f380 */
     SC_PHASE(1, sc_mapgen_feature_path(p, st));      /* $f5b9 */
     SC_PHASE(2, sc_mapgen_feature_clusters(p, st));  /* $f311 */
@@ -492,6 +517,9 @@ void sc_mapgen_generate(ScMapGenPrng *p, ScMapGenState *st) {
     SC_PHASE(4, sc_mapgen_feature_scatter(p, st));   /* $f3a3 */
 #undef SC_PHASE
 }
+
+void sc_mapgen_generate(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,0); }
+void sc_mapgen_generate_large(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,1); }
 
 /* ── What is decompiled, and what the comparison says ──────────────────
  *
@@ -627,11 +655,11 @@ void sc_mapgen_generate(ScMapGenPrng *p, ScMapGenState *st) {
  * with AND #$03ff as it moves the map on. Anything reproducing this must mask
  * on read only, or it will disagree the moment something else sets a flag. */
 uint16_t sc_mapgen_read_cell(const ScMapGenState *st, unsigned x, unsigned y) {
-    return (uint16_t)(st->map[sc_mapgen_cell_index(x, y)] & 0x03ffu);
+    return (uint16_t)(st->map[y*map_width(st)+x] & 0x03ffu);
 }
 
 void sc_mapgen_write_cell(ScMapGenState *st, unsigned x, unsigned y, uint16_t v) {
-    st->map[sc_mapgen_cell_index(x, y)] = v;      /* unmasked, as the ROM does */
+    st->map[y*map_width(st)+x] = v;      /* unmasked, as the ROM does */
 }
 
 /* ── The per-cell draw ─────────────────────────────────────────────────────
@@ -673,14 +701,14 @@ void sc_mapgen_draw_cell(ScMapGenState *st, unsigned brush, int ox, int oy) {
      * or top edge is rejected instead of clipped. */
     const uint16_t x = (uint16_t)(st->cur_x + (uint16_t)ox);   /* $0447 + $043b */
     const uint16_t y = (uint16_t)(st->cur_y + (uint16_t)oy);   /* $0449 + $043d */
-    if (!sc_mapgen_probe_in_bounds(st->cur_x, st->cur_y,
+    if (!sc_mapgen_probe_in_bounds(st, st->cur_x, st->cur_y,
                                    (uint16_t)ox, (uint16_t)oy))
         return;                                   /* JSR $f843 / BCS */
 
     unsigned value = brush;
     if (brush == 2) {
         /* The centre marker is not placed on the border; it becomes a 1. */
-        if (x == 0 || x == SC_MAPGEN_W || y == 0 || y == SC_MAPGEN_H) value = 1;
+        if (x == 0 || x == map_width(st) || y == 0 || y == map_height(st)) value = 1;
     } else {
         const unsigned existing = sc_mapgen_read_cell(st, x, y);
         if (existing == 1 || existing == 2) return;   /* protected, leave it */
@@ -789,23 +817,23 @@ uint16_t sc_mapgen_rand_min2(ScMapGenPrng *p, uint16_t n) {
  * transcribed line by line -- it is written here from its opening and the
  * symmetry, and is the one part of this routine not read directly. */
 void sc_mapgen_framed_map(ScMapGenPrng *p, ScMapGenState *st) {
-    for (int x = SC_MAPGEN_W - 1; x >= 0; x--)
-        for (int y = SC_MAPGEN_H - 1; y >= 0; y--)
+    for (int x = (int)map_width(st) - 1; x >= 0; x--)
+        for (int y = (int)map_height(st) - 1; y >= 0; y--)
             sc_mapgen_write_cell(st, (unsigned)x, (unsigned)y, 1);
 
-    for (int x = 5; x < 115; x++)
-        for (int y = 5; y < 95; y++)
+    for (int x = 5; x < (int)map_width(st)-5; x++)
+        for (int y = 5; y < (int)map_height(st)-5; y++)
             sc_mapgen_write_cell(st, (unsigned)x, (unsigned)y, 0);
 
     /* $f276: along the top and bottom edges. x steps by 2 to CMP #$0073. */
-    for (int x = 0; x < 115; x += 2) {
+    for (int x = 0; x < (int)map_width(st)-5; x += 2) {
         st->cur_x = (uint16_t)x;
         st->cur_y = sc_mapgen_rand_min2(p, 0x0012);            /* $f28d */
         sc_mapgen_stamp_blob(st);
-        st->cur_y = (uint16_t)(0x005a - sc_mapgen_rand_min2(p, 0x0012));
+        st->cur_y = (uint16_t)(map_height(st)-10 - sc_mapgen_rand_min2(p, 0x0012));
         sc_mapgen_stamp_blob(st);
         st->cur_y = 0;      sc_mapgen_stamp_blob_small(st);
-        st->cur_y = 0x005e; sc_mapgen_stamp_blob_small(st);
+        st->cur_y = (uint16_t)(map_height(st)-6); sc_mapgen_stamp_blob_small(st);
     }
 
     /* $f2be: the same down the left and right edges, axes swapped. This was a
@@ -814,14 +842,14 @@ void sc_mapgen_framed_map(ScMapGenPrng *p, ScMapGenState *st) {
      * to CMP #$005f, and the far edge is $006e and $0072 where the horizontal
      * pass uses $005a and $005e. The loop is also entered mid-body (BRA $f2d3)
      * so the first iteration runs at y = 0. */
-    for (int y = 0; y < 95; y += 2) {
+    for (int y = 0; y < (int)map_height(st)-5; y += 2) {
         st->cur_y = (uint16_t)y;                               /* $043d */
         st->cur_x = sc_mapgen_rand_min2(p, 0x0012);            /* $f2d9 */
         sc_mapgen_stamp_blob(st);                              /* $f2df */
-        st->cur_x = (uint16_t)(0x006e - sc_mapgen_rand_min2(p, 0x0012));
+        st->cur_x = (uint16_t)(map_width(st)-10 - sc_mapgen_rand_min2(p, 0x0012));
         sc_mapgen_stamp_blob(st);                              /* $f2f3 */
         st->cur_x = 0;      sc_mapgen_stamp_blob_small(st);    /* $f2fc */
-        st->cur_x = 0x0072; sc_mapgen_stamp_blob_small(st);    /* $f305 */
+        st->cur_x = (uint16_t)(map_width(st)-6); sc_mapgen_stamp_blob_small(st);    /* $f305 */
     }
 
     /* $f30a / $f30d. The framed branch is NOT a shortcut past the chain: it
@@ -873,8 +901,8 @@ void sc_mapgen_fit_pass(ScMapGenPrng *p, ScMapGenState *st) {
     static const int ndy[4] = {  0, +1, 0, -1 };
     #define IN_CLASS(v) ((v) >= 0x14u && (v) < 0x26u)
 
-    for (int x = SC_MAPGEN_W - 1; x >= 0; x--) {
-        for (int y = SC_MAPGEN_H - 1; y >= 0; y--) {
+    for (int x = (int)map_width(st) - 1; x >= 0; x--) {
+        for (int y = (int)map_height(st) - 1; y >= 0; y--) {
             const unsigned v = sc_mapgen_read_cell(st, (unsigned)x, (unsigned)y);
             if (!IN_CLASS(v)) continue;
 
@@ -882,7 +910,7 @@ void sc_mapgen_fit_pass(ScMapGenPrng *p, ScMapGenState *st) {
             for (int i = 3; i >= 0; i--) {
                 const int nx = x + ndx[i], ny = y + ndy[i];
                 mask <<= 1;
-                if (!sc_mapgen_in_bounds(nx, ny)) continue;   /* off-map: no bit */
+                if (!map_bounds(st,nx,ny)) continue;   /* off-map: no bit */
                 if (IN_CLASS(sc_mapgen_read_cell(st, (unsigned)nx, (unsigned)ny)))
                     mask |= 1u;
             }
@@ -938,15 +966,15 @@ void sc_mapgen_shoreline(ScMapGenPrng *p, ScMapGenState *st) {
     static const int ndx[4] = { -1, 0, +1, 0 };   /* $01f42c */
     static const int ndy[4] = {  0, +1, 0, -1 };  /* $01f430 */
 
-    for (int x = SC_MAPGEN_W - 1; x >= 0; x--) {
-        for (int y = SC_MAPGEN_H - 1; y >= 0; y--) {
+    for (int x = (int)map_width(st) - 1; x >= 0; x--) {
+        for (int y = (int)map_height(st) - 1; y >= 0; y--) {
             if (sc_mapgen_read_cell(st, (unsigned)x, (unsigned)y) != 3) continue;
 
             unsigned mask = 0;
             for (int i = 3; i >= 0; i--) {        /* X = 3..0, ASL before each */
                 const int nx = x + ndx[i], ny = y + ndy[i];
                 mask <<= 1;
-                if (!sc_mapgen_in_bounds(nx, ny) ||
+                if (!map_bounds(st,nx,ny) ||
                     sc_mapgen_read_cell(st, (unsigned)nx, (unsigned)ny) == 0)
                     mask |= 1u;                    /* off-map counts as empty */
             }
@@ -997,7 +1025,7 @@ void sc_mapgen_shoreline(ScMapGenPrng *p, ScMapGenState *st) {
  * map. */
 void sc_mapgen_path_walk(ScMapGenPrng *p, ScMapGenState *st) {
     for (;;) {
-        if (!sc_mapgen_probe_in_bounds(st->cur_x, st->cur_y, 4, 4)) return;
+        if (!sc_mapgen_probe_in_bounds(st, st->cur_x, st->cur_y, 4, 4)) return;
         sc_mapgen_stamp_blob(st);                       /* JSR $f71d */
 
         const uint16_t r = sc_mapgen_prng_step(p);
@@ -1116,7 +1144,7 @@ void sc_mapgen_walk(ScMapGenPrng *p, ScMapGenState *st) {
         st->cur_x = (uint16_t)x; st->cur_y = (uint16_t)y;
         sc_mapgen_move(st, dir);                 /* JSR $f6ae */
         x = (int16_t)st->cur_x; y = (int16_t)st->cur_y;
-        if (!sc_mapgen_in_bounds(x, y)) break;   /* JSR $f843 / BCS */
+        if (!map_bounds(st,x,y)) break;   /* JSR $f843 / BCS */
         /* JSR $f8e9 / CMP #$0000 / BNE + / LDA #$0018 / JSR $f8af
          *
          * THE WALK DRAWS 0x18, and only onto an EMPTY cell. This is where the

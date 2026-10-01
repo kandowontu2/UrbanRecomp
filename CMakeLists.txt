@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(UrbanRecomp VERSION 1.1.1 LANGUAGES C)
+project(UrbanRecomp VERSION 1.2.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 
@@ -49,6 +49,12 @@ endif()
 
 add_executable(UrbanRecomp
     src/main.c
+    src/sc_world.c
+    src/sc_world_guest.c
+    src/sc_development.c
+    src/sc_population.c
+    src/sc_mouse_ui.c
+    src/sc_construction.c
     src/sc_launcher.c
     src/sc_sram.c
     src/sc_icon.c
@@ -392,6 +398,12 @@ endif()
 if(SC_GEN_SOURCES)
     add_executable(UrbanRecompAOT EXCLUDE_FROM_ALL
         src/main.c
+        src/sc_world.c
+        src/sc_world_guest.c
+        src/sc_development.c
+        src/sc_population.c
+        src/sc_mouse_ui.c
+        src/sc_construction.c
         src/sc_launcher.c
         src/sc_sram.c
         src/sc_icon.c
@@ -502,3 +514,42 @@ add_executable(UrbanRecompFiberTest EXCLUDE_FROM_ALL
     src/sc_fiber.c
 )
 target_include_directories(UrbanRecompFiberTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(UrbanRecompPointerTest EXCLUDE_FROM_ALL tests/sc_pointer_test.c src/sc_video.c)
+target_include_directories(UrbanRecompPointerTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
+if(NOT MSVC)
+    target_link_libraries(UrbanRecompPointerTest PRIVATE m)
+endif()
+
+add_executable(UrbanRecompDevelopmentTest EXCLUDE_FROM_ALL
+    tests/sc_development_test.c src/sc_development.c src/sc_population.c
+    src/sc_world.c src/sc_world_guest.c src/sc_mapgen.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
+target_include_directories(UrbanRecompDevelopmentTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+
+add_executable(UrbanRecompConstructionTest EXCLUDE_FROM_ALL
+    tests/sc_construction_test.c src/sc_construction.c
+    src/sc_world.c src/sc_world_guest.c src/sc_mapgen.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
+target_include_directories(UrbanRecompConstructionTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+
+add_executable(UrbanRecompMouseUiTest EXCLUDE_FROM_ALL tests/sc_mouse_ui_test.c src/sc_mouse_ui.c)
+target_include_directories(UrbanRecompMouseUiTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(UrbanRecompPopulationTest EXCLUDE_FROM_ALL
+    tests/sc_population_test.c src/sc_population.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
+target_include_directories(UrbanRecompPopulationTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+
+add_executable(UrbanRecompMapGenTest EXCLUDE_FROM_ALL tests/sc_mapgen_test.c src/sc_mapgen.c)
+target_include_directories(UrbanRecompMapGenTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(UrbanRecompWorldTest EXCLUDE_FROM_ALL
+    tests/sc_world_test.c src/sc_world.c src/sc_world_guest.c src/sc_mapgen.c
+    src/sc_population.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
+target_include_directories(UrbanRecompWorldTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
