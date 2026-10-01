@@ -6157,6 +6157,24 @@ static void file_sli_read(SaveLoadInfo *sli, void *data, size_t n) {
   FileSli *fs = (FileSli *)sli;
   if (fs->ok && fread(data, 1, n, fs->f) != n) fs->ok = false;
 }
+/* Lookahead that consumes nothing. The engine uses it to tell two old DMA
+ * layouts apart by the PPU header that follows them, and a stream without it
+ * leaves the field NULL -- which is why every SaveLoadInfo here is zeroed
+ * first: the struct grew a member, and an uninitialised one is a function
+ * pointer the engine calls. */
+static bool file_sli_peek(SaveLoadInfo *sli, size_t offset, void *data,
+                          size_t size) {
+  FileSli *fs = (FileSli *)sli;
+  if (!fs->ok) return false;
+  const long pos = ftell(fs->f);
+  if (pos < 0) return false;
+  const bool ok = fseek(fs->f, pos + (long)offset, SEEK_SET) == 0 &&
+                  fread(data, 1, size, fs->f) == size;
+  const bool back = fseek(fs->f, pos, SEEK_SET) == 0;
+  clearerr(fs->f);              /* a short peek must not leave EOF behind */
+  if (!back) fs->ok = false;
+  return ok && back;
+}
 
 /* A versioned format, from the adaptive-renderer PR (blackerking/
  * UrbanRecomp#1). The device snapshot holds the PPU's registers and
@@ -6178,7 +6196,7 @@ static const uint32_t kScStateHeader[] = {0x54534353u /* "SCST" */, 1,
 static bool save_state(const char *path) {
   FILE *f = fopen(path, "wb");
   if (!f) return false;
-  FileSli fs;
+  FileSli fs = {0};             /* every member, not only func */
   fs.base.func = file_sli_write;
   fs.f = f;
   fs.ok = true;
@@ -6213,8 +6231,9 @@ static bool load_state(const char *path) {
                     "Save it again with this build.\n", path);
     fseek(f, 0, SEEK_SET);
   }
-  FileSli fs;
+  FileSli fs = {0};
   fs.base.func = file_sli_read;
+  fs.base.peek = file_sli_peek;
   fs.f = f;
   fs.ok = true;
   ScSram_Hold();   /* the saved cities on disk stay the player's */
