@@ -22,6 +22,13 @@ requirements still apply; faster development also means faster decline when
 those requirements are unmet. This is a multiplier of development attempts,
 not a promise of a particular population increase.
 
+**FIT TO SCREEN** in F12 maximizes the window and enables the adaptive renderer's
+Fit aspect. It expands the visible city canvas to match the drawable window,
+retaining the original pixel proportions. Population, money, demand, minimap,
+navigation arrows and mouse hit regions follow the resulting canvas dimensions.
+It also works when switching from the classic renderer. The aspect preference
+is saved in `sc-video.ini`; maximizing applies to the current window.
+
 The multiplier applies when the native simulation visits a zone and does not
 advance a paused city. Expanded maps now account for their extra spatial work
 when advancing the guest clock: Big and Huge no longer take four or sixteen
@@ -142,6 +149,11 @@ construction gesture suppresses edge scrolling. A drag captures the mouse and
 keeps its last valid endpoint/preview while outside the window, over the HUD,
 or outside the map. Re-entry resumes it; releasing outside commits the retained
 plan. Right-click cancels it. Camera/tool changes and opening a modal cancel it.
+
+Hold **Ctrl** for **3x scrolling**, including keyboard panning, right-drag and
+edge scrolling. The extra passes execute only the original scroll routines,
+including terrain staging and object shifts, without advancing city time.
+Native boundary checks still clamp the camera to the current map.
 
 Adaptive widescreen now keeps the date and tools on the left and places
 population, money and RCI demand at the far right, on a continuous header.
@@ -335,6 +347,19 @@ retain input and native PPU/APU work while omitting the expanded image
 composition. The title shows the measured Tab multiplier. Only the latest
 batch audio is queued, avoiding accumulated playback behind the picture.
 `SC_FAST_FORWARD=1` records the same held-Tab path for dummy-SDL testing.
+
+The rendering path now caches decoded 4-bit tile rows while checking live VRAM
+on every access, skips unused colour math, and culls edge sprites before pixel
+sampling. Power refresh compares tile IDs directly instead of hashing the
+entire map with a serial dependency chain. It still observes the selected speed
+and native bitmap ownership. An alternating six-pair 240-frame X50 city replay
+measured median work time of 3.267s before and 3.077s after (5.8% reduction).
+Complete saved states and rendered frames matched byte for byte. Timings vary
+with city workload and host load; this does not guarantee 60 FPS at X50.
+See [performance measurements and GPU investigation](GPU_PERFORMANCE.md).
+
+The extended Journey option list and its hand position now remain intact
+while a selected option fades out, after the game switches its screen state.
 
 Renderer regressions verify first-frame edited terrain, northwest roofs,
 bulldozed terrain, unchanged unedited native pixels, low/high sprite priority,

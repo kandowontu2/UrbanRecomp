@@ -18,6 +18,17 @@ int main(void) {
     ScRenderer r; ScRendererInit(&r,rom,0x80000,true);
     assert(ScRendererMapPixel(&r,p,ram,0,0)==0xffff0000);
     assert(ScRendererMapPixel(&r,p,ram,7,7)==0xff00ff00);
+    /* Live DMA-style updates to either plane pair must invalidate decoded
+     * rows immediately. Palette changes must never reuse an old colour. */
+    p->cgram[4]=31<<10; p->cgram[8]=31;
+    p->vram[0]=0; p->vram[8]=0x0080;
+    assert(ScRendererMapPixel(&r,p,ram,0,0)==0xff0000ff);
+    p->vram[8]=0x8000;
+    assert(ScRendererMapPixel(&r,p,ram,0,0)==0xffff0000);
+    p->cgram[8]=31<<5;
+    assert(ScRendererMapPixel(&r,p,ram,0,0)==0xff00ff00);
+    p->vram[8]=0; p->vram[0]=0x0080;
+    assert(ScRendererMapPixel(&r,p,ram,0,0)==0xffff0000);
     word(rom,0x156a9,0xc000);
     assert(ScRendererMapPixel(&r,p,ram,7,7)==0xffff0000);
     assert(ScRendererMapPixel(&r,p,ram,0,0)==0xff00ff00);

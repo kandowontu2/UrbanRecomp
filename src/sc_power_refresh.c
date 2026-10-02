@@ -27,25 +27,29 @@ bool ScPowerRefreshStep(ScPowerRefresh *s,uint8_t *ram,ScWorld *world,
     bool due=ScRefreshClockDue(&s->clock,frame,multiplier);
     if (multiplier<=1) { s->ready=false; return false; }
     uint8_t *tiles=large?world->tiles:ram+0x10200;
-    uint32_t hash=2166136261u;
-    for (unsigned i=0;i<cells;++i) {
-        unsigned tile=(tiles[2*i]|tiles[2*i+1]<<8)&1023;
-        hash=(hash^(tile&255))*16777619u;
-        hash=(hash^(tile>>8))*16777619u;
+    bool same=s->ready && s->large==large && s->huge==(large && world->huge);
+    if(same) {
+        /* Exact, vectorizable comparison of tile IDs. Ignore native power
+         * and metadata bits; a serial full-map hash dominated cached frames. */
+        unsigned different=0;
+        for(unsigned i=0;i<cells;++i) {
+            different|=tiles[2*i]^s->topology_tiles[2*i];
+            different|=(tiles[2*i+1]^s->topology_tiles[2*i+1])&3;
+        }
+        same=different==0;
     }
-    bool same=s->ready && s->large==large && s->huge==(large && world->huge) && s->topology==hash;
     bool solved=false;
     if (due && !same) {
         if (!ScConstructionPowerBitmap(ram,world,rom,size,s->bitmap,sizeof s->bitmap)) return false;
-        s->ready=true; s->large=large; s->huge=large && world->huge; s->topology=hash; same=solved=true;
+        s->ready=true; s->large=large; s->huge=large && world->huge;
+        memcpy(s->topology_tiles,tiles,2*cells);same=solved=true;
     }
     if (!same) return false;
     /* Native bitmap rebuilding must not temporarily depower an unchanged
      * network. Restore its settled flags from the last verified result. */
     for (unsigned i=0;i<cells;++i) {
-        unsigned tile=(tiles[2*i]|tiles[2*i+1]<<8)&0x7fff;
-        if (s->bitmap[i/8]&(128>>(i&7))) tile|=0x8000;
-        tiles[2*i]=(uint8_t)tile; tiles[2*i+1]=(uint8_t)(tile>>8);
+        unsigned power=s->bitmap[i/8]&(128>>(i&7))?128:0;
+        tiles[2*i+1]=(uint8_t)((tiles[2*i+1]&127)|power);
     }
     if (bitmap_available)
         memcpy(large?world->fields[5]:ram+0x1a598,s->bitmap,cells/8);

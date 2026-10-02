@@ -27,6 +27,9 @@ static bool window_contains(const Ppu *p,int layer,int x) {
 }
 static uint32_t composite_color(const Ppu *p,unsigned main,int layer,unsigned sub,int sublayer,int x) {
     if (PPU_forcedBlank(p)) return 0xff000000;
+    /* Opaque layers need neither color-window evaluation nor channel math. */
+    if (!PPU_clipMode(p) && (!(PPU_mathEnabled(p)&(1<<layer)) || PPU_preventMathMode(p)==3))
+        return color(p,main);
     bool win=window_contains(p,5,x<0 ? 0 : x>255 ? 255 : x);
     unsigned clip=PPU_clipMode(p), prevent=PPU_preventMathMode(p);
     unsigned c=p->cgram[main&255];
@@ -54,6 +57,25 @@ static unsigned tile_pixel(const Ppu *p, unsigned word, unsigned base,
     int bit = word & 0x4000 ? x&7 : 7-(x&7);
     base += (word & 1023) * (4*depth) + row;
     unsigned ci=0;
+    if(depth==4) {
+        /* Cache only decoded row bits, checking both live VRAM words on
+         * every read. DMA, animated tiles and scanline changes invalidate
+         * immediately; palettes, flips and color math remain live. */
+        static struct {uint16_t low,high;uint64_t pixels;} rows[0x8000];
+        unsigned at=base&0x7fff;
+        uint16_t low=p->vram[at],high=p->vram[(at+8)&0x7fff];
+        if(rows[at].low!=low || rows[at].high!=high) {
+            uint64_t pixels=0;
+            for(unsigned b=0;b<8;++b) {
+                unsigned value=((low>>b)&1)|(((low>>(b+8))&1)<<1)|
+                    (((high>>b)&1)<<2)|(((high>>(b+8))&1)<<3);
+                pixels|=(uint64_t)value<<(8*b);
+            }
+            rows[at].low=low;rows[at].high=high;rows[at].pixels=pixels;
+        }
+        ci=(unsigned)(rows[at].pixels>>(8*bit))&15;
+        return ci?ci+((word>>10)&7)*16+palette_offset:0;
+    }
     for (int plane=0; plane<depth; plane+=2) {
         unsigned bits=p->vram[(base + plane*4) & 0x7fff];
         ci |= ((bits >> bit)&1) << plane;
@@ -537,11 +559,19 @@ static bool edge_has_overlay(const Ppu *p,int y,int left) {
             if ((p->screenEnabled[0]&(1<<layer)) &&
                 (!(p->screenWindowed[0]&(1<<layer)) || !window_contains(p,layer,x)) &&
                 bg_pixel(p,layer,x,y+1)) return true;
-        if (!(p->screenEnabled[0]&16)) continue;
-        for (int slot=0;slot<128;++slot) {
-            int sx=sprite_x(p,slot); if (sx>=256) sx-=512;
-            if (sprite_pixel(p,slot,x-sx,(y+1-(p->oam[slot*2]>>8))&255)) return true;
-        }
+    }
+    if (!(p->screenEnabled[0]&16)) return false;
+    /* Test each OAM rectangle once, rather than replaying all 128 sprites
+     * for every pixel of both edge strips. Preserve the original ink test. */
+    for (int slot=0;slot<128;++slot) {
+        int index=slot*2;
+        int size=sprite_sizes[PPU_objSize(p)][(p->highOam[index/8]>>(index%8+1))&1];
+        int row=(y+1-(p->oam[index]>>8))&255;
+        if (row>=size) continue;
+        int sx=sprite_x(p,slot); if (sx>=256) sx-=512;
+        int first=left>sx?left:sx, end=left+8<sx+size?left+8:sx+size;
+        for (int x=first;x<end;++x)
+            if (sprite_word_pixel(p,p->oam[index+1],size,x-sx,row)) return true;
     }
     return false;
 }

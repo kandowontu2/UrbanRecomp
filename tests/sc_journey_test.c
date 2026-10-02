@@ -58,7 +58,14 @@ static void menu_test(void) {
         }
         interp816_free(c);
     }
-    uint8_t value;assert(!ScJourneyMenuRead(0xa182,5,&value));
+    /* Dispatch changes the screen first; the native menu emitter then runs
+     * again during the fade on every destination screen. */
+    const unsigned fades[]={4,10,14,16};
+    for(unsigned i=0;i<sizeof fades/sizeof fades[0];++i) {
+        uint8_t value;assert(ScJourneyMenuRead(0xa182,fades[i],&value) && value==0x4c);
+        assert(ScJourneyMenuRead(0xfb4c,fades[i],&value));
+        assert(!ScJourneyMenuRead(0x03d34c,fades[i],&value));
+    }
 }
 static void saved(void) {
     size_t n=ScWorldEncodedSize();uint8_t *p=malloc(n);assert(p);

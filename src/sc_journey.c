@@ -116,10 +116,14 @@ void ScJourneyMenuFrame(uint16_t *vram,unsigned base) {
         memcpy(vram+base+row*32+4,vram+base+24*32+4,24*sizeof *vram);
 }
 bool ScJourneyMenuRead(uint32_t a,unsigned screen,uint8_t *v) {
-    if(!menu_size || (screen!=2 && screen!=3 && screen!=18)) return false;
+    if(!menu_size) return false;
     a&=0x7fffff;
+    /* Template 15 is re-emitted after the selection changes $14, while the
+     * old panel fades out. Its dedicated pointer/record must stay extended
+     * even though the next screen already owns the state machine. */
     if(a==MENU_POINTER || a==MENU_POINTER+1) {*v=(uint8_t)(MENU_ADDRESS>>(8*(a-MENU_POINTER)));return true;}
     if(a>=MENU_ADDRESS && a<MENU_ADDRESS+menu_size) {*v=menu[a-MENU_ADDRESS];return true;}
+    if(screen!=2 && screen!=3 && screen!=18) return false;
     if(a==0x03d34c) {*v=5;return true;} /* native Down wrap */
     if(a==0x03d359) {*v=4;return true;} /* native Up wrap */
     return false;

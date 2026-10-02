@@ -12,7 +12,7 @@ the host:
 | `handle_pos_stuff()`, once per scanline: `SC_WS_DIAG`, `SC_PASS_DIAG` | about 450 | fcb0e54 / e5de60d, late August |
 
 On Windows, `getenv()` takes a lock and scans the whole environment. With
-this machine's environment that costs about 1.4 Âµs a call. Both loops now
+this machine's environment that costs about 1.4 µs a call. Both loops now
 read their flags once into statics.
 
 Measured with `--qualify` and German, widescreen and Sylt on:
@@ -72,3 +72,8 @@ renderer's VSync does not actually pace presents. None of these touch what
 was slow here: this host's upload and present together take about 0.2 ms, and
 its pacing is a manual deadline (`SDL_Delay` plus a sub-millisecond spin),
 which held 60.1 fps in every measured second.
+
+## Enhanced fork at X50 (2026-10-02)
+
+See [new profiling results, CPU optimizations and GPU investigation](GPU_PERFORMANCE.md).
+The earlier figures above describe the upstream workload, not accelerated large cities.

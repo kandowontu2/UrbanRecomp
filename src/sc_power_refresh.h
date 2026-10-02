@@ -6,7 +6,7 @@
 typedef struct {
     ScRefreshClock clock;
     uint8_t bitmap[SC_WORLD_MAX_CELLS/8];
-    uint32_t topology;
+    uint8_t topology_tiles[SC_WORLD_MAX_TILE_BYTES];
     unsigned clock_cells;
     int game_speed;
     bool ready, large, huge;

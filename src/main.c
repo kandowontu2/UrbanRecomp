@@ -116,6 +116,9 @@ static bool s_measure_custom_frame;
 static double s_custom_frame_ms;
 static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge */
 static bool s_journey_arming;
+static unsigned s_journey_menu_selection;
+static int s_scroll_multiplier=1;
+static struct {unsigned extra;uint16_t sp;bool repeating;} s_scroll_pass[2];
 static char s_world_path[1100];
 static void world_saved_city(bool save);
 /* Declared, not #included: cpu_trace.h pulls in cpu_state.h, whose CpuState
@@ -132,6 +135,7 @@ void cpu_trace_dump_wram(const char *tag, int scan_n);
 #include "sc_mods.h"
 #endif
 static ScVideoSettings s_custom_video;
+static bool s_fit_screen_requested;
 static ScRenderer s_custom_renderer;
 static const char *s_video_config = "sc-video.ini";
 static int s_window_width = 1024, s_window_height = 768;
@@ -3734,10 +3738,12 @@ static bool run_one_frame(void) {
         ScJourneyMenuFont(g_ppu->vram);
         ScJourneyMenuFrame(g_ppu->vram,PPU_bgTilemapAdr(g_ppu,2));
       }
-      if(cpu->k==2 && cpu->pc==0xbcfe && ram_w(0x14)==3)
-        cpu->a=(cpu->a&0xff00)|ScJourneyMenuY(ram_w(0x44)!=0,ram_w(0x3e));
+      if(cpu->k==2 && cpu->pc==0xbcfe)
+        cpu->a=(cpu->a&0xff00)|ScJourneyMenuY(ram_w(0x44)!=0,
+            ram_w(0x14)==2 || ram_w(0x14)==3 || ram_w(0x14)==18?ram_w(0x3e):s_journey_menu_selection);
       if(cpu->k==3 && cpu->pc==0xd369) {
         unsigned selected=ram_w(0x3e);
+        s_journey_menu_selection=selected;
         s_journey_arming=selected==3;
         if(selected>=3) ram_set_w(0x3e,selected==3?2:3);
       }
@@ -4099,6 +4105,28 @@ static bool run_one_frame(void) {
         fprintf(stderr, "failed to write WRAM dump to %s\n", path);
       s_dump_pc_armed = false;
     }
+    /* Repeat only the native city cursor/scroll routine, including its
+     * terrain staging and moving-object shifts. Extra passes consume no
+     * guest clock, so Ctrl does not accelerate the calendar or simulation. */
+    if(s_rom_is_us && cpu->k==1 &&
+        (s_scroll_multiplier>1 || s_scroll_pass[0].repeating || s_scroll_pass[1].repeating) &&
+        !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i)) {
+      for(unsigned pass=0;pass<2;++pass) {
+        unsigned start=pass?0x89a0:0x8d26;
+        bool end=pass?cpu->pc==0x89a3:
+            cpu->pc==0x8d2d || cpu->pc==0x8d92 || cpu->pc==0x8dcd;
+        if(cpu->pc==start && !s_scroll_pass[pass].repeating) {
+          s_scroll_pass[pass].extra=(unsigned)(s_scroll_multiplier-1);
+          s_scroll_pass[pass].sp=cpu->sp;
+        } else if(end && cpu->sp==s_scroll_pass[pass].sp) {
+          if(s_scroll_pass[pass].extra) {
+            --s_scroll_pass[pass].extra;s_scroll_pass[pass].repeating=true;cpu->pc=(uint16_t)start;
+          } else s_scroll_pass[pass].repeating=false;
+        }
+      }
+    }
+    const bool scroll_work=cpu->k==1 && (s_scroll_pass[0].repeating || s_scroll_pass[1].repeating) &&
+      !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i);
     const bool development_work = cpu->k == 3 && s_development.repeating &&
       !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i);
     const uint32_t executed_pc=((uint32_t)cpu->k<<16)|cpu->pc;
@@ -4110,7 +4138,7 @@ static bool run_one_frame(void) {
     /* Extra development attempts are host work, like the native map
      * generator. They do not advance the SNES beam, audio clock or calendar
      * cadence. The original attempt and final PLD/RTS retain normal timing. */
-    if (development_work) continue;
+    if (development_work || scroll_work) continue;
     if (cyc <= 0) cyc = 1;
     int master = cyc * 8;
     if (s_rom_fnv==SC_ROM_FNV_US && !interrupt_work)
@@ -6587,6 +6615,9 @@ static bool load_state(const char *path) {
   }
   g_ppu->lastBrightnessMult = 0xff;   /* rebuild the brightness tables */
   ScRendererResetHistory(&s_custom_renderer);
+  memset(s_scroll_pass,0,sizeof s_scroll_pass);
+  s_scroll_multiplier=1;
+  s_journey_menu_selection=ram_w(0x3e);
   ScSram_Release();
   ScVehicles_Reset();   /* host-side, not in the state; back within 4 frames */
   bool ok = fs.ok;
@@ -7028,6 +7059,7 @@ static void save_large_map_setting(void) {
 static const int kMapSizes[]={0,1,2};
 static const char *const kMapSizeNames[]={"NORMAL 120X100","BIG 240X200","HUGE 480X400"};
 static void toggle_large_maps(void) { s_large_maps=(s_large_maps+1)%3; save_large_map_setting(); }
+static void menu_action_fit_screen(void) {s_fit_screen_requested=true;}
 
 static void setting_activate(SettingDesc *d) {
   switch (d->kind) {
@@ -7342,6 +7374,7 @@ static SettingDesc s_settings[] = {
    * value still fits the menu box at the current font size -- see
    * render_settings_menu()'s width math. */
   { "QOL",                   kSettingHeader, NULL, 0, NULL, NULL, 0 },
+  { "FIT TO SCREEN",         kSettingAction, NULL, 0, menu_action_fit_screen, NULL, 0 },
   { "MOUSE CURSOR",          kSettingBool, &s_mouse_enabled,       0,    NULL, NULL, 0 },
   { "DEVELOPMENT SPEED",     kSettingCycle, &s_development_speed, 0, NULL,
     kDevelopmentSpeeds, 5, kDevelopmentSpeedNames },
@@ -10028,6 +10061,21 @@ int main(int argc, char **argv) {
         }
       }
     }
+    if(s_fit_screen_requested) {
+      s_fit_screen_requested=false;
+      if(!s_custom_video.enabled) {
+        /* Switching from classic widescreen also restores native raster
+         * coordinates; the adaptive compositor owns the expanded surface. */
+        s_ws_extra=0;s_host_map=false;s_video_w=kVideoWidth;s_video_pitch=kVideoWidth*4;
+        PpuSetExtraSpace(g_ppu,0);
+        PpuBeginDrawing(g_ppu,s_video_pixels,(size_t)s_video_pitch,s_render_flags);
+        ScRendererResetHistory(&s_custom_renderer);
+      }
+      s_custom_video.enabled=true;s_custom_video.aspect=SC_FIT;s_custom_video.centered=false;
+      SDL_MaximizeWindow(window);
+      if(!ScVideoSave(&s_custom_video,s_video_config))
+        fprintf(stderr,"settings: could not save fit-to-screen preference\n");
+    }
     int drawable_w = 0, drawable_h = 0;
     SDL_GetRendererOutputSize(renderer, &drawable_w, &drawable_h);
     ScViewport viewport = ScVideoViewport(&s_custom_video, drawable_w, drawable_h);
@@ -10455,6 +10503,10 @@ int main(int argc, char **argv) {
      * the one that mattered, and the other was advancing the simulation during
      * ordinary play. Only explicit held gestures remain. */
     bool fast_forward = keys[SDL_SCANCODE_TAB] || test_fast_forward;
+    s_scroll_multiplier=(keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL]) &&
+        host_map_screen_live() && !s_menu_open?3:1;
+    /* Deterministic equivalent of Ctrl for mouse/keyboard scroll replays. */
+    {const char *e=getenv("SC_SCROLL_MULTIPLIER");if(e && !s_menu_open) s_scroll_multiplier=atoi(e)==3?3:1;}
     s_measure_custom_frame=fast_forward;
     int frames_this_iter = fast_forward ? 6 : (dragging ? s_drag_turbo : 1);
     const uint64_t batch_t0=SDL_GetPerformanceCounter();
