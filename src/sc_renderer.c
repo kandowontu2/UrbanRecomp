@@ -193,8 +193,19 @@ static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     bool black=PPU_forcedBlank(p) || !PPU_brightness(p);
     if (r->map_valid) {
         for (unsigned i=0;i<bytes;i+=2) {
-            bool changed=((u16(map,i)^u16(r->previous_map,i))&1023)!=0;
-            if (changed && !r->map_hold) r->changed_cells[i/2]=1;
+            unsigned raw=u16(map,i),delta=raw^u16(r->previous_map,i),tile=raw&1023;
+            /* A flood changes power bits on ordinary terrain too. Only a
+             * building owner has a warning to redraw for that change. */
+            bool changed=(delta&1023)!=0 || ((delta&0x8000) &&
+                r->rom && tile<CELL_TYPES && (r->rom[0x184eb+tile]&1));
+            if (changed && !r->map_hold) {
+                unsigned width=large?ScWorldWidth(r->world):120;
+                r->changed_cells[i/2]=1;
+                /* The power glyph belongs to the southeast footprint cell,
+                 * even when only its owner's power bit changed. */
+                if ((i/2)%width<width-1 && i/2+width+1<bytes/2)
+                    r->changed_cells[i/2+width+1]=1;
+            }
         }
         if (r->map_hold) {
             if (black) r->map_dark=true;
@@ -315,6 +326,27 @@ static bool stale_power_warning(const ScRenderer *r,const Ppu *p,const uint8_t *
             return (raw&0x8000)!=0 || tile==0x27c || tile==0x28c;
     }
     return false;
+}
+/* The native cache adds $1376 one cell southeast of a building centre.
+ * Newly placed zones and the expanded viewport cannot wait for that cache's
+ * next sweep. Use the real power flag and the same live, animated CHR. */
+static bool power_warning_cell(const ScRenderer *r,const uint8_t *ram,int x,int y) {
+    if (!r->rom || x<8 || y<8) return false;
+    int wx=x/8-1,wy=y/8-1;
+    bool large=r->world && r->world->active;
+    int width=large?ScWorldWidth(r->world):120,height=large?ScWorldHeight(r->world):100;
+    if (wx>=width-1 || wy>=height-1) return false;
+    const uint8_t *map=large?r->world->tiles:ram+MAP;
+    unsigned raw=u16(map,2*(wy*width+wx)),tile=raw&1023;
+    return !(raw&0x8000) && tile<CELL_TYPES &&
+        (r->rom[0x184eb+tile]&1) && tile!=0x27c && tile!=0x28c;
+}
+static unsigned power_warning_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
+                                    int x,int y,int sx,int sy) {
+    if (r->map_hold || (u16(ram,0x1d7) && (y<46 || (x<56 && y<224)))) return 0;
+    int mx=sx+x,my=sy+y+1;
+    if (!power_warning_cell(r,ram,mx,my)) return 0;
+    return tile_pixel(p,0x1376,PPU_bgTileAdr(p,0),mx,my,4,0);
 }
 static unsigned bg_pixel(const Ppu *p,int layer,int x,int y) {
     return bg_sample(p,layer,x,y,NULL);
@@ -585,6 +617,7 @@ static void render_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
         unsigned ci=cell_pixel(r,p,ram,sx+local,sy+y+1,false);
         unsigned over=cell_pixel(r,p,ram,sx+local+8,sy+y+9,true);
         if (over) ci=over;
+        unsigned warning=power_warning_pixel(r,p,ram,local,y,sx,sy);
         int edge=local<0 ? 0 : local>255 ? 255 : local;
         if (r->advisor_frame) {
             /* Advice uses an opaque BG3/OBJ page on MAIN and the dimmed
@@ -621,6 +654,10 @@ static void render_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
             } else if (sub && (p->screenEnabled[1]&4)) {
                 int yy=y<0 ? 0 : y>223 ? 223 : y;
                 samples[sub]=bg_pixel(p,2,edge,yy+1); layers[sub]=samples[sub] ? 2 : 5;
+            }
+            if (warning && (p->screenEnabled[sub]&1) &&
+                (!(p->screenWindowed[sub]&1) || !window_contains(p,0,edge))) {
+                samples[sub]=warning; layers[sub]=0;
             }
             unsigned obj=objects[x]&255, priority=objects[x]>>8;
             if (obj && (!samples[sub] || priority>=(over ? 3u : 2u)) && (p->screenEnabled[sub]&16) &&
@@ -763,7 +800,10 @@ static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
     uint32_t *out=r->pixels+(size_t)(y+r->view.core_y)*r->view.width+r->view.core_x;
     for (int x=0;x<256;++x) {
         bool clear_warning=stale_power_warning(r,p,ram,x,y,sx,sy);
-        if (!clear_warning && !changed_cell(r,sx+x,sy+y+1) && !changed_cell(r,sx+x+8,sy+y+9)) continue;
+        bool warning_cell=power_warning_cell(r,ram,sx+x,sy+y+1) &&
+            !(u16(ram,0x1d7) && (y<46 || (x<56 && y<224)));
+        if (!clear_warning && !warning_cell && !changed_cell(r,sx+x,sy+y+1) && !changed_cell(r,sx+x+8,sy+y+9)) continue;
+        unsigned warning=power_warning_pixel(r,p,ram,x,y,sx,sy);
         unsigned ci=cell_pixel(r,p,ram,sx+x,sy+y+1,false);
         unsigned over=cell_pixel(r,p,ram,sx+x+8,sy+y+9,true);
         if (over) ci=over;
@@ -783,6 +823,10 @@ static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
                 unsigned z=layer==0?(high?12:8):(high?(PPU_bg3priority(p)?15:3):1);
                 if (pixel && z>rank) { samples[sub]=pixel; owners[sub]=layer; rank=z; }
             }
+            if (warning && rank<8 && (p->screenEnabled[sub]&1) &&
+                (!(p->screenWindowed[sub]&1) || !window_contains(p,0,x))) {
+                samples[sub]=warning; owners[sub]=0; rank=8;
+            }
             unsigned obj=p->objBuffer.data[x+kPpuExtraLeftRight];
             if ((obj&255) && (obj>>12)>rank && (p->screenEnabled[sub]&16) &&
                 (!(p->screenWindowed[sub]&16) || !window_contains(p,4,x))) {
@@ -800,6 +844,7 @@ static uint32_t without_pointer(const ScRenderer *r,const Ppu *p,const uint8_t *
     unsigned ci=cell_pixel(r,p,ram,sx+x,sy+y+1,false);
     unsigned over=cell_pixel(r,p,ram,sx+x+8,sy+y+9,true);
     if (over) ci=over;
+    unsigned warning=power_warning_pixel(r,p,ram,x,y,sx,sy);
     unsigned obj=0,attr=0;
     int first=PPU_objPriority(p)?(p->oamaddl&0xfe)/2:0;
     for (int i=0;i<128;++i) {
@@ -823,6 +868,10 @@ static uint32_t without_pointer(const ScRenderer *r,const Ppu *p,const uint8_t *
             unsigned pixel=bg_sample(p,layer,x,y+1,&high);
             unsigned z=layer==0?(high?12:8):(high?(PPU_bg3priority(p)?15:3):1);
             if (pixel && z>rank) { samples[sub]=pixel; owners[sub]=layer; rank=z; }
+        }
+        if (warning && rank<8 && (p->screenEnabled[sub]&1) &&
+            (!(p->screenWindowed[sub]&1) || !window_contains(p,0,x))) {
+            samples[sub]=warning; owners[sub]=0; rank=8;
         }
         if (obj && 2+4*((attr>>12)&3)>rank && (p->screenEnabled[sub]&16) &&
             (!(p->screenWindowed[sub]&16) || !window_contains(p,4,x))) {

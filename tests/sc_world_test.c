@@ -19,8 +19,11 @@ static uint8_t multiplicand,visits[SC_WORLD_MAX_CELLS];
 static uint8_t native_sram[0x8000];
 static uint8_t *native_cities;
 static uint8_t bitmap_ram[0x20000],bitmap[0x2000];
+static uint8_t stencil_expected_ram[0x20000];
 static ScPopulation population;
 static bool population_enabled;
+static uint64_t raw_cycles,spatial_cycles;
+static unsigned cycle_remainder;
 static unsigned mini_x,mini_y;
 static uint8_t read_bus(void *ctx,uint32_t a) {
     (void)ctx; uint8_t v;
@@ -56,6 +59,7 @@ static void routine_bank(unsigned bank,unsigned pc,unsigned a,unsigned y) {
     cpu->k=cpu->db=(uint8_t)bank; cpu->pc=(uint16_t)pc; cpu->a=(uint16_t)a; cpu->y=(uint16_t)y;
     cpu->sp=0x1ffd; cpu->dp=0x1e00; cpu->e=cpu->mf=cpu->xf=false;
     put(0x1ffe,0x6fff); unsigned steps=0;
+    raw_cycles=spatial_cycles=cycle_remainder=0;
     while (cpu->pc!=0x7000) {
         assert(++steps<200000000);
         if (native_cities && cpu->k==3) {
@@ -86,7 +90,12 @@ static void routine_bank(unsigned bank,unsigned pc,unsigned a,unsigned y) {
             ++visits[(world.huge?world.scan_y:ram[0xb86])*ScWorldWidth(&world)+(world.huge?world.scan_x:ram[0xb85])];
         ScWorldGuestBegin(&guest,&world,cpu,rom,sizeof rom);
         if (read_bus(NULL,((uint32_t)cpu->k<<16)|cpu->pc)==2) cpu->pc+=2;
-        else interp816_runOpcode(cpu);
+        else {
+            uint32_t executed_pc=((uint32_t)cpu->k<<16)|cpu->pc;
+            unsigned master=interp816_runOpcode(cpu)*8;
+            raw_cycles+=master;
+            spatial_cycles+=ScWorldGuestMasterCycles(&world,executed_pc,master,&cycle_remainder);
+        }
     }
     assert(cpu->sp==0x1fff && cpu->dp==0x1e00);
 }
@@ -102,6 +111,101 @@ static void terrain_bounds(void) {
         assert((ram[0x13b]|ram[0x13c]<<8)==(valid?0x8015:0));
         assert(valid || (ram[0x13d]|ram[0x13e]<<8)==0x300);
     }
+}
+static void stencil_equivalence(void) {
+    for(unsigned huge=0;huge<2;++huge) for(unsigned kernel=0;kernel<2;++kernel)
+      for(unsigned pattern=0;pattern<3;++pattern) for(unsigned point=0;point<9;++point)
+      for(unsigned aligned=0;aligned<2;++aligned) {
+        ScWorldReset(&world);world.active=true;world.huge=huge;
+        unsigned width=ScWorldFieldWidth(&world,13),height=ScWorldFieldHeight(&world,13);
+        unsigned x=point%3==0?0:point%3==1?width/2:width-1;
+        unsigned y=point/3==0?0:point/3==1?height/2:height-1;
+        unsigned src=kernel?14:13,dst=kernel?13:14,index=y*width+x;
+        for(unsigned i=0;i<width*height;++i) world.fields[src][i]=pattern==0?0:pattern==1?255:(i*173+71)&255;
+        copy=world;memset(ram,0x5a,sizeof ram);
+        interp816_reset(cpu);cpu->k=cpu->db=3;cpu->pc=kernel?0xa0d0:0xa04a;
+        cpu->sp=0x1ffd;cpu->dp=aligned?0x1e00:0x1df6;
+        cpu->x=index;cpu->e=cpu->xf=false;cpu->mf=cpu->i=true;
+        put(cpu->dp,x);put(cpu->dp+2,y);
+        Interp816 initial=*cpu;memcpy(bitmap_ram,ram,sizeof ram);
+        unsigned target=kernel?0xa125:0xa09f,cycles=0;
+        while(cpu->pc!=target) {
+            ScWorldGuestBegin(&guest,&world,cpu,rom,sizeof rom);
+            cycles+=interp816_runOpcode(cpu);
+        }
+        Interp816 expected=*cpu;unsigned expected_pixel=world.fields[dst][index];
+        memcpy(stencil_expected_ram,ram,sizeof ram);
+        world=copy;*cpu=initial;memcpy(ram,bitmap_ram,sizeof ram);
+        unsigned fast=ScWorldGuestFastStep(&world,cpu,ram,rom,sizeof rom);
+        if(fast!=cycles) fprintf(stderr,"stencil cycles kernel=%u pattern=%u point=%u fast=%u original=%u\n",kernel,pattern,point,fast,cycles);
+        assert(fast==cycles && cpu->pc==expected.pc && cpu->a==expected.a && cpu->x==expected.x && cpu->y==expected.y);
+        assert(cpu->sp==expected.sp && cpu->dp==expected.dp && interp816_getFlags(cpu)==interp816_getFlags(&expected));
+        assert(!memcmp(ram,stencil_expected_ram,sizeof ram) && world.fields[dst][index]==expected_pixel);
+        cpu->pc=initial.pc;cpu->nmiWanted=true;assert(!ScWorldGuestFastStep(&world,cpu,ram,rom,sizeof rom));
+    }
+}
+static void empty_cell_equivalence(void) {
+    unsigned cases=0;
+    for(unsigned huge=0;huge<2;++huge) for(unsigned sweep=0;sweep<2;++sweep)
+      for(unsigned tile=0;tile<1024;++tile) {
+        unsigned property=rom[0x184eb+tile];
+        if(sweep?(tile>=64 || (property&0x71)):(property&1)) continue;
+        for(unsigned point=0;point<4;++point) for(unsigned aligned=0;aligned<2;++aligned) {
+            ScWorldReset(&world);world.active=true;world.huge=huge;
+            unsigned x=point&1?ScWorldWidth(&world)-1:0;
+            unsigned y=point&2?ScWorldHeight(&world)-1:0;
+            unsigned offset=2*(y*ScWorldWidth(&world)+x);
+            ScWorldPutCell(&world,x,y,tile|0xc000);world.scan_x=x;world.scan_y=y;
+            memset(ram,0x5a,sizeof ram);
+            interp816_reset(cpu);cpu->k=cpu->db=3;cpu->pc=sweep?0x82ae:0x9af7;
+            cpu->sp=0x1ffd;cpu->dp=aligned?0x1e00:0x1df6;
+            cpu->e=cpu->xf=false;cpu->mf=!sweep;cpu->i=true;cpu->c=cpu->v=true;
+            put(cpu->dp,offset);put(cpu->dp+0x10,x);put(cpu->dp+0x12,y);
+            ram[0xb85]=(uint8_t)x;ram[0xb86]=(uint8_t)y;
+            ScWorldGuestStep(&world,cpu,ram);
+            copy=world;Interp816 initial=*cpu;memcpy(bitmap_ram,ram,sizeof ram);
+            unsigned target=sweep?0x8341:0x9b5a,cycles=0,steps=0;
+            while(cpu->pc!=target) {
+                assert(++steps<500);
+                ScWorldGuestStep(&world,cpu,ram);
+                ScWorldGuestBegin(&guest,&world,cpu,rom,sizeof rom);
+                cycles+=interp816_runOpcode(cpu);
+            }
+            Interp816 expected=*cpu;unsigned anchor=world.map_anchor;
+            memcpy(stencil_expected_ram,ram,sizeof ram);
+            world=copy;*cpu=initial;memcpy(ram,bitmap_ram,sizeof ram);
+            unsigned fast=ScWorldGuestFastStep(&world,cpu,ram,rom,sizeof rom);
+            if(fast!=cycles || cpu->a!=expected.a || interp816_getFlags(cpu)!=interp816_getFlags(&expected))
+                fprintf(stderr,"empty sweep=%u huge=%u tile=%x point=%u dp=%x fast=%u original=%u A=%x/%x flags=%x/%x\n",sweep,huge,tile,point,cpu->dp,fast,cycles,cpu->a,expected.a,interp816_getFlags(cpu),interp816_getFlags(&expected));
+            assert(fast==cycles && cpu->pc==expected.pc && cpu->a==expected.a && cpu->x==expected.x && cpu->y==expected.y);
+            assert(cpu->sp==expected.sp && cpu->dp==expected.dp && interp816_getFlags(cpu)==interp816_getFlags(&expected));
+            if(memcmp(ram,stencil_expected_ram,sizeof ram) || world.map_anchor!=anchor) {
+                fprintf(stderr,"empty memory sweep=%u huge=%u tile=%x point=%u dp=%x anchor=%x/%x\n",sweep,huge,tile,point,cpu->dp,world.map_anchor,anchor);
+                for(unsigned p=0;p<sizeof ram;++p) if(ram[p]!=stencil_expected_ram[p]) fprintf(stderr,"RAM %x=%x/%x\n",p,ram[p],stencil_expected_ram[p]);
+            }
+            assert(!memcmp(ram,stencil_expected_ram,sizeof ram) && world.map_anchor==anchor);
+            ++cases;
+        }
+      }
+    printf("Empty spatial cell equivalence: %u cases\n",cases);
+}
+static void terrain_field_equivalence(void) {
+    for(unsigned tile=0;tile<0x28;++tile) for(unsigned pattern=0;pattern<4;++pattern)
+      for(unsigned aligned=0;aligned<2;++aligned) {
+        ScWorldReset(&world);world.active=true;
+        memset(ram,0x5a,sizeof ram);interp816_reset(cpu);
+        cpu->k=cpu->db=3;cpu->pc=0x9dca;cpu->dp=aligned?0x1e00:0x1df6;
+        cpu->e=cpu->xf=false;cpu->mf=cpu->i=true;cpu->c=cpu->v=pattern&1;
+        cpu->a=tile|0xc000;put(cpu->dp+0x22,pattern==0?0:pattern==1?0xffff:pattern==2?0x7ff8:0xfff8);
+        Interp816 initial=*cpu;memcpy(bitmap_ram,ram,sizeof ram);
+        unsigned cycles=0;
+        while(cpu->pc!=0x9e0b) {ScWorldGuestBegin(&guest,&world,cpu,rom,sizeof rom);cycles+=interp816_runOpcode(cpu);}
+        Interp816 expected=*cpu;memcpy(stencil_expected_ram,ram,sizeof ram);
+        *cpu=initial;memcpy(ram,bitmap_ram,sizeof ram);
+        unsigned fast=ScWorldGuestFastStep(&world,cpu,ram,rom,sizeof rom);
+        assert(fast==cycles && cpu->pc==expected.pc && cpu->a==expected.a && cpu->x==expected.x && cpu->y==expected.y);
+        assert(interp816_getFlags(cpu)==interp816_getFlags(&expected) && !memcmp(ram,stencil_expected_ram,sizeof ram));
+      }
 }
 int main(int argc,char **argv) {
     assert(argc==2); FILE *f=fopen(argv[1],"rb"); assert(f);
@@ -305,6 +409,32 @@ int main(int argc,char **argv) {
       (unsigned long long)(sum_x/centers),(unsigned long long)(sum_y/centers),(unsigned long long)centers);
     assert(world.center_x==sum_x/centers && world.center_y==sum_y/centers);
     routine(0x9c11,0,0);routine(0x9e8e,0,0);routine(0x9aa3,0,0);
+    /* Real blank-map sweeps and derived fields: added land retains stock
+     * elapsed time, rather than making Huge wait sixteen times as long.
+     * Include the actual native loops; a zone-only fixture misses this bug. */
+    const unsigned spatial_entries[]={0x8297,0x9c11,0x9ad7};
+    for(unsigned entry=0;entry<3;++entry) {
+        uint64_t stock=0;
+        for(unsigned size_id=0;size_id<3;++size_id) {
+            memset(ram,0,sizeof ram);ScWorldReset(&world);
+            world.active=size_id>0;world.huge=size_id==2;
+            routine(spatial_entries[entry],0,0);
+            if(!size_id) {stock=spatial_cycles;assert(stock==raw_cycles);}
+            else {
+                assert(raw_cycles>stock*(size_id==1?2:8));
+                assert(spatial_cycles>stock/2 && spatial_cycles<stock*3/2);
+            }
+            printf("spatial %04x map=%u raw=%llu elapsed=%llu stock=%llu\n",spatial_entries[entry],size_id,
+                (unsigned long long)raw_cycles,(unsigned long long)spatial_cycles,(unsigned long long)stock);
+        }
+    }
+    world.active=world.huge=true;
+    const uint32_t ordinary[]={0x008400,0x01897f,0x038026,0x03804f,0x0390a7,0x03ae1c,0x03b84b,0x03c474};
+    for(unsigned i=0;i<sizeof ordinary/sizeof *ordinary;++i)
+        assert(ScWorldGuestMasterCycles(&world,ordinary[i],48,&cycle_remainder)==48);
+    stencil_equivalence();
+    empty_cell_equivalence();
+    terrain_field_equivalence();
     interp816_free(cpu); free(data);
     puts("PASS: 48,000/192,000 native visits, full-world census and fields, power, byte seams, full city center, legacy migration and portable saves");
 }

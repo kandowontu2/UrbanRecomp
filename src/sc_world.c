@@ -6,10 +6,10 @@
  * consumers. $5fc0..$6aff contain temporal graph histories, not spatial
  * fields; they deliberately retain their original layout. */
 const ScWorldField ScWorldFields[SC_WORLD_FIELDS] = {
-    {0x6b00,60,50,120,100,1}, /* crime */
-    {0x76b8,60,50,120,100,1}, /* land value */
+    {0x6b00,60,50,120,100,1}, /* land value */
+    {0x76b8,60,50,120,100,1}, /* crime */
     {0x8270,60,50,120,100,1}, /* pollution */
-    {0x8e28,60,50,120,100,1}, /* traffic */
+    {0x8e28,60,50,120,100,1}, /* population density */
     {0x99e0,60,50,120,100,1}, /* transport visits */
     {0xa598,15,100,30,200,1}, /* packed power, eight cells per byte */
     {0xab74,30,25,60,50,1},

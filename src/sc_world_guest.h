@@ -18,3 +18,11 @@ void ScWorldGuestBegin(ScWorldGuest *guest, ScWorld *world,
                        const Interp816 *cpu, const uint8_t *rom, size_t size);
 bool ScWorldGuestRead(const ScWorldGuest *guest, uint32_t address, uint8_t *value);
 bool ScWorldGuestWrite(ScWorldGuest *guest, uint32_t address, uint8_t value);
+/* Added land must not multiply the time spent in the spatial simulation.
+ * Retain the guest's calendar, budgets, scheduler and interrupt timing. */
+unsigned ScWorldGuestMasterCycles(const ScWorld *world, uint32_t pc,
+                                  unsigned master, unsigned *remainder);
+/* Execute one verified spatial cell in C, returning its original CPU cost.
+ * Zero means that the interpreter should execute the current opcode. */
+unsigned ScWorldGuestFastStep(ScWorld *world, Interp816 *cpu, uint8_t *ram,
+                             const uint8_t *rom, size_t size);

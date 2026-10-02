@@ -16,20 +16,33 @@ requirements still apply; faster development also means faster decline when
 those requirements are unmet. This is a multiplier of development attempts,
 not a promise of a particular population increase.
 
-The multiplier applies when the native simulation visits a zone; it does not
-advance a paused city or eliminate the wait for its next simulation sweep.
-Actual growth tests now cover empty RCI zones on Normal, Big and Huge maps,
-including Huge coordinates beyond 255. Under favorable native conditions,
-50 attempts produce developed buildings and population while an unpowered
-zone stays empty. A separate running-city reproduction of 30 powered zones
-in a contiguous, roadless block reached 11,360 population after 6,000 frames
-at X50. This does not establish the cause of another city's stalled growth;
-its simulation state and demand still matter.
+The multiplier applies when the native simulation visits a zone and does not
+advance a paused city. Expanded maps now account for their extra spatial work
+when advancing the guest clock: Big and Huge no longer take four or sixteen
+times as long to sweep land and initialize the growth fields. Calendar,
+budget, demand, disaster and interrupt instructions retain their timing.
+Normal-sized maps keep the original timing path. Native-loop regressions
+cover zone sweeps, land value and population density on all three map sizes.
+The two hot five-point smoothing kernels execute one cell in C while charging
+their original guest cycles. Differential tests compare both kernels against
+the ROM across Big/Huge edges, zero and saturated fields, mixed values and
+aligned/unaligned direct pages, including scratch memory and CPU flags.
+Empty terrain sweeps and non-owner density cells also use equivalent C paths;
+15,520 differential cases cover their Big/Huge coordinates, property types,
+stack bytes, memory, flags and guest cycles. Terrain field accumulation covers
+carry/overflow boundaries as well. Building decisions still use the ROM.
+
+A saved stalled Huge city was reproduced at X50 and the fastest in-game speed.
+The previous build remained at population 0 after 6,000 frames. With the fix,
+the same city reached 2,380 after 460 frames (about 7.7 seconds), with developed
+residential buildings and the original 2,000-person adviser celebration.
+Its unpowered Commercial zones remained empty. Zone-only tests also cover
+growth and power gating on all sizes, including Huge coordinates beyond 255.
 
 Extra attempts run as host work without advancing the guest video/audio clock.
 Calendar, budgets and disasters are not fast-forwarded. Larger cities at X50
 still require more host CPU work and can reduce performance. Normal takes the
-unaltered guest path. `SC_DEVELOPMENT_SPEED=1|2|5|10|50` selects the initial value
+unaltered development path. `SC_DEVELOPMENT_SPEED=1|2|5|10|50` selects the initial value
 for testing; the menu setting is otherwise session-only.
 
 At accelerated development speeds, population and electrical networks refresh
@@ -50,6 +63,11 @@ Power flags remain consistent during native scans, and the completed bitmap
 is published only at safe boundaries. Cached lightning glyphs disappear when
 their zone is powered; coal and nuclear plants retain their original intrinsic
 self-power behavior, including immediately after placement.
+Newly placed unpowered buildings show the original animated lightning glyph
+throughout the expanded viewport without waiting for the native tile cache.
+Changing the owner's power flag also refreshes its warning footprint. The
+population/power schedulers no longer add an area multiplier to their initial
+cadence; tests verify all four accelerated rates on Normal, Big and Huge.
 
 The development hooks currently support the verified US ROM with the default
 interpreter. They do not implement acceleration in the optional `SC_FIBER=1`
@@ -303,6 +321,14 @@ and committed in about 2.6 ms. These fixtures establish placement latency,
 not a guarantee for every GPU or densely populated city. Screenshot capture
 adds its own one-off frame cost. `SC_PERF=1` logs queue frames, commit time and
 average/maximum frame-stage times for performance diagnosis.
+
+Held **Tab** uses this port's fast-forward loop, independently of Mesen. It
+runs up to six guest frames per display update but reserves time for the final
+rendered frame, adapting the boost to the city workload. Intermediate frames
+retain input and native PPU/APU work while omitting the expanded image
+composition. The title shows the measured Tab multiplier. Only the latest
+batch audio is queued, avoiding accumulated playback behind the picture.
+`SC_FAST_FORWARD=1` records the same held-Tab path for dummy-SDL testing.
 
 Renderer regressions verify first-frame edited terrain, northwest roofs,
 bulldozed terrain, unchanged unedited native pixels, low/high sprite priority,

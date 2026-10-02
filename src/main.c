@@ -108,6 +108,12 @@ uint8_t    g_ram[0x20000];
 #include "sc_journey.h"
 static ScWorld s_world;
 static ScWorldGuest s_world_guest;
+static bool s_perf_detail;
+static double s_perf_clock_ms,s_perf_raster_ms,s_perf_power_ms;
+static uint64_t s_perf_spatial_cells;
+static bool s_skip_custom_frame;
+static bool s_measure_custom_frame;
+static double s_custom_frame_ms;
 static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge */
 static bool s_journey_arming;
 static char s_world_path[1100];
@@ -949,6 +955,7 @@ static void handle_pos_stuff(void) {
   if (snes->hPos == 0) {
     bool startingVblank = false;
     if (snes->vPos <= kVideoHeight) {
+      uint64_t raster_t0=s_perf_detail?SDL_GetPerformanceCounter():0;
       /* Host-map mode renders each visible line TWICE: once with the layer
        * mask limited to BG3|OBJ into a scratch buffer, once normally. That
        * gets the HUD and sprites in isolation without the overlay export,
@@ -1059,12 +1066,15 @@ static void handle_pos_stuff(void) {
         ppu_runLine(g_ppu, snes->vPos);
         g_ppu->screenWindowed[1]=saved;
       }
-      if (s_custom_video.enabled && snes->vPos == 1)
+      if (s_custom_video.enabled && !s_skip_custom_frame && snes->vPos == 1)
         s_custom_renderer.vehicle_count = s_ws_vehicles
             ? ScVehicles_Shown(s_custom_renderer.vehicles, 19) : 0;
-      if (s_custom_video.enabled && snes->vPos > 0 && snes->vPos <= 224)
+      if (s_custom_video.enabled && !s_skip_custom_frame && snes->vPos > 0 && snes->vPos <= 224) {
+        uint64_t custom_t0=s_measure_custom_frame?SDL_GetPerformanceCounter():0;
         ScRendererLine(&s_custom_renderer, g_ppu, g_ram, snes->vPos - 1,
           (const uint32_t *)(s_video_pixels + (size_t)(snes->vPos - 1) * s_video_pitch));
+        if(s_measure_custom_frame) s_custom_frame_ms+=(SDL_GetPerformanceCounter()-custom_t0)*s_perf_clock_ms;
+      }
       /* Blank the margins when nothing is entitled to draw there.
        *
        * Clamping only governs the four backgrounds on the MAIN screen. The
@@ -1158,6 +1168,7 @@ static void handle_pos_stuff(void) {
         for (int x = s_video_w - s_ws_extra; x < s_video_w; x++) dst[x] = src[x];
       }
       g_snes_ppu_dbg_layer_mask = 0xff;
+      if(s_perf_detail) s_perf_raster_ms+=(SDL_GetPerformanceCounter()-raster_t0)*s_perf_clock_ms;
     }
     if (snes->vPos == 0) {
       /* The title sign's own entries, before anything reads OAM this frame.
@@ -2479,10 +2490,12 @@ static ScPowerRefresh s_power_refresh;
 static bool s_native_power_active;
 static int s_population_game_speed=-1;
 static unsigned s_population_clock_cells;
+static unsigned s_map_cycle_remainder; /* fractional spatial work, below two master clocks */
 static void reset_refresh_clocks(void) {
   ScRefreshClockReset(&s_population_clock,200);
   ScPowerRefreshReset(&s_power_refresh);
   s_native_power_active=false; s_population_game_speed=-1;s_population_clock_cells=0;
+  s_map_cycle_remainder=0;
 }
 static int s_pop_override = -1;
 static void population_saved_city(bool save);
@@ -3516,7 +3529,7 @@ static bool run_one_frame(void) {
   if (s_population_game_speed!=g_ram[0x193] || s_population_clock_cells!=population_cells) {
     s_population_game_speed=g_ram[0x193];
     s_population_clock_cells=population_cells;
-    ScRefreshClockReset(&s_population_clock,(s_population_game_speed==0?800:s_population_game_speed==1?400:200)*(population_cells/12000));
+    ScRefreshClockReset(&s_population_clock,s_population_game_speed==0?800:s_population_game_speed==1?400:200);
   }
   bool population_due=ScRefreshClockDue(&s_population_clock,s_frames,s_development_speed);
   if (s_development_speed<=1 || !s_rom_is_us || s_pop_override>=0) s_population.live=false;
@@ -4084,14 +4097,20 @@ static bool run_one_frame(void) {
     }
     const bool development_work = cpu->k == 3 && s_development.repeating &&
       !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i);
+    const uint32_t executed_pc=((uint32_t)cpu->k<<16)|cpu->pc;
+    const bool interrupt_work=cpu->nmiWanted || (cpu->irqWanted && !cpu->i);
     ScWorldGuestBegin(&s_world_guest, &s_world, cpu, g_snes->cart->rom, g_snes->cart->romSize);
-    int cyc = interp816_runOpcode(cpu);
+    unsigned fast_cycles=s_rom_fnv==SC_ROM_FNV_US?ScWorldGuestFastStep(&s_world,cpu,g_ram,g_snes->cart->rom,g_snes->cart->romSize):0;
+    if(fast_cycles) ++s_perf_spatial_cells;
+    int cyc = fast_cycles?fast_cycles:interp816_runOpcode(cpu);
     /* Extra development attempts are host work, like the native map
      * generator. They do not advance the SNES beam, audio clock or calendar
      * cadence. The original attempt and final PLD/RTS retain normal timing. */
     if (development_work) continue;
     if (cyc <= 0) cyc = 1;
     int master = cyc * 8;
+    if (s_rom_fnv==SC_ROM_FNV_US && !interrupt_work)
+      master=ScWorldGuestMasterCycles(&s_world,executed_pc,master,&s_map_cycle_remainder);
     g_master_cycles += (uint64_t)master;
     for (int i = 0; i < master; i += 2) handle_pos_stuff();
     snes->apuCatchupCycles += (double)master * kApuCyclesPerMaster;
@@ -7102,8 +7121,10 @@ static void commit_mouse_construction(void) {
   if (r != SC_BUILD_OK) g_ram[5] = 2; /* The game's normal reject sound. */
 }
 static void refresh_fast_power(bool bitmap_available) {
+  uint64_t power_t0=s_perf_detail?SDL_GetPerformanceCounter():0;
   bool solved=ScPowerRefreshStep(&s_power_refresh,g_ram,&s_world,g_snes->cart->rom,
       g_snes->cart->romSize,s_frames,s_development_speed,bitmap_available && !s_native_power_active);
+  if(s_perf_detail) s_perf_power_ms+=(SDL_GetPerformanceCounter()-power_t0)*s_perf_clock_ms;
   if (solved && getenv("SC_POWER_DIAG"))
     fprintf(stderr,"[power refresh] frame %llu speed %d native period %.1f frames\n",
         (unsigned long long)s_frames,s_development_speed,s_power_refresh.clock.budget/2.0);
@@ -9771,6 +9792,7 @@ int main(int argc, char **argv) {
    * guest emulation, texture upload and draw, the pacing sleep, and the
    * present. Average and worst frame, in ms. */
   const bool perf_on = getenv("SC_PERF") != NULL;
+  s_perf_detail=perf_on;s_perf_clock_ms=1000.0/SDL_GetPerformanceFrequency();
   enum { kPerfInput, kPerfEmu, kPerfAudio, kPerfDraw, kPerfSleep, kPerfPresent,
          kPerfCount };
   double perf_sum[kPerfCount] = {0}, perf_max[kPerfCount] = {0};
@@ -9780,6 +9802,10 @@ int main(int argc, char **argv) {
     const double _ms = (double)((t1) - (t0)) * perf_ms; \
     perf_sum[slot] += _ms; if (_ms > perf_max[slot]) perf_max[slot] = _ms; } } while (0)
   uint64_t fps_window_frames = 0;
+  uint64_t fps_guest_frames=0;
+  double full_frame_ms=8.0,extra_frame_ms=6.0;
+  /* Recorded equivalent of holding Tab, for dummy-SDL pacing checks. */
+  const bool test_fast_forward=getenv("SC_FAST_FORWARD")!=NULL;
   /* Manual frame pacer, replacing vsync (see the renderer-creation comment
    * above): target the SNES's real ~60.0988fps, sleeping off any leftover
    * budget each loop iteration instead of blocking on a potentially-broken
@@ -10389,13 +10415,9 @@ int main(int argc, char **argv) {
     apply_freezes();
     g_snes->input1_currentState |= input;
 
-    /* Fast-forward: hold Tab to simulate several SNES frames per rendered/
-     * presented frame instead of just one. Only the last of the batch's
-     * audio gets queued (skipping the rest, rather than speeding it up or
-     * garbling it) and only its video is presented -- the frame pacer
-     * below still targets normal 60fps, so this is a real Nx speed-up in
-     * game-time per real second, not just a faster/choppier render. Held, and
-     * only held -- nothing applies it automatically any more. */
+    /* Held Tab runs up to six guest frames within the display's time budget.
+     * Draw the last expanded image and play its audio; retain full guest
+     * input, PPU, APU and calendar work in the intermediate frames. */
     /* DRAG TURBO: run extra guest frames while a mouse button is held.
      *
      * The cursor and the map scroll are not slow because their routines are
@@ -10421,8 +10443,11 @@ int main(int argc, char **argv) {
      * turbos both existed to collapse waits; the decompiled generator removes
      * the one that mattered, and the other was advancing the simulation during
      * ordinary play. Only explicit held gestures remain. */
-    bool fast_forward = keys[SDL_SCANCODE_TAB];
+    bool fast_forward = keys[SDL_SCANCODE_TAB] || test_fast_forward;
+    s_measure_custom_frame=fast_forward;
     int frames_this_iter = fast_forward ? 6 : (dragging ? s_drag_turbo : 1);
+    const uint64_t batch_t0=SDL_GetPerformanceCounter();
+    const double frame_budget_ms=kTargetFrameSeconds*1000.0-2.0;
 
     /* SC_FRAME_TIME=<ms threshold>: log (rate-limited, 500 hits) wall-clock
      * time for any run_one_frame() call slower than the threshold -- there's
@@ -10443,6 +10468,16 @@ int main(int argc, char **argv) {
     bool guard_tripped = false;
     if (!s_menu_open) {
       for (int ffi = 0; ffi < frames_this_iter; ffi++) {
+        /* Reserve a fully drawn final frame. Tab uses spare display time,
+         * rather than requiring six frames regardless of city workload.
+         * Intermediate frames retain native PPU/APU timing and sprite
+         * evaluation, but omit the host's expanded image composition. */
+        double spent_ms=(SDL_GetPerformanceCounter()-batch_t0)*s_perf_clock_ms;
+        bool final_frame=ffi+1==frames_this_iter ||
+            (fast_forward && spent_ms+extra_frame_ms+full_frame_ms>frame_budget_ms);
+        s_skip_custom_frame=fast_forward && !final_frame;
+        s_custom_frame_ms=0;
+        uint64_t guest_t0=SDL_GetPerformanceCounter();
         if (mouse_target_valid && !s_fast_cursor_enabled) {
           g_ram[0x01eb] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_x<0?0:mouse_target_x>255?255:mouse_target_x);
           g_ram[0x01ed] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_y<0?0:mouse_target_y>223?223:mouse_target_y);
@@ -10453,6 +10488,19 @@ int main(int argc, char **argv) {
           guard_tripped = true;
           break;
         }
+        ++fps_guest_frames;
+        double guest_ms=(SDL_GetPerformanceCounter()-guest_t0)*s_perf_clock_ms;
+        double *estimate=s_skip_custom_frame?&extra_frame_ms:&full_frame_ms;
+        /* React immediately to an expensive simulation phase; recover the
+         * boost gradually when it ends, rather than oscillating into hitches. */
+        *estimate=guest_ms>*estimate?guest_ms:*estimate*0.9+guest_ms*0.1;
+        if(fast_forward && !s_skip_custom_frame) {
+          /* Refresh the skipped-frame estimate even at 1x. Otherwise an
+           * expensive phase could leave Tab stuck at 1x after it finishes. */
+          double skipped_ms=guest_ms-s_custom_frame_ms;
+          extra_frame_ms=skipped_ms>extra_frame_ms?skipped_ms:extra_frame_ms*0.9+skipped_ms*0.1;
+        }
+        if(final_frame) {frames_this_iter=ffi+1;break;}
         /* Extra fast-forward frames still need input re-armed exactly like
          * the top of this loop does every iteration: apply_frame_input()
          * resets input1_currentState to 0 (or any scripted qualify-mode
@@ -10464,6 +10512,7 @@ int main(int argc, char **argv) {
         }
       }
     }
+    s_skip_custom_frame=false;
     if (guard_tripped) break;
     const uint64_t emu_t1 = perf_on ? SDL_GetPerformanceCounter() : 0;
     SC_PERF_ADD(kPerfEmu, frame_t0, emu_t1);
@@ -10543,6 +10592,10 @@ int main(int argc, char **argv) {
       int wantN = (int)audio_acc;
       Dsp *dsp = g_snes->apu->dsp;
       uint32_t available = dsp->sampleWrite - dsp->sampleRead;
+      if(frames_this_iter>1 && wantN>0 && available>(uint32_t)wantN) {
+        dsp_trimSamples(dsp,(uint32_t)wantN);
+        available=dsp->sampleWrite-dsp->sampleRead;
+      }
       /* dsp_getSamples() takes exactly as many native samples as it is
        * asked for, and never more than exist (runner/src/snes/dsp.c). */
       static uint64_t s_audio_dbg_queued, s_audio_dbg_calls, s_audio_dbg_fails;
@@ -10686,6 +10739,8 @@ int main(int argc, char **argv) {
          * reaches this loop at all, so a capture of any host overlay has to
          * come from a real windowed run, and it should not outstay it. */
         quit = true;
+        const char *state_path=getenv("SC_RENDER_STATE_PATH");
+        if (state_path && *state_path) save_state(state_path);
         if (write_renderer_ppm(renderer, path))
           fprintf(stderr, "[SC_RENDER_DUMP] wrote %s at frame %llu\n", path,
                   (unsigned long long)s_frames);
@@ -10769,8 +10824,11 @@ int main(int argc, char **argv) {
                                  (double)SDL_GetPerformanceFrequency();
     if (fps_window_elapsed >= 1.0) {
       char title[128];
-      snprintf(title, sizeof(title), "Urban Recomp -- %.1f fps",
-               (double)fps_window_frames / fps_window_elapsed);
+      double boost=fps_window_frames?(double)fps_guest_frames/fps_window_frames:1.0;
+      if(fast_forward) snprintf(title,sizeof(title),"Urban Recomp -- %.1f fps (Tab %.1fx)",
+          (double)fps_window_frames/fps_window_elapsed,boost);
+      else snprintf(title, sizeof(title), "Urban Recomp -- %.1f fps",
+          (double)fps_window_frames / fps_window_elapsed);
       SDL_SetWindowTitle(window, title);
       if (perf_on && perf_frames) {
         static const char *const kPerfName[kPerfCount] = {
@@ -10780,10 +10838,13 @@ int main(int argc, char **argv) {
           fprintf(stderr, "  %s %.2f/%.2f", kPerfName[k], perf_sum[k] / perf_frames, perf_max[k]);
           perf_sum[k] = perf_max[k] = 0;
         }
-        fputc('\n', stderr);
+        fprintf(stderr,"  raster %.2f power %.2f spatial %llu boost %.2fx\n",s_perf_raster_ms/perf_frames,
+            s_perf_power_ms/perf_frames,(unsigned long long)s_perf_spatial_cells,boost);
+        s_perf_raster_ms=s_perf_power_ms=0;s_perf_spatial_cells=0;
         perf_frames = 0;
       }
       fps_window_frames = 0;
+      fps_guest_frames=0;
       fps_window_start = SDL_GetPerformanceCounter();
     }
   }

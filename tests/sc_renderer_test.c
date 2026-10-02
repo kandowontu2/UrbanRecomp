@@ -504,6 +504,28 @@ int main(void) {
     word(ram,0x10200+2*(12*120+16),0x27c);ScRendererResetHistory(&r);
     for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(r.pixels[96*256+128]==0xff00ff00);
+    /* Huge's newly zoned buildings must warn without any cached BG1 tile,
+     * in both the native core and the extended viewport. CHR changes retain
+     * the authentic blinking animation; power clears it on the next frame. */
+    p->cgram[65]=31;
+    large=calloc(1,sizeof *large);assert(large);large->active=large->huge=true;r.world=large;
+    assert(ScRendererResize(&r,(ScViewport){448,224,0,0,1}));
+    memset(p->vram+0x4000,0,1024*sizeof(uint16_t));
+    word(ram,0x1bd,420);word(ram,0x1bf,360);
+    rom[0x184eb+0x13b]=1;word(rom,0x156a9+0x13b*2,0x10);
+    word(large->tiles,2*(370*480+435),0x13b);word(large->tiles,2*(370*480+460),0x13b);
+    ScRendererResetHistory(&r);memcpy(before,p,sizeof *p);
+    for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+    assert(r.pixels[87*448+128]==0xffff0000 && r.pixels[87*448+328]==0xffff0000);
+    assert(!memcmp(before,p,sizeof *p));
+    for(int y=0;y<8;++y) p->vram[0x376*16+y]=0;
+    for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+    assert(r.pixels[87*448+128]==0xff00ff00 && r.pixels[87*448+328]==0xff00ff00);
+    for(int y=0;y<8;++y) p->vram[0x376*16+y]=0xff;
+    word(large->tiles,2*(370*480+435),0x813b);word(large->tiles,2*(370*480+460),0x27c);
+    for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+    assert(r.pixels[87*448+128]==0xff00ff00 && r.pixels[87*448+328]==0xff00ff00);
+    free(large);r.world=NULL;
     ScRendererDestroy(&r); free(p); free(before); free(ram); free(rom);
     puts("PASS: tile flips, overlays, map bounds, native pixels, tall/wide surfaces and PPU immutability");
     return 0;

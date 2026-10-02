@@ -9,6 +9,114 @@ static void nz(Interp816 *c,unsigned v,bool byte) {
 }
 static unsigned big_dimension(uint32_t pc);
 static unsigned dimension(const ScWorld *w,uint32_t pc);
+unsigned ScWorldGuestMasterCycles(const ScWorld *w,uint32_t pc,
+                                  unsigned master,unsigned *remainder) {
+    if (!w || !w->active || (pc>>16)!=3) return master;
+    unsigned p=pc&65535;
+    /* Verified US spatial loops: tile sweep and transport, traffic decay,
+     * zone handlers, density/land value/crime, coverage and power flood.
+     * Exclude the simulation dispatcher ($8000), demand ($90a7), budgets,
+     * disasters and the redraw wait ($ae1c), which must keep normal time. */
+    bool spatial=(p>=0x821d && p<0x88b4) ||
+        (p>=0x88f3 && p<0x90a7) || (p>=0x90c5 && p<0xa2f5) ||
+        (p>=0xa493 && p<0xae1c) || (p>=0xafb0 && p<0xb42f);
+    if (!spatial) return master;
+    unsigned area=ScWorldCells(w)/12000;
+    unsigned total=master+*remainder;
+    unsigned elapsed=(total/(2*area))*2;
+    *remainder=total-elapsed*area;
+    return elapsed;
+}
+static unsigned stencil_add(unsigned *sum,unsigned value,unsigned dp,bool carry_branch) {
+    unsigned old=*sum&255;
+    *sum+=value;
+    unsigned cycles=7; /* CLC, ADC long,X */
+    if (carry_branch) cycles+=old+value>255?7+dp:3; /* BCC / INC dp */
+    return cycles;
+}
+unsigned ScWorldGuestFastStep(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t *rom,size_t size) {
+    if (!w || !w->active || c->k!=3 || c->db!=3 || c->xf || c->d || c->e ||
+        c->nmiWanted || (c->irqWanted && !c->i)) return 0;
+    if(c->pc==0x9dca && (c->a&1023)<0x28) {
+        unsigned tile=c->a&1023,dp=(c->dp&255)!=0;
+        c->mf=false;c->a=tile;nz(c,tile,false);
+        if(tile) {
+            unsigned old=word(r,c->dp+0x22),value=old+15;
+            c->a=(uint16_t)value;c->c=value>65535;
+            c->v=((old^value)&(15^value)&32768)!=0;
+            put(r,c->dp+0x22,value);nz(c,value,false);
+        }
+        c->pc=0x9e0b;c->cyclesUsed=3;
+        return tile?27+2*dp:9;
+    }
+    if((c->pc==0x82ae || c->pc==0x9af7) && c->sp && rom && size>=0x188eb) {
+        bool sweep=c->pc==0x82ae;
+        unsigned x=sweep?(w->huge?w->scan_x:r[0xb85]):word(r,c->dp+0x10);
+        unsigned y=sweep?(w->huge?w->scan_y:r[0xb86]):word(r,c->dp+0x12);
+        if(!ScWorldContains(w,x,y)) return 0;
+        unsigned offset=2*(y*ScWorldWidth(w)+x),raw=ScWorldCell(w,x,y),tile=raw&1023;
+        unsigned property=rom[0x184eb+tile],dp=(c->dp&255)!=0;
+        unsigned crossed=tile>=0x15;
+        if(sweep?(!c->mf && tile<64 && !(property&0x71) && word(r,c->dp)==(uint16_t)offset):!(property&1)) {
+            w->map_anchor=offset;put(r,0xb3f,x*2);put(r,0xb3d,y*32);put(r,0xb89,tile);
+            c->mf=false;c->x=(uint16_t)offset;c->y=tile;c->a=0;
+            /* JSR leaves its return bytes in WRAM after RTS. */
+            put(r,(uint16_t)(c->sp-1),sweep?0x8340:0x9b00);
+            if(!sweep) {
+                c->c=offset>65535;nz(c,0,false);c->pc=0x9b5a;c->cyclesUsed=3;
+                return 48+2*dp+crossed;
+            }
+            put(r,0xb49,offset);put(r,0xb87,raw);put(r,c->dp,offset+2);c->x=(uint16_t)(offset+2);
+            unsigned counter=0,cycles=147+3*dp+4*crossed+7;
+            if(!tile) {counter=0xe27;cycles+=2+8+3; c->c=false;}
+            else {
+                cycles+=3+3+(tile<0x26?3:2);
+                if(tile>=0x26) {cycles+=3+(tile>=0x28?3:2);if(tile<0x28) {counter=0xe23;cycles+=8+3;}}
+                if(!counter) {
+                    cycles+=3+(tile<0x14?3:2);
+                    if(tile>=0x14) {cycles+=3+(tile>=0x26?3:2);if(tile<0x26) {counter=0xe25;cycles+=8+3;}}
+                    if(!counter) {c->a=property&8;cycles+=5+crossed+3+(c->a?2:3);if(c->a) {counter=0xe29;cycles+=8;}}
+                }
+                c->c=tile>=0x28;
+            }
+            if(counter) {unsigned value=(word(r,counter)+1)&65535;put(r,counter,value);nz(c,value,false);}
+            else nz(c,c->a,false);
+            c->pc=0x8341;c->cyclesUsed=6;
+            return cycles+6;
+        }
+        return 0;
+    }
+    if((c->pc!=0xa04a && c->pc!=0xa0d0) || !c->mf) return 0;
+    unsigned width=ScWorldFieldWidth(w,13),height=ScWorldFieldHeight(w,13);
+    unsigned x=word(r,c->dp),y=word(r,c->dp+2),i=y*width+x;
+    if(x>=width || y>=height || c->x!=i) return 0;
+    const uint8_t *source=w->fields[c->pc==0xa04a?13:14];
+    uint8_t *dest=w->fields[c->pc==0xa04a?14:13];
+    unsigned dp=(c->dp&255)!=0,sum=0;
+    /* Same five-point stencil, clipping, scratch bytes, flags and cycle
+     * cost as $a04a..$a09e / $a0d0..$a124. One cell stays interruptible. */
+    unsigned cycles=(3+dp)+2+(4+dp)+(x?2:3);
+    if(x) cycles+=stencil_add(&sum,source[i-1],dp,false);
+    cycles+=3+(x+1<width?2:3);
+    if(x+1<width) cycles+=stencil_add(&sum,source[i+1],dp,true);
+    cycles+=(4+dp)+(y?2:3);
+    if(y) cycles+=stencil_add(&sum,source[i-width],dp,true);
+    cycles+=3+(y+1<height?2:3);
+    if(y+1<height) cycles+=stencil_add(&sum,source[i+width],dp,true);
+    unsigned old=sum&255;
+    cycles+=stencil_add(&sum,source[i],dp,true);
+    c->v=((old^(sum&255))&(source[i]^(sum&255))&128)!=0;
+    put(r,c->dp+4,sum);
+    unsigned value=sum/4;
+    cycles+=(3+dp)+3+(4+dp)+4+3+(value<250?3:5)+3+5;
+    c->c=value>=250;
+    nz(c,value<250?(uint16_t)(value-250):250,false);
+    if(value>250) value=250;
+    dest[i]=(uint8_t)value;c->a=value;c->y=y;
+    c->pc=c->pc==0xa04a?0xa09f:0xa125;
+    c->cyclesUsed=5; /* final native STA long,X */
+    return cycles;
+}
 static int lift(int low,int reference,int modulus) {
     int delta=(low-reference)%modulus;
     if(delta>modulus/2) delta-=modulus;

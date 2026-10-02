@@ -8,12 +8,18 @@
 #include <string.h>
 static uint8_t ram[0x20000],before[0x20000],rom[0x80000];
 static ScPowerRefresh power;
+static ScWorld world;
 static void put(unsigned p,unsigned v) {ram[p]=(uint8_t)v;ram[p+1]=(uint8_t)(v>>8);}
 static unsigned word(unsigned p) {return ram[p]|ram[p+1]<<8;}
 static void build(unsigned tool,int x,int y) {
     ScBuildPlan plan; unsigned cost;
     assert(ScConstructionPlan(&plan,tool,x,y,x,y));
     assert(ScConstructionCommit(ram,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
+}
+static void build_world(unsigned tool,int x,int y) {
+    ScBuildPlan plan;unsigned cost;
+    assert(ScConstructionPlanWorld(&plan,&world,tool,x,y,x,y));
+    assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
 }
 int main(int argc,char **argv) {
     assert(argc==2); FILE *f=fopen(argv[1],"rb");assert(f);
@@ -56,5 +62,20 @@ int main(int argc,char **argv) {
         ScPowerRefreshStep(&power,ram,NULL,rom,sizeof rom,201/speeds[i],speeds[i],true);
         assert(memcmp(before+0x1a598,ram+0x1a598,1500));
     }
-    puts("PASS: native-relative speed ratios, fractional cadence, nuclear-first connection, and in-flight bitmap ownership");
+    for(unsigned map_size=0;map_size<2;++map_size) for(unsigned i=0;i<4;++i) {
+        memset(ram,0,sizeof ram);put(0xb9d,60000);ram[0x193]=2;
+        ScWorldReset(&world);world.active=true;world.huge=map_size==1;
+        int x=world.huge?440:200,y=world.huge?370:180;
+        build_world(14,x,y);build_world(5,x+5,y);
+        ScPowerRefreshReset(&power);
+        assert(ScPowerRefreshStep(&power,ram,&world,rom,sizeof rom,0,speeds[i],true));
+        assert(ScWorldCell(&world,x+1,y+1)&0x8000);
+        assert(!(ScWorldCell(&world,x+6,y+1)&0x8000));
+        build_world(3,x+4,y+1);
+        for(unsigned frame=1;frame<200/(unsigned)speeds[i];++frame)
+            assert(!ScPowerRefreshStep(&power,ram,&world,rom,sizeof rom,frame,speeds[i],true));
+        assert(ScPowerRefreshStep(&power,ram,&world,rom,sizeof rom,200/speeds[i],speeds[i],true));
+        assert(ScWorldCell(&world,x+6,y+1)&0x8000);
+    }
+    puts("PASS: native-relative speed ratios on every map size, fractional cadence, nuclear-first connection, and in-flight bitmap ownership");
 }

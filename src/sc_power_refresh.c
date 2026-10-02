@@ -13,7 +13,7 @@ void ScPowerRefreshReset(ScPowerRefresh *s) {
 static void game_speed(ScPowerRefresh *s,int speed) {
     if (s->game_speed==speed) return;
     s->game_speed=speed;
-    ScRefreshClockReset(&s->clock,normal_initial(speed)*(s->clock_cells/12000));
+    ScRefreshClockReset(&s->clock,normal_initial(speed));
 }
 void ScPowerRefreshObserve(ScPowerRefresh *s,uint64_t frame,int speed) {
     game_speed(s,speed); ScRefreshClockObserve(&s->clock,frame);
