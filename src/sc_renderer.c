@@ -238,6 +238,7 @@ static void object_row(const ScRenderer *r,const Ppu *p,int y,uint16_t *pixels) 
     int first=PPU_objPriority(p) ? (p->oamaddl&0xfe)/2 : 0;
     for (int rank=127;rank>=0;--rank) {
         int slot=(first+rank)&127;
+        if (r->city_input && (r->pointer_active || r->split_hud) && slot<4) continue; /* composed once at the host endpoint */
         if (r->pan_frame && slot>=39 && slot<=52 && slot!=50) continue;
         if (!r->object_grace[slot]) continue; /* parked HUD/cursor copies */
         /* Row 0 is on line Y, as the PPU draws it (it evaluates a line's
@@ -791,35 +792,94 @@ static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
         out[x]=composite_color(p,samples[0],owners[0],samples[1],owners[1],x);
     }
 }
-static void city_pointer(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
-    if (!r->pointer_active || !r->city_input || r->advisor_frame || r->map_hold) return;
-    int wx,wy;
-    if (!ScRendererCityPoint(r,ram,r->pointer_x,r->pointer_y,&wx,&wy)) return;
-    /* OAM can lag the RAM pointer while the simulation owns the guest CPU.
-     * Anchor to the emitted corner, not to that newer pointer byte. */
-    int dx=wx*8-r->scroll_x-r->scroll_adjust_x-3-sprite_x(p,0);
-    int dy=wy*8-r->scroll_y-r->scroll_adjust_y-5-(p->oam[0]>>8);
-    /* Reuse the live four-piece construction cursor. Its native byte-sized
-     * position is only a proxy; clear that copy and move the sprites across
-     * the host canvas without changing OAM or the game's camera. */
-    for (int slot=0;slot<4;++slot) {
-        int ox=sprite_x(p,slot),oy=(p->oam[slot*2]>>8)-1;
-        if (ox>=256) ox-=512;
-        for (int y=0;y<8;++y) for (int x=0;x<8;++x) {
-            unsigned ci=sprite_pixel(p,slot,x,y);
-            int ax=r->view.core_x+ox+x,ay=r->view.core_y+oy+y;
-            if (ci && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
-                r->pixels[(size_t)ay*r->view.width+ax]=bare_city_pixel(r,p,ram,ox+x,oy+y);
+/* Restore the scene underneath OAM's proxy cursor, including toolbar layers
+ * and vehicles. objBuffer cannot be reused here: its winning pixel can be
+ * the cursor itself. Resolve the remaining OAM slots in native priority order. */
+static uint32_t without_pointer(const ScRenderer *r,const Ppu *p,const uint8_t *ram,int x,int y) {
+    int sx=r->scroll_x+r->scroll_adjust_x,sy=r->scroll_y+r->scroll_adjust_y;
+    unsigned ci=cell_pixel(r,p,ram,sx+x,sy+y+1,false);
+    unsigned over=cell_pixel(r,p,ram,sx+x+8,sy+y+9,true);
+    if (over) ci=over;
+    unsigned obj=0,attr=0;
+    int first=PPU_objPriority(p)?(p->oamaddl&0xfe)/2:0;
+    for (int i=0;i<128;++i) {
+        int slot=(first+i)&127;
+        if (slot<4 || (r->pan_frame && slot>=39 && slot<=52 && slot!=50)) continue;
+        int ox=sprite_x(p,slot); if (ox>=256) ox-=512;
+        obj=sprite_pixel(p,slot,x-ox,(y-(p->oam[slot*2]>>8))&255);
+        if (obj) { attr=p->oam[slot*2+1]; break; }
+    }
+    unsigned samples[2]={0,0}; int owners[2]={5,5};
+    for (int sub=0;sub<2;++sub) {
+        unsigned rank=0;
+        if ((p->screenEnabled[sub]&2) && (!(p->screenWindowed[sub]&2) || !window_contains(p,1,x))) {
+            samples[sub]=ci; owners[sub]=ci?1:5; rank=ci?(over?11:7):0;
+        }
+        for (int layer=0;layer<=2;layer+=2) {
+            if (layer==0 && stale_power_warning(r,p,ram,x,y,sx,sy)) continue;
+            if (!(p->screenEnabled[sub]&(1<<layer)) ||
+                ((p->screenWindowed[sub]&(1<<layer)) && window_contains(p,layer,x))) continue;
+            bool high=false;
+            unsigned pixel=bg_sample(p,layer,x,y+1,&high);
+            unsigned z=layer==0?(high?12:8):(high?(PPU_bg3priority(p)?15:3):1);
+            if (pixel && z>rank) { samples[sub]=pixel; owners[sub]=layer; rank=z; }
+        }
+        if (obj && 2+4*((attr>>12)&3)>rank && (p->screenEnabled[sub]&16) &&
+            (!(p->screenWindowed[sub]&16) || !window_contains(p,4,x))) {
+            samples[sub]=obj; owners[sub]=obj<192?6:4;
         }
     }
-    for (int slot=3;slot>=0;--slot) {
-        int ox=sprite_x(p,slot),oy=(p->oam[slot*2]>>8)-1;
+    return composite_color(p,samples[0],owners[0],samples[1],owners[1],x);
+}
+static void city_pointer(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
+    if (!r->city_input || r->advisor_frame || r->map_hold) return;
+    int wx=0,wy=0;
+    bool land=r->pointer_active && ScRendererCityPoint(r,ram,r->pointer_x,r->pointer_y,&wx,&wy);
+    if (!land && !r->split_hud) return;
+    /* Move the entire UI cursor as one group, including rows below the HUD.
+     * The ROM's hand is a 16px sprite; construction corners are 8px sprites. */
+    int shift=r->split_hud && sprite_x(p,0)>=144 && sprite_x(p,0)<256 &&
+        (p->oam[0]>>8)<46?right_shift(r):0;
+    if (land || shift) for (int slot=0;slot<4;++slot) {
+        int ox=sprite_x(p,slot); if (ox>=256) ox-=512;
+        for (int y=0;y<224;++y) {
+            if (r->split_hud && y<46) continue; /* header already rebuilt */
+            int row=(y-(p->oam[slot*2]>>8))&255;
+            if (row>=64) continue;
+            for (int x=0;x<64;++x) if (sprite_pixel(p,slot,x,row)) {
+                int source=ox+x,ax=r->view.core_x+source,ay=r->view.core_y+y;
+                if (source>=0 && source<256 && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
+                    r->pixels[(size_t)ay*r->view.width+ax]=without_pointer(r,p,ram,source,y);
+            }
+        }
+    }
+    ScSelSprite sprites[8]; int count=0;
+    if (land) {
+        /* OAM can still contain the HUD hand or parked corners on the first
+         * land frame. Get the selected tool's authentic outline from ROM. */
+        unsigned tool=u16(ram,0x20d);
+        if (tool>14) return;
+        unsigned record=rom_read(r,0x018000+tool*2)|(rom_read(r,0x018001+tool*2)<<8);
+        count=ScSelector_Record(record,wx*8-r->scroll_x-r->scroll_adjust_x,
+            wy*8-r->scroll_y-r->scroll_adjust_y,sprites,8,rom_read,r);
+    } else for (int slot=0;slot<4;++slot) {
+        int ox=sprite_x(p,slot);
         if (ox>=256) ox-=512;
-        for (int y=0;y<8;++y) for (int x=0;x<8;++x) {
-            unsigned ci=sprite_pixel(p,slot,x,y);
-            int ax=r->view.core_x+ox+x+dx,ay=r->view.core_y+oy+y+dy;
+        int index=slot*2;
+        sprites[count++]=(ScSelSprite){ox+shift,p->oam[index]>>8,
+            p->oam[index+1]&255,p->oam[index+1]>>8,
+            ((p->highOam[index/8]>>(index%8+1))&1)!=0,false};
+    }
+    for (int slot=count-1;slot>=0;--slot) {
+        ScSelSprite *s=&sprites[slot];
+        int size=sprite_sizes[PPU_objSize(p)][s->large?1:0];
+        /* Parked native pieces must stay outside the native rectangle. */
+        if (!land && (s->x-shift+size<=0 || s->x-shift>=256)) continue;
+        for (int y=0;y<size;++y) for (int x=0;x<size;++x) {
+            unsigned ci=sprite_word_pixel(p,s->tile|(s->attr<<8),size,x,y);
+            int ax=r->view.core_x+s->x+x,ay=r->view.core_y+(land?s->y+y:(s->y+y)&255);
             if (ci && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
-                r->pixels[(size_t)ay*r->view.width+ax]=composite_color(p,ci,ci<192?6:4,0,5,ox+x);
+                r->pixels[(size_t)ay*r->view.width+ax]=composite_color(p,ci,ci<192?6:4,0,5,s->x+x);
         }
     }
 }
@@ -890,12 +950,13 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
         /* Date/menu sprites stay at the left; RCI and financial sprites move
          * together. Capture no terrain from behind the native status text. */
         for (int slot=71;slot>=0;--slot) {
+            if (slot<4 && r->city_input) continue;
             if (slot>33 && slot<64) continue;
             if (population_host_draw(r) && slot>=19 && slot<=26) continue;
             int ox=sprite_x(p,slot),row=(y-(p->oam[slot*2]>>8))&255;
             if (row>=64 || ox>=256) continue;
             int dx=(slot>=4 && slot<=10) || (slot>=19 && slot<=33)?shift:0;
-            if (slot<=3 && ox>=144) dx=shift;
+            if (slot<4 && ox>=144) dx=shift;
             for (int x=0;x<64;++x) {
                 int target=core+ox+x+dx;
                 unsigned ci=sprite_pixel(p,slot,x,row);

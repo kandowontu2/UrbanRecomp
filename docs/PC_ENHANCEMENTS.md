@@ -16,6 +16,16 @@ requirements still apply; faster development also means faster decline when
 those requirements are unmet. This is a multiplier of development attempts,
 not a promise of a particular population increase.
 
+The multiplier applies when the native simulation visits a zone; it does not
+advance a paused city or eliminate the wait for its next simulation sweep.
+Actual growth tests now cover empty RCI zones on Normal, Big and Huge maps,
+including Huge coordinates beyond 255. Under favorable native conditions,
+50 attempts produce developed buildings and population while an unpowered
+zone stays empty. A separate running-city reproduction of 30 powered zones
+in a contiguous, roadless block reached 11,360 population after 6,000 frames
+at X50. This does not establish the cause of another city's stalled growth;
+its simulation state and demand still matter.
+
 Extra attempts run as host work without advancing the guest video/audio clock.
 Calendar, budgets and disasters are not fast-forwarded. Larger cities at X50
 still require more host CPU work and can reduce performance. Normal takes the

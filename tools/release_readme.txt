@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED - 1.2.0 BETA 4
+URBAN RECOMP ENHANCED - 1.2.0 BETA 5
 ===================================
 
 Urban Recomp runs the Super Nintendo city builder SimCity (1991) natively on
@@ -21,6 +21,8 @@ expansion. Buildings and city data are preserved; Journey progress is saved.
 Huge maps now render correctly past the old byte-coordinate boundaries.
 Full-widescreen mouse construction, retained off-screen
 drags, and corrected widescreen HUD/minimap placement. See PC_ENHANCEMENTS.md.
+Cursor transitions now clear every sprite row and keep the whole hand together
+when it crosses from the right-hand HUD into the city.
 These features require the verified clean US ROM and the interpreter build.
 This enhanced build is a prerelease; hands-on gameplay testing is ongoing.
 

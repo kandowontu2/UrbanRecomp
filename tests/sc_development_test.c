@@ -15,7 +15,9 @@ static uint8_t rom[0x80000], ram[0x20000], baseline[0x20000];
 static uint8_t snapshot_ram[0x20000], expected_ram[0x20000];
 static uint16_t product, quotient, dividend;
 static uint8_t multiplicand;
-static bool large;
+static bool large,huge;
+static bool growth_fixture, powered_fixture=true;
+static uint64_t grown_population;
 static ScWorld world,snapshot_world,expected_world;
 static ScWorldGuest guest;
 static uint8_t read_bus(void *ctx,uint32_t a) {
@@ -49,16 +51,38 @@ static void put(unsigned p,unsigned v) { ram[p]=(uint8_t)v; ram[p+1]=(uint8_t)(v
 static unsigned word(unsigned p) { return ram[p]|((unsigned)ram[p+1]<<8); }
 static ScDevelopment run(uint16_t entry,unsigned tile,int speed,bool hook) {
     memset(ram,0,sizeof ram);
-    memset(&guest,0,sizeof guest); ScWorldReset(&world); world.active=large;
+    memset(&guest,0,sizeof guest); ScWorldReset(&world); world.active=large;world.huge=huge;
     /* Powered zone, centered away from map bounds. */
-    unsigned zx=large?200:60,zy=large?180:50;
-    unsigned cell=(zy*(large?240:120)+zx)*2;
+    unsigned zx=huge?300:large?200:60,zy=huge?280:large?180:50;
+    unsigned cell=(zy*(large?ScWorldWidth(&world):120)+zx)*2;
     world.map_anchor=cell;
+    world.coord[2][0]=zx;world.coord[2][1]=zy;
     put(0xb49,cell); ram[0xb85]=zx; ram[0xb86]=zy;
     put(0xb87,0x8000|tile); put(0xb89,tile);
     for (int y=0;y<3;++y) for (int x=0;x<3;++x)
         if (large) ScWorldPutCell(&world,zx+x,zy+y,0x8000|tile);
         else put(0x10200+cell+y*240+x*2,0x8000|tile);
+    if (growth_fixture) {
+        for (int y=0;y<3;++y) for (int x=0;x<3;++x)
+            if (large) ScWorldPutCell(&world,zx+x,zy+y,0);
+            else put(0x10200+cell+y*240+x*2,0);
+        /* A real empty zone's nine tiles, with favorable demand, land value
+         * and road traffic. Test tile changes, not just hook visit counts. */
+        for (int y=-1;y<=1;++y) for (int x=-1;x<=1;++x) {
+            unsigned raw=tile-4+(y+1)*3+x+1;
+            if (powered_fixture) raw|=0x8000;
+            if (large) ScWorldPutCell(&world,zx+x,zy+y,raw);
+            else put(0x10200+cell+y*240+x*2,raw);
+        }
+        put(0xb87,(powered_fixture?0x8000:0)|tile);
+        put(0xbad,2000);put(0xbaf,1500);put(0xbb1,1500);
+        memset(ram+0x16b00,192,3000); /* favorable native growth score */
+        memset(ram+0x18e28,80,3000);  /* allow the native density upgrade */
+        if (large) {
+            memset(world.fields[0],192,ScWorldFieldSizeWorld(&world,0));
+            memset(world.fields[3],80,ScWorldFieldSizeWorld(&world,3));
+        }
+    }
     put(0xb53,1991); put(0xb55,1); put(0xb51,100);
     for (unsigned p=0xccf;p<0xcdd;p+=2) put(p,12345+p);
     put(0x01fe,0x6fff);
@@ -123,9 +147,16 @@ static ScDevelopment run(uint16_t entry,unsigned tile,int speed,bool hook) {
     if (hook) {
         unsigned kind=entry==0x937a?0:entry==0x92ce?1:2;
         const unsigned counters[]={0xb8b,0xb93,0xb8f};
-        assert(tally_hits==1 && population.capacity[kind]==word(counters[kind]));
+        assert(tally_hits==(word(counters[kind])?1u:0u) && population.capacity[kind]==word(counters[kind]));
     }
     interp816_free(cpu);
+    if (growth_fixture) {
+        ScPopulation census={0};
+        assert(ScPopulationRefreshLive(&census,ram,large?&world:NULL,rom,sizeof rom));
+        grown_population=census.value;
+        printf("growth zone=%04x speed=%d powered=%d population=%llu center=%04x\n",entry,speed,powered_fixture,
+            (unsigned long long)grown_population,large?ScWorldCell(&world,zx,zy):word(0x10200+cell));
+    }
     return s;
 }
 int main(int argc,char **argv) {
@@ -151,6 +182,15 @@ int main(int argc,char **argv) {
         ScDevelopment s=run(entries[z],tiles[z],speeds[i],true);
         if (speeds[i]>1) assert(s.attempts==(unsigned)speeds[i] && s.extra_attempts==(unsigned)speeds[i]-1);
     }
-    puts("PASS: stock Normal equivalence, RCI attempts, single tallies, calendar, stack integrity and mid-attempt restoration");
+    growth_fixture=true;
+    const unsigned empty[]={0x84,0x13b,0x1fc};
+    for(int size=0;size<3;++size) for (int z=0;z<3;++z) {
+        large=size>0;huge=size==2;powered_fixture=true;
+        run(entries[z],empty[z],1,true);uint64_t normal=grown_population;
+        run(entries[z],empty[z],50,true);assert(grown_population>normal);
+        powered_fixture=false;
+        run(entries[z],empty[z],50,true);assert(!grown_population);
+    }
+    puts("PASS: stock Normal equivalence, RCI attempts, actual growth and power gating on all map sizes, single tallies, calendar, stack integrity and mid-attempt restoration");
     return 0;
 }

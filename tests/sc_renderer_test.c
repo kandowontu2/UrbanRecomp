@@ -329,16 +329,52 @@ int main(void) {
     /* The cursor follows the real endpoint even if OAM still contains an
      * older byte-sized proxy position. No native sprite or RAM is changed. */
     r.pan_frame=false;
+    word(rom,0x2164,0xa1d3); word(rom,0x21d3,0x111);
+    const uint8_t corners[]={253,251,0,0x30,3,251,0,0x30,
+        253,1,0,0x30,3,1,0,0x30,0};
+    memcpy(rom+0x21d5,corners,sizeof corners);
     p->oam[0]=(91<<8)|141; p->oam[1]=0x3000;
+    p->oam[144]=(91<<8)|141; p->oam[145]=0x3200; /* vehicle behind cursor */
     for (int slot=1;slot<4;++slot) p->oam[slot*2]=(240<<8)|128;
     r.pointer_active=true; r.pointer_x=400; r.pointer_y=100;
     memcpy(before,p,sizeof *p);
-    for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
-    assert(r.pixels[90*448+141]!=0xffff0000);
-    assert(r.pixels[90*448+413]!=0xffff0000); /* old OAM/RAM offset */
-    assert(r.pixels[90*448+397]==0xffff0000); /* tile 96-6, X400-3 */
+    for (int y=0;y<224;++y) {
+        for (int x=0;x<256;++x) native[x]=y>=91 && y<=98 && x>=141 && x<=148?0xffff0000:0xff0000ff;
+        ScRendererLine(&r,p,ram,y,native);
+    }
+    assert(r.pixels[91*448+141]!=0xffff0000);
+    assert(r.pixels[98*448+141]!=0xffff0000); /* clear the last sprite row */
+    assert(r.pixels[98*448+141]==0xff00ff00); /* retain the underlying object */
+    assert(r.pixels[91*448+413]!=0xffff0000); /* old OAM/RAM offset */
+    assert(r.pixels[91*448+397]==0xffff0000); /* tile Y96-5, X400-3 */
     assert(!memcmp(before,p,sizeof *p));
+    p->oam[144]=(240<<8)|128;
+    /* The whole 16px hand crosses the HUD boundary at its relocated X.
+     * Parked corners do not become artifacts when the next frame is land. */
     r.pointer_active=false;
+    p->oam[0]=(43<<8)|146; p->oam[1]=0x3000; p->highOam[0]=2;
+    for (int tile=0;tile<4;++tile) for(int y=0;y<8;++y)
+        p->vram[(tile%2+(tile/2)*16)*16+y]=0xff;
+    for (int slot=1;slot<4;++slot) {
+        p->oam[slot*2]=(120<<8)|230;
+        p->highOam[0]|=1<<(slot*2); /* X486: native hidden pieces */
+    }
+    memcpy(before,p,sizeof *p);
+    for (int y=0;y<224;++y) {
+        for (int x=0;x<256;++x) native[x]=y>=43 && y<=58 && x>=146 && x<=161?0xffff0000:0xff0000ff;
+        ScRendererLine(&r,p,ram,y,native);
+    }
+    assert(r.pixels[43*448+338]==0xffff0000);
+    assert(r.pixels[58*448+353]==0xffff0000);
+    assert(r.pixels[58*448+146]!=0xffff0000);
+    r.pointer_active=true;
+    for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+    assert(r.pixels[91*448+397]==0xffff0000);
+    assert(r.pixels[58*448+146]!=0xffff0000);
+    assert(r.pixels[120*448+230]!=0xffff0000);
+    assert(!memcmp(before,p,sizeof *p));
+    r.pointer_active=false; memset(p->highOam,0,sizeof p->highOam);
+    for (int slot=0;slot<4;++slot) p->oam[slot*2]=(240<<8)|128;
     p->oam[80]=(46<<8)|190; p->oam[81]=0x3166;
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     ScWorld *large=calloc(1,sizeof *large); assert(large); large->active=true; r.world=large;
