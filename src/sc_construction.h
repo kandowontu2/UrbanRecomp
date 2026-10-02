@@ -6,7 +6,7 @@
 #include "sc_world.h"
 
 typedef struct { int x, y; } ScBuildCell;
-enum { SC_BUILD_MAX = SC_WORLD_CELLS };
+enum { SC_BUILD_MAX = SC_WORLD_MAX_CELLS };
 typedef struct {
   unsigned tool, count;
   ScBuildCell cells[SC_BUILD_MAX];

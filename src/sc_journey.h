@@ -10,5 +10,7 @@ void ScJourneyMenuFont(uint16_t *vram);
 void ScJourneyMenuFrame(uint16_t *vram,unsigned map_base);
 bool ScJourneyMenuRead(uint32_t address,unsigned screen,uint8_t *value);
 unsigned ScJourneyMenuY(bool saved,unsigned selection);
+void ScMapSizeMenuSet(bool active);
+bool ScMapSizeMenuActive(void);
 /* Native adviser text is 24 columns, read through the original typewriter. */
 bool ScJourneyMessageRead(unsigned notice,uint32_t address,uint8_t *value);

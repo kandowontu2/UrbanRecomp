@@ -145,7 +145,7 @@ static void find_lights(ScRenderer *r,const Ppu *p) {
 static unsigned cell_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
                            int x,int y,bool overlay) {
     bool large=r->map_hold?r->held_large:r->world && r->world->active;
-    unsigned width=large?(r->map_hold?(r->held_huge?480:240):ScWorldWidth(r->world)):120,height=large?(r->map_hold?(r->held_huge?400:200):ScWorldHeight(r->world)):100;
+    unsigned width=large?(r->map_hold?(r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120,height=large?(r->map_hold?(r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
     if (!r->rom || x<0 || y<0 || (unsigned)x>=width*8 || (unsigned)y>=height*8) return 0;
     unsigned offset_cell=((y/8)*width+x/8)*2;
     const uint8_t *map=large?r->world->tiles:ram+MAP;
@@ -244,7 +244,7 @@ static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
         memcpy(r->held_ppu,p,sizeof *p);
         r->held_x=r->scroll_x+r->scroll_adjust_x;
         r->held_y=r->scroll_y+r->scroll_adjust_y;
-        r->held_large=large; r->held_huge=large && r->world->huge;
+        r->held_large=large; r->held_huge=large && r->world->huge;r->held_giant=large && r->world->giant;
     }
     r->map_valid=true;
 }

@@ -57,7 +57,7 @@ bool ScConstructionPlan(ScBuildPlan *p, unsigned tool, int x0, int y0, int x1, i
 }
 bool ScConstructionPlanWorld(ScBuildPlan *p, const ScWorld *w, unsigned tool,
                              int x0, int y0, int x1, int y1) {
-  memset(p,0,sizeof *p);
+  p->count=0; p->tool=0;
   int width=w && w->active?ScWorldWidth(w):120,height=w && w->active?ScWorldHeight(w):100;
   if (tool>15 || x0<0 || x0>=width || x1<0 || x1>=width ||
       y0<0 || y0>=height || y1<0 || y1>=height) return false;
@@ -69,6 +69,7 @@ bool ScConstructionPlanWorld(ScBuildPlan *p, const ScWorld *w, unsigned tool,
   }
   int step=tool>=5?3:1;
   int nx=abs(x1-x0)/step+1, ny=abs(y1-y0)/step+1;
+  if ((unsigned)nx*(unsigned)ny>SC_BUILD_MAX) return false;
   for (int y=0;y<ny;++y) for (int x=0;x<nx;++x)
     p->cells[p->count++]=(ScBuildCell){x0+x*step*dx,y0+y*step*dy};
   return true;
@@ -170,7 +171,7 @@ bool ScConstructionPowerBitmap(const uint8_t *ram,const ScWorld *w,const uint8_t
   for (int y=0;y<height;++y) for (int x=0;x<width;++x) {
     unsigned tile=(b->world?ScWorldCell(b->world,x,y):word(ram,0x10200+2*(y*width+x)))&1023;
     if (tile!=0x28c && tile!=0x27c) continue;
-    if (plants>=(b->world?20000u:5000u)) { free(b->world); free(b); return false; }
+    if (plants>=(b->world?ScWorldFieldWidth(b->world,17)-1:5000u)) { free(b->world); free(b); return false; }
     if (tile==0x28c) ++coal; else ++nuclear;
     ++plants;
     if (b->world) {

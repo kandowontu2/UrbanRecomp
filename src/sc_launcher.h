@@ -26,7 +26,7 @@ typedef struct ScSettings {
   int widescreen;
   int language;            /* SC_LANG_* */
   int sylt;                /* Sylt as the ninth scenario */
-  int large_maps;          /* new free-play cities: 0 Normal, 1 Big, 2 Huge */
+  int large_maps;          /* new free-play cities: 0 Normal, 1 Big, 2 Huge, 3 960x800 */
 } ScSettings;
 
 extern const char *const kScSettingsPath;

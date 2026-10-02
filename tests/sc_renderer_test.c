@@ -15,7 +15,7 @@ int main(void) {
     /* One red pixel at tile (0,0), one green at (7,7). */
     p->vram[0]=0x0080; p->vram[7]=0x0100;
     for (int i=0;i<958;++i) word(rom,0x14f2d+i*2,0x300);
-    ScRenderer r; ScRendererInit(&r,rom,0x80000,true);
+    static ScRenderer r; ScRendererInit(&r,rom,0x80000,true);
     assert(ScRendererMapPixel(&r,p,ram,0,0)==0xffff0000);
     assert(ScRendererMapPixel(&r,p,ram,7,7)==0xff00ff00);
     /* Live DMA-style updates to either plane pair must invalidate decoded

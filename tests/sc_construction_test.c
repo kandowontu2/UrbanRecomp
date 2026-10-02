@@ -27,6 +27,12 @@ static unsigned build(unsigned tool,int x0,int y0,int x1,int y1) {
 int main(int argc,char **argv) {
   assert(argc==2); FILE *f=fopen(argv[1],"rb"); assert(f);
   assert(fread(rom,1,sizeof rom,f)==sizeof rom); fclose(f);
+  ScWorldReset(&world);world.active=world.huge=world.giant=true;
+  assert(ScConstructionPlanWorld(&plan,&world,0,0,0,959,799));
+  assert(plan.count==768000 && plan.cells[767999].x==959 && plan.cells[767999].y==799);
+  assert(ScConstructionPlanWorld(&plan,&world,4,959,799,0,0));
+  assert(plan.count==768000 && plan.cells[767999].x==0 && plan.cells[767999].y==0);
+  assert(!ScConstructionPlanWorld(&plan,&world,0,0,0,960,799) && !plan.count);
   reset(1000);
   assert(build(1,45,45,52,47)==80); /* Dominant axis: eight road cells. */
   for (int x=45;x<=52;++x) assert(tile(x,45)>=0x30 && tile(x,45)<0x40);
@@ -134,6 +140,29 @@ int main(int argc,char **argv) {
       assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));
       assert(ScWorldCell(&world,461,381)&0x8000);
       assert(ScWorldCell(&world,470,381)&0x8000);
+    }
+  }
+  for(unsigned tool=0;tool<=14;++tool) {
+    reset(100000);ScWorldReset(&world);world.active=world.huge=world.giant=true;
+    if(!tool) ScWorldPutCell(&world,940,780,0x30);
+    assert(ScConstructionPlanWorld(&plan,&world,tool,940,780,940,780));
+    assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK && cost);
+    if(ScWorldCell(&world,172,12)) fprintf(stderr,"960x800 alias tool %u tile %x\n",tool,ScWorldCell(&world,172,12));
+    assert(!ScWorldCell(&world,172,12));
+    if(tool>=5 && tool<=9) for(int y=780;y<783;++y) for(int x=940;x<943;++x)
+      assert((ScWorldCell(&world,x,y)&1023)>=0x80);
+    for(int y=0;y<800;++y) for(int x=0;x<960;++x)
+      if(x<938 || x>948 || y<778 || y>788) {
+        unsigned unexpected=ScWorldCell(&world,x,y);
+        if(unexpected) fprintf(stderr,"960x800 unexpected tool %u at %d,%d: %x\n",tool,x,y,unexpected);
+        assert(!unexpected);
+      }
+    if(tool==14) {
+      assert(ScConstructionPlanWorld(&plan,&world,3,944,781,950,781));
+      assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
+      assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));
+      assert(ScWorldCell(&world,941,781)&0x8000);
+      assert(ScWorldCell(&world,950,781)&0x8000);
     }
   }
   /* A continuous power line crosses both byte-coordinate seams. It must

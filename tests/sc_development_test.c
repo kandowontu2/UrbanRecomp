@@ -15,7 +15,7 @@ static uint8_t rom[0x80000], ram[0x20000], baseline[0x20000];
 static uint8_t snapshot_ram[0x20000], expected_ram[0x20000];
 static uint16_t product, quotient, dividend;
 static uint8_t multiplicand;
-static bool large,huge;
+static bool large,huge,giant;
 static bool growth_fixture, powered_fixture=true;
 static uint64_t grown_population;
 static ScWorld world,snapshot_world,expected_world;
@@ -51,9 +51,9 @@ static void put(unsigned p,unsigned v) { ram[p]=(uint8_t)v; ram[p+1]=(uint8_t)(v
 static unsigned word(unsigned p) { return ram[p]|((unsigned)ram[p+1]<<8); }
 static ScDevelopment run(uint16_t entry,unsigned tile,int speed,bool hook) {
     memset(ram,0,sizeof ram);
-    memset(&guest,0,sizeof guest); ScWorldReset(&world); world.active=large;world.huge=huge;
+    memset(&guest,0,sizeof guest); ScWorldReset(&world); world.active=large;world.huge=huge;world.giant=giant;
     /* Powered zone, centered away from map bounds. */
-    unsigned zx=huge?300:large?200:60,zy=huge?280:large?180:50;
+    unsigned zx=giant?900:huge?300:large?200:60,zy=giant?750:huge?280:large?180:50;
     unsigned cell=(zy*(large?ScWorldWidth(&world):120)+zx)*2;
     world.map_anchor=cell;
     world.coord[2][0]=zx;world.coord[2][1]=zy;
@@ -184,8 +184,8 @@ int main(int argc,char **argv) {
     }
     growth_fixture=true;
     const unsigned empty[]={0x84,0x13b,0x1fc};
-    for(int size=0;size<3;++size) for (int z=0;z<3;++z) {
-        large=size>0;huge=size==2;powered_fixture=true;
+    for(int size=0;size<4;++size) for (int z=0;z<3;++z) {
+        large=size>0;huge=size>=2;giant=size==3;powered_fixture=true;
         run(entries[z],empty[z],1,true);uint64_t normal=grown_population;
         run(entries[z],empty[z],50,true);assert(grown_population>normal);
         powered_fixture=false;

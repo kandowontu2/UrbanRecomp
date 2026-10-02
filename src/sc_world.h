@@ -8,10 +8,10 @@ enum {
     SC_WORLD_WIDTH = 240, SC_WORLD_HEIGHT = 200,
     SC_WORLD_CELLS = SC_WORLD_WIDTH * SC_WORLD_HEIGHT,
     SC_WORLD_TILE_BYTES = SC_WORLD_CELLS * 2,
-    SC_WORLD_MAX_WIDTH = 480, SC_WORLD_MAX_HEIGHT = 400,
+    SC_WORLD_MAX_WIDTH = 960, SC_WORLD_MAX_HEIGHT = 800,
     SC_WORLD_MAX_CELLS = SC_WORLD_MAX_WIDTH * SC_WORLD_MAX_HEIGHT,
     SC_WORLD_MAX_TILE_BYTES = SC_WORLD_MAX_CELLS * 2,
-    SC_WORLD_FIELDS = 19, SC_WORLD_FIELD_BYTES = 48000
+    SC_WORLD_FIELDS = 19, SC_WORLD_FIELD_BYTES = 192000
 };
 typedef struct ScWorldField {
     uint16_t base, stock_width, stock_height, width, height;
@@ -20,6 +20,7 @@ typedef struct ScWorldField {
 typedef struct ScWorld {
     bool active;
     bool huge;
+    bool giant;
     uint16_t scan_x, scan_y;
     uint16_t center_x,center_y;
     bool center_valid;
@@ -29,13 +30,15 @@ typedef struct ScWorld {
     int16_t coord[3][2]; /* full coordinates behind native packed-byte proxies */
     uint32_t map_anchor;
     uint32_t bank_anchor[3]; /* rendering/vehicles cannot replace the sim cursor */
+    uint32_t field_anchor[3], field_scan; /* full indices behind native X */
     uint8_t tiles[SC_WORLD_MAX_TILE_BYTES];
     uint8_t fields[SC_WORLD_FIELDS][SC_WORLD_FIELD_BYTES];
 } ScWorld;
 
 extern const ScWorldField ScWorldFields[SC_WORLD_FIELDS];
-static inline unsigned ScWorldWidth(const ScWorld *w) { return w && w->huge?480:240; }
-static inline unsigned ScWorldHeight(const ScWorld *w) { return w && w->huge?400:200; }
+static inline unsigned ScWorldScale(const ScWorld *w) { return w && w->giant?4:w && w->huge?2:1; }
+static inline unsigned ScWorldWidth(const ScWorld *w) { return 240*ScWorldScale(w); }
+static inline unsigned ScWorldHeight(const ScWorld *w) { return 200*ScWorldScale(w); }
 static inline unsigned ScWorldCells(const ScWorld *w) { return ScWorldWidth(w)*ScWorldHeight(w); }
 static inline bool ScWorldContains(const ScWorld *w,int x,int y) {
     return x>=0 && y>=0 && (unsigned)x<ScWorldWidth(w) && (unsigned)y<ScWorldHeight(w);
@@ -43,6 +46,7 @@ static inline bool ScWorldContains(const ScWorld *w,int x,int y) {
 void ScWorldReset(ScWorld *world);
 void ScWorldGenerate(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateHuge(ScWorld *world, ScMapGenPrng *prng);
+void ScWorldGenerateGiant(ScWorld *world, ScMapGenPrng *prng);
 bool ScWorldBounds(int x, int y);
 uint16_t ScWorldCell(const ScWorld *world, int x, int y);
 bool ScWorldPutCell(ScWorld *world, int x, int y, uint16_t tile);

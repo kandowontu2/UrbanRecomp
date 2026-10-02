@@ -66,6 +66,23 @@ static void menu_test(void) {
         assert(ScJourneyMenuRead(0xfb4c,fades[i],&value));
         assert(!ScJourneyMenuRead(0x03d34c,fades[i],&value));
     }
+    ScMapSizeMenuSet(true);assert(ScMapSizeMenuActive());
+    for(unsigned i=0;i<0x8000;++i) vram[i]=(uint16_t)(i*197+57);
+    memcpy(font,vram,sizeof font);ScJourneyMenuFont(vram);
+    /* MAP SIZE uses four sprites; the next pair is the native tall 1 and 2. */
+    assert(!memcmp(vram+0x1e8*16,font+0x191*16,32));
+    assert(!memcmp(vram+0x1f8*16,font+0x1a1*16,32));
+    assert(!memcmp(vram+0x1e9*16,font+0x192*16,32));
+    memset(ram,0,sizeof ram);put(0x261,15);put(0x25d,136);put(0x25f,116);
+    Interp816 *c=interp816_init(NULL,read_bus,write_bus);assert(c);interp816_reset(c);
+    c->k=c->db=0;c->pc=0x8ea9;c->sp=0x1ffd;c->e=c->mf=c->xf=false;
+    put(0x1ffe,0x6fff);unsigned steps=0;
+    while(c->pc!=0x7000) {assert(++steps<20000);interp816_runOpcode(c);}
+    assert(word(ram,0x253)==20*4);
+    for(unsigned row=0;row<5;++row) for(unsigned i=0;i<4;++i)
+      assert(ram[0x2001+4*(row*4+i)]==88+24*row);
+    interp816_free(c);ScMapSizeMenuSet(false);assert(!ScMapSizeMenuActive());
+
 }
 static void saved(void) {
     size_t n=ScWorldEncodedSize();uint8_t *p=malloc(n);assert(p);
@@ -118,7 +135,7 @@ int main(int argc,char **argv) {
     /* Actual construction and original flood fill on newly unlocked land. */
     memset(world.tiles+2*(380*480+450),0,60);for(unsigned y=379;y<386;++y)
         for(unsigned x=450;x<475;++x) ScWorldPutCell(&world,x,y,0);
-    put(0xb9d,60000);ram[0xb9f]=0;ScBuildPlan plan;unsigned cost;
+    put(0xb9d,60000);ram[0xb9f]=0;static ScBuildPlan plan;unsigned cost;
     assert(ScConstructionPlanWorld(&plan,&world,14,460,380,460,380));
     assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
     assert(ScConstructionPlanWorld(&plan,&world,3,463,381,470,381));

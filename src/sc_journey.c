@@ -61,16 +61,27 @@ unsigned ScJourneyExpand(ScWorld *w,uint8_t *r,uint64_t population) {
 enum {MENU_ADDRESS=0xfb4c,MENU_POINTER=0xa182,MENU_SPRITES=32};
 static uint8_t menu[140],pairs[MENU_SPRITES][2];
 static unsigned menu_size,sprite_count;
+static bool size_menu;
+static const uint8_t *menu_rom;
+static size_t menu_rom_size;
+static void build_menu(void);
 static unsigned tile(unsigned slot) {
     const unsigned bands[]={0x1e0,0x1c0,0x140,0x160};
     return bands[slot/8]+2*(slot%8);
 }
 unsigned ScJourneyMenuY(bool saved,unsigned selection) {return (saved?100:88)+24*selection;}
 void ScJourneyMenuInit(const uint8_t *rom,size_t size) {
-    menu_size=sprite_count=0;if(!rom || size!=0x80000) return;
-    const char *lines[]={"PRACTICE","START NEW CITY","START NEW JOURNEY","SELECT SCENARIO"};
-    unsigned attr=rom[0x23d3]&0xfe,flags_at=0,flags=0;
-    for(unsigned row=0;row<4;++row) {
+    menu_rom=rom;menu_rom_size=size;size_menu=false;build_menu();
+}
+void ScMapSizeMenuSet(bool active) {size_menu=active;build_menu();}
+bool ScMapSizeMenuActive(void) {return size_menu;}
+static void build_menu(void) {
+    menu_size=sprite_count=0;if(!menu_rom || menu_rom_size!=0x80000) return;
+    const char *normal[]={"PRACTICE","START NEW CITY","START NEW JOURNEY","SELECT SCENARIO"};
+    const char *sizes[]={"MAP SIZE","120X100","240X200","480X400","960X800"};
+    const char **lines=size_menu?sizes:normal;
+    unsigned attr=menu_rom[0x23d3]&0xfe,flags_at=0,flags=0;
+    for(unsigned row=0;row<(size_menu?5:4);++row) {
         const char *s=lines[row];unsigned x=74;
         while(*s) {
             if(*s==' ') {x+=8;++s;continue;}
@@ -82,7 +93,7 @@ void ScJourneyMenuInit(const uint8_t *rom,size_t size) {
                 if(k%8==0) {flags_at=menu_size;menu_size+=2;flags=0;}
                 flags|=(2+(xb+136>=256))<<(2*(k%8));
                 menu[flags_at]=(uint8_t)flags;menu[flags_at+1]=(uint8_t)(flags>>8);
-                menu[menu_size++]=(uint8_t)xb;menu[menu_size++]=(uint8_t)(112+24*row-116);
+                menu[menu_size++]=(uint8_t)xb;menu[menu_size++]=(uint8_t)(112+24*row-(size_menu?24:0)-116);
                 menu[menu_size++]=(uint8_t)t;menu[menu_size++]=(uint8_t)(attr|(t>>8));
                 x+=16;
             }
@@ -101,7 +112,7 @@ void ScJourneyMenuFont(uint16_t *vram) {
     for(unsigned k=0;k<sprite_count;++k) for(unsigned half=0;half<2;++half) {
         unsigned c=pairs[k][half],dst=tile(k)+half;
         if(c==' ') {memset(vram+dst*16,0,32);memset(vram+(dst+16)*16,0,32);continue;}
-        unsigned src=c<='P'?c-'A':32+c-'Q';
+        unsigned src=c>='0' && c<='9'?0x190+c-'0':c<='P'?c-'A':32+c-'Q';
         memcpy(vram+dst*16,vram+src*16,32);
         memcpy(vram+(dst+16)*16,vram+(src+16)*16,32);
     }

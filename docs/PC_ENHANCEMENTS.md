@@ -42,11 +42,11 @@ guarantee is made for heavy X50 simulation. See [GPU measurements and tests](GPU
 
 The multiplier applies when the native simulation visits a zone and does not
 advance a paused city. Expanded maps now account for their extra spatial work
-when advancing the guest clock: Big and Huge no longer take four or sixteen
+when advancing the guest clock, so they no longer take four, sixteen or sixty-four
 times as long to sweep land and initialize the growth fields. Calendar,
 budget, demand, disaster and interrupt instructions retain their timing.
 Normal-sized maps keep the original timing path. Native-loop regressions
-cover zone sweeps, land value and population density on all three map sizes.
+cover zone sweeps, land value and population density on all four map sizes.
 The two hot five-point smoothing kernels execute one cell in C while charging
 their original guest cycles. Differential tests compare both kernels against
 the ROM across Big/Huge edges, zero and saturated fields, mixed values and
@@ -61,7 +61,7 @@ The previous build remained at population 0 after 6,000 frames. With the fix,
 the same city reached 2,380 after 460 frames (about 7.7 seconds), with developed
 residential buildings and the original 2,000-person adviser celebration.
 Its unpowered Commercial zones remained empty. Zone-only tests also cover
-growth and power gating on all sizes, including Huge coordinates beyond 255.
+growth and power gating on all sizes, including 960×800 coordinates beyond 255 and spatial indices beyond 65,535.
 
 Extra attempts run as host work without advancing the guest video/audio clock.
 Calendar, budgets and disasters are not fast-forwarded. Larger cities at X50
@@ -97,15 +97,25 @@ The development hooks currently support the verified US ROM with the default
 interpreter. They do not implement acceleration in the optional `SC_FIBER=1`
 execution path or regional ROMs.
 
-The game-selection menu's map-size button, or **L**, cycles **Normal 120x100**,
-**Big 240x200**, and **Huge 480x400**. Huge doubles both dimensions of Big:
-four times Big's area and sixteen times Normal's area. F12 also exposes
-**NEW MAP SIZE**. This preference is saved in `sc-settings.ini`;
-`SC_LARGE_MAPS=0|1|2` selects Normal, Big or Huge for testing.
-Choose **Start new city** after selecting the size. Map numbers and NEXT
-generate a continuous full-size landscape; the preview samples the entire
-landscape at 2:1 for Big and 4:1 for Huge. Existing cities keep their saved
-dimensions and scenarios retain their original dimensions.
+Choosing **Start new city** or **Practice** opens a dedicated **MAP SIZE**
+page with four choices: **120x100**, **240x200**, **480x400**, and **960x800**.
+It uses the game's original tall menu alphabet and numeral artwork. Mouse,
+D-pad and confirmation buttons select a size; right-click/the game cancel
+button returns to the main menu. Map size is no longer in F12 or the main
+menu's former L toggle. The last selection is remembered in `sc-settings.ini`;
+`SC_LARGE_MAPS=0|1|2|3` supplies a default for testing.
+
+All sizes generate continuous full-size terrain, with independent simulation
+fields, construction, power and population calculation. Preview samples the
+whole landscape at 1:1, 2:1, 4:1 or 8:1. The navigation minimap and camera bounds
+use the active saved dimensions. Existing cities keep their saved size;
+scenarios retain their original dimensions.
+
+Save loading locks the accepted slot while the native loader is running,
+including held clicks and pointer movement. World geometry is restored before
+native city initialization, with saved host simulation fields preserved. This
+prevents a Huge city from falling back to Normal geometry and displaying black
+terrain, duplicate minimaps or black silhouettes at the old arrow positions.
 
 **START NEW JOURNEY** appears directly below **START NEW CITY** in the original
 menu lettering, with the scenario option moved down. It always starts on a
@@ -126,7 +136,7 @@ before the next expansion. Journey progress and pending messages persist in
 save states and both native city slots' world sidecars. Ordinary cities and
 scenarios do not expand automatically.
 
-Expanded worlds use host buffers for all 48,000 or 192,000 tiles and their spatial simulation
+Expanded worlds use host buffers for all 48,000, 192,000 or 768,000 tiles and their spatial simulation
 fields. Tile reads/writes, zone scans, transport, power, construction, disasters,
 rendering and camera limits use the expanded dimensions without wrapping native
 16-bit byte offsets or 8-bit coordinates. Power stacks, population density,
@@ -170,7 +180,7 @@ Adaptive widescreen now keeps the date and tools on the left and places
 population, money and RCI demand at the far right, on a continuous header.
 The navigation minimap moves to the right edge; its outline projects the
 visible city area using the actual map dimensions and canvas size, including
-240x200 and 480x400 worlds, instead of letting the old marker run outside its frame.
+240x200, 480x400 and 960x800 worlds, instead of letting the old marker run outside its frame.
 Right/up/down navigation arrows follow the wider canvas. Mouse hit regions
 follow the relocated elements through window scaling and DPI conversion.
 Tool outlines use the original byte-indexed ROM table for all 15 construction
@@ -226,8 +236,8 @@ rendered separately from the stock graphs.
 Save-state version 4 includes the development context, explicit little-endian
 64-bit population state, and full world tiles and spatial fields. Versions
 1, 2, 3 and legacy states remain readable. The current world payload is version
-3 and includes Huge map coordinates and Journey progress. This build also reads Beta 1/2 world
-payloads and upgrades their city sidecars. Beta 1/2 executables cannot read the
+4 and includes 960x800 coordinates, full spatial indices and Journey progress.
+This build also reads version 2/3 world payloads and upgrades their city sidecars. Beta 1/2 executables cannot read the
 new world payload; upstream executables cannot read version 4 states.
 Beta 3 can read the current map geometry but does not understand Journey
 progress, so use Beta 4 or later to continue a Journey.

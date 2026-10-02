@@ -69,7 +69,7 @@ static void routine_bank(unsigned bank,unsigned pc,unsigned a,unsigned y) {
                 assert(ScWorldCitySave(native_cities,native_sram,0,&world));
             }
             if (cpu->pc==0xc8c8) ScWorldReset(&world);
-            if (cpu->pc==0xc8dd)
+            if (cpu->pc==0xc8ce)
                 assert(ScWorldCityLoad(&world,native_cities,ScWorldCitiesSize(),native_sram,0));
         }
         ScWorldGuestStep(&world,cpu,ram);
@@ -431,7 +431,7 @@ int main(int argc,char **argv) {
     ScWorldReset(&world);world.active=world.huge=true;
     memset(ram,0,sizeof ram);memset(visits,0,sizeof visits);
     routine(0x8228,0,0);routine(0x8297,0,0);
-    for(unsigned i=0;i<SC_WORLD_MAX_CELLS;++i) assert(visits[i]==1);
+    for(unsigned i=0;i<ScWorldCells(&world);++i) assert(visits[i]==1);
     assert(world.scan_y==400);
     world.coord[2][0]=479;world.coord[2][1]=399;
     ScWorldPutCell(&world,479,399,0x8abc);ScWorldPutCell(&world,223,143,0x123);
@@ -477,9 +477,9 @@ int main(int argc,char **argv) {
     const unsigned spatial_entries[]={0x8297,0x9c11,0x9ad7};
     for(unsigned entry=0;entry<3;++entry) {
         uint64_t stock=0;
-        for(unsigned size_id=0;size_id<3;++size_id) {
+        for(unsigned size_id=0;size_id<4;++size_id) {
             memset(ram,0,sizeof ram);ScWorldReset(&world);
-            world.active=size_id>0;world.huge=size_id==2;
+            world.active=size_id>0;world.huge=size_id>=2;world.giant=size_id==3;
             routine(spatial_entries[entry],0,0);
             if(!size_id) {stock=spatial_cycles;assert(stock==raw_cycles);}
             else {
@@ -490,7 +490,7 @@ int main(int argc,char **argv) {
                 (unsigned long long)raw_cycles,(unsigned long long)spatial_cycles,(unsigned long long)stock);
         }
     }
-    world.active=world.huge=true;
+    world.active=world.huge=true;world.giant=false;
     const uint32_t ordinary[]={0x008400,0x01897f,0x038026,0x03804f,0x0390a7,0x03ae1c,0x03b84b,0x03c474};
     for(unsigned i=0;i<sizeof ordinary/sizeof *ordinary;++i)
         assert(ScWorldGuestMasterCycles(&world,ordinary[i],48,&cycle_remainder)==48);
@@ -499,6 +499,52 @@ int main(int argc,char **argv) {
     terrain_field_equivalence();
     building_repair_bounds();
     building_update_bounds();
+    /* 960x800: exercise every cell through the original spatial routines,
+     * including coarse fields beyond byte coordinates and 64 KiB indices. */
+    ScWorldReset(&world);world.active=world.huge=world.giant=true;
+    memset(ram,0,sizeof ram);memset(visits,0,sizeof visits);
+    routine(0x8228,0,0);routine(0x8297,0,0);
+    for(unsigned i=0;i<ScWorldCells(&world);++i) assert(visits[i]==1);
+    assert(world.scan_y==800);
+    world.coord[2][0]=959;world.coord[2][1]=799;
+    ScWorldPutCell(&world,959,799,0x8abc);ScWorldPutCell(&world,191,31,0x123);
+    routine(0x849e,191|(31<<8),0);assert(cpu->a==0x8abc);
+    routine(0x84c4,191|(31<<8),0x8001);assert(ScWorldCell(&world,959,799)==0x8001);
+    assert(ScWorldCell(&world,191,31)==0x123);
+    routine(0xa29a,223|(143<<8),0);assert(cpu->x==(uint16_t)(399*480+479));
+    world.fields[5][95999]=1;routine(0xb152,0,0);assert(ScWorldCell(&world,959,799)&0x8000);
+    put(0x1bd,935);put(0x1bf,778);routine_bank(1,0x8aa8,0,0);
+    routine_bank(1,0xa688,959,0);assert(cpu->a==930);
+    routine_bank(1,0xa6a1,799,0);assert(cpu->a==772);
+    for(unsigned f=0;f<SC_WORLD_FIELDS;++f) assert(ScWorldFieldSizeWorld(&world,f)<=SC_WORLD_FIELD_BYTES);
+    memset(world.tiles,0,sizeof world.tiles);memset(ram,0,sizeof ram);
+    for(unsigned dy=0;dy<3;++dy) for(unsigned dx=0;dx<3;++dx)
+      ScWorldPutCell(&world,900+dx,750+dy,0x8120+dy*3+dx+((dy==2 && dx==2)?0x4000:0));
+    memset(&population,0,sizeof population);population.valid=true;population_enabled=true;
+    routine(0x8228,0,0);routine(0x8297,0,0);routine(0x8196,0,0);
+    assert(population.value==40*20);population_enabled=false;
+    routine(0x9ad7,0,0);assert(world.center_x==900 && world.center_y==750);assert(world.fields[3][375*480+450]>0);
+    routine(0x9c11,0,0);routine(0x9e8e,0,0);routine(0x9aa3,0,0);
+    /* More than 20,000 pending power entries must retain full coordinates. */
+    world.coord[2][0]=900;world.coord[2][1]=750;ram[0xb85]=(uint8_t)900;ram[0xb86]=(uint8_t)750;
+    put(0xc57,20000);cpu->k=3;cpu->pc=0xb0be;
+    ScWorldGuestStep(&world,cpu,ram);
+    assert((ram[0xc57]|(ram[0xc58]<<8))==20001);
+    assert((world.fields[17][40002]|(world.fields[17][40003]<<8))==900);
+    assert((world.fields[18][40002]|(world.fields[18][40003]<<8))==750);
+    world.scan_x=959;world.scan_y=799;
+    assert(ScWorldEncode(&world,data,size) && ScWorldDecode(&copy,data,size));
+    assert(!memcmp(&world,&copy,sizeof world));
+    native_cities=malloc(ScWorldCitiesSize());assert(native_cities);ScWorldCitiesInit(native_cities);
+    assert(ScWorldCitySave(native_cities,native_sram,1,&world));
+    assert(ScWorldCityLoad(&copy,native_cities,ScWorldCitiesSize(),native_sram,1));
+    assert(!memcmp(&world,&copy,sizeof world));
+    ScWorldCitiesInit(native_cities);put(0x423,1);put(0x421,1);
+    copy=world;routine(0xcafd,0,0);routine(0xc8a1,0,0);
+    assert(world.active && world.giant && ScWorldCell(&world,900,750)==ScWorldCell(&copy,900,750));
+    assert(!memcmp(world.tiles,copy.tiles,sizeof world.tiles));
+    assert(!memcmp(world.fields,copy.fields,sizeof world.fields));
+    free(native_cities);native_cities=NULL;
     interp816_free(cpu); free(data);
-    puts("PASS: 48,000/192,000 native visits, full-world census and fields, power, byte seams, full city center, legacy migration and portable saves");
+    puts("PASS: 48,000/192,000/768,000 native visits, full-world census and fields, power, byte seams, full city center, legacy migration and portable saves");
 }

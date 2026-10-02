@@ -67,7 +67,11 @@ int main(void) {
 #endif
     const ScViewport views[]={{448,224,0,0,1,0},{684,448,214,112,1,0},{256,448,0,112,1,0}};
     uint32_t native[256];unsigned captures=0;
-    for(unsigned v=0;v<3;++v) for(unsigned test=0;test<8;++test) {
+    for(unsigned map=0;map<2;++map) {
+      world->giant=map!=0;
+      word(ram,0x1bd,map?820:300);word(ram,0x1bf,map?730:330);
+      ScRendererResetHistory(cpu);ScRendererResetHistory(deferred);
+      for(unsigned v=0;v<3;++v) for(unsigned test=0;test<8;++test) {
         assert(ScRendererResize(cpu,views[v]) && ScRendererResize(deferred,views[v]));
         assert(ScRendererDeferTerrain(deferred,true));
         p->screenEnabled[0]=2;p->screenEnabled[1]=test&1?4:2;
@@ -99,11 +103,12 @@ int main(void) {
 #endif
         assert(ScRendererDeferTerrain(deferred,false));
         assert(!memcmp(cpu->pixels,deferred->pixels,(size_t)views[v].width*views[v].height*4));
+      }
     }
 #ifdef SC_TEST_GPU
     ScGpuTerrainDestroy(gpu);SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();
 #endif
     ScRendererDestroy(cpu);ScRendererDestroy(deferred);
     free(cpu);free(deferred);free(p);free(world);free(rom);free(ram);
-    printf("PASS: %u CPU/deferred frames, Huge coordinates, wide/tall views, live planes/palettes, flips, windows, colour math, fades and fallback\n",captures);
+    printf("PASS: %u CPU/deferred frames, Huge/Giant coordinates, wide/tall views, live planes/palettes, flips, windows, colour math, fades and fallback\n",captures);
 }

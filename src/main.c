@@ -116,9 +116,14 @@ static uint64_t s_perf_spatial_cells;
 static bool s_skip_custom_frame;
 static bool s_measure_custom_frame;
 static double s_custom_frame_ms;
-static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge */
+static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge, 3 960x800 */
 static bool s_journey_arming;
 static unsigned s_journey_menu_selection;
+static unsigned s_loading_slot;
+static bool s_city_loading;
+static bool s_size_selecting, s_practice_size_pending;
+static unsigned s_size_game_choice;
+static void save_large_map_setting(void);
 static int s_scroll_multiplier=1;
 static struct {unsigned extra;uint16_t sp;bool repeating;} s_scroll_pass[2];
 static char s_world_path[1100];
@@ -2523,7 +2528,7 @@ static void population_saved_city(bool save) {
     if (!ok || !ScPopulationCitiesValid(data, sizeof data)) ScPopulationCitiesInit(data);
   }
   unsigned flag_addr = save ? 0x423 : 0x421;
-  unsigned slot = (g_ram[flag_addr] | (g_ram[flag_addr+1]<<8)) == 1 ? 0 : 1;
+  unsigned slot = !save && s_city_loading?s_loading_slot:(g_ram[flag_addr] | (g_ram[flag_addr+1]<<8)) == 1 ? 0 : 1;
   if (!save) {
     if (!ScPopulationCityLoad(&s_population, data, sizeof data, g_snes->cart->ram, slot))
       ScPopulationImport(&s_population, g_ram);
@@ -2564,10 +2569,10 @@ static void world_saved_city(bool save) {
     free(old);
   }
   unsigned addr=save?0x423:0x421;
-  unsigned slot=(g_ram[addr]|(g_ram[addr+1]<<8))==1?0:1;
+  unsigned slot=!save && s_city_loading?s_loading_slot:(g_ram[addr]|(g_ram[addr+1]<<8))==1?0:1;
   if (!save) {
     if (ScWorldCityLoad(&s_world,data,size,g_snes->cart->ram,slot)) {
-      fprintf(stderr,"world: loaded city slot %u (%s)\n",slot+1,s_world.active?(s_world.huge?"480x400":"240x200"):"120x100");
+      fprintf(stderr,"world: loaded city slot %u (%s)\n",slot+1,s_world.active?(s_world.giant?"960x800":s_world.huge?"480x400":"240x200"):"120x100");
       if (s_world.active) {
         bool hud=(g_ram[0x1d7]|g_ram[0x1d8])!=0;
         ram_set_w(0x1c5,ScWorldWidth(&s_world)-(hud?25:30));
@@ -3685,7 +3690,7 @@ static bool run_one_frame(void) {
         pr.s1 = (uint16_t)(g_ram[0x5b] | (g_ram[0x5c] << 8));
         pr.t  = (uint16_t)(g_ram[0x5d] | (g_ram[0x5e] << 8));
         if (s_large_maps && !s_journey_arming && s_rom_fnv==SC_ROM_FNV_US) {
-          if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr); else ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
+          if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr); else if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr); else ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
         } else {
           ScWorldReset(&s_world); sc_mapgen_generate(&pr, &gs);
           s_world.journey=s_journey_arming;
@@ -3736,19 +3741,39 @@ static bool run_one_frame(void) {
      * 03:ce61 is the scenario equivalent -- map in place, about to return. */
     if (s_ninth_scenario) ninth_scenario_hook(cpu->k, cpu->pc);
     if (s_rom_is_us) {
+      if(cpu->k==3 && cpu->pc==0xd306) {s_size_selecting=false;s_practice_size_pending=false;ScMapSizeMenuSet(false);}
+      if(s_size_selecting && cpu->k==3 && cpu->pc==0xd337) cpu->pc=0xd33b;
+      if(s_size_selecting && cpu->k==3 && cpu->pc==0xd333 && (g_ram[0xc9]&0x80)) {
+        s_size_selecting=false;ScMapSizeMenuSet(false);ram_set_w(0x3e,s_size_game_choice);
+        cpu->pc=0xd370;
+      }
+      if(ScMapSizeMenuActive() && cpu->k==2 && cpu->pc==0xbcbd) cpu->pc=0xbcd0;
       /* Extend the real five-choice menu and its native hand sprite. */
       if(cpu->k==2 && cpu->pc==0xbcd6) {
         ScJourneyMenuFont(g_ppu->vram);
         ScJourneyMenuFrame(g_ppu->vram,PPU_bgTilemapAdr(g_ppu,2));
       }
       if(cpu->k==2 && cpu->pc==0xbcfe)
-        cpu->a=(cpu->a&0xff00)|ScJourneyMenuY(ram_w(0x44)!=0,
+        cpu->a=(cpu->a&0xff00)|ScJourneyMenuY(!ScMapSizeMenuActive() && ram_w(0x44)!=0,
             ram_w(0x14)==2 || ram_w(0x14)==3 || ram_w(0x14)==18?ram_w(0x3e):s_journey_menu_selection);
+      /* Open the size page before e574 starts the native exit fade. */
+      if(cpu->k==3 && cpu->pc==0xd366 && !s_size_selecting &&
+          (ram_w(0x3e)==1 || ram_w(0x3e)==2)) {
+        s_size_game_choice=ram_w(0x3e);s_size_selecting=true;ScMapSizeMenuSet(true);
+        ram_set_w(0x3e,s_large_maps+1);cpu->pc=0xd370;
+      }
       if(cpu->k==3 && cpu->pc==0xd369) {
         unsigned selected=ram_w(0x3e);
-        s_journey_menu_selection=selected;
-        s_journey_arming=selected==3;
-        if(selected>=3) ram_set_w(0x3e,selected==3?2:3);
+        if(s_size_selecting) {
+          s_large_maps=selected>=1 && selected<=4?selected-1:0;
+          save_large_map_setting();s_size_selecting=false;
+          selected=s_size_game_choice;ram_set_w(0x3e,selected);
+          s_practice_size_pending=selected==1;
+        }
+        if(!s_size_selecting) {
+          s_journey_menu_selection=selected;s_journey_arming=selected==3;
+          if(selected>=3) ram_set_w(0x3e,selected==3?2:3);
+        }
       }
       /* Keep the native Metropolis achievement/history, but let Journey's
        * border celebration supply its visit instead of opening two dialogs. */
@@ -4046,6 +4071,11 @@ static bool run_one_frame(void) {
       if (cpu->pc == 0xada9) ScPopulationReport(&s_population, g_ram, true);
     }
     if (s_rom_fnv == SC_ROM_FNV_US) {
+      if(cpu->k==3 && cpu->pc==0xc8a1) {
+        s_loading_slot=ram_w(0x421)==1?0:1;s_city_loading=true;
+      }
+      if(s_city_loading && cpu->k==3 && (cpu->pc==0xc8b3 || cpu->pc==0xc8e6))
+        ram_set_w(0x421,s_loading_slot+1);
       if (cpu->k==3 && (cpu->pc==0xce2e || cpu->pc==0xc8c8)) {
         ScRendererBeginMapLoad(&s_custom_renderer);
         reset_refresh_clocks();
@@ -4062,9 +4092,21 @@ static bool run_one_frame(void) {
     }
     if (s_rom_fnv == SC_ROM_FNV_US && cpu->k == 3) {
       if (cpu->pc == 0xcbe2) population_saved_city(true);
-      if (cpu->pc == 0xc8dd) population_saved_city(false);
-      if (cpu->pc == 0xc8dd) world_saved_city(false);
+      if (cpu->pc == 0xc8ce) population_saved_city(false);
+      if (cpu->pc == 0xc8ce) world_saved_city(false);
+      if (cpu->pc == 0xc8dd) s_city_loading=false;
       if (cpu->pc == 0xcbe2) world_saved_city(true);
+      if(cpu->pc==0xc633 && s_practice_size_pending) {
+        ScMapGenPrng pr={ram_w(0x59),ram_w(0x5b),ram_w(0x5d)};
+        if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr);
+        else if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr);
+        else if(s_large_maps==1) ScWorldGenerate(&s_world,&pr);
+        if(s_world.active) {
+          ScWorldMirror(&s_world,g_ram);
+          ram_set_w(0x1c5,ScWorldWidth(&s_world)-25);ram_set_w(0x1c9,ScWorldHeight(&s_world)-22);
+        }
+        s_practice_size_pending=false;
+      }
       if (cpu->pc == 0xce61) ScPopulationImport(&s_population, g_ram);
       if (cpu->pc == 0xc73c) {
         ScPopulationImport(&s_population, g_ram);
@@ -6587,6 +6629,8 @@ static bool load_state(const char *path) {
   ScDevelopmentReset(&s_development);
   reset_refresh_clocks();
   s_journey_arming=false;
+  s_city_loading=s_size_selecting=s_practice_size_pending=false;
+  ScMapSizeMenuSet(false);
   ScWorldReset(&s_world); memset(&s_world_guest,0,sizeof s_world_guest);
   ScPopulationImport(&s_population, g_ram);
   if (versioned) {
@@ -6928,6 +6972,14 @@ static void apply_frame_input(uint64_t frame) {
  * use a different anchor from the city HUD. */
 static bool s_mouse_enabled = true;
 static ScMouseUiResult mouse_ui_point(uint8_t *ram,int x,int y,bool select,bool ninth) {
+  if(s_size_selecting && ram_w(0x14)==3) {
+    ScMouseUiResult result={true,false};
+    for(unsigned i=0;i<4;++i) if(x>=48 && x<232 && y>=112+24*i && y<128+24*i) {
+      result.hit=true;if(select) ram_set_w(0x3e,i+1);
+    }
+    return result;
+  }
+  if(s_city_loading) return (ScMouseUiResult){true,false};
   if(s_mouse_dialog!=SC_MOUSE_DIALOG_NONE)
     return ScMouseUiDialogPoint(s_mouse_dialog,ram,x,y,select);
   return ScMouseUiPoint(ram,x,y,select,ninth);
@@ -7058,11 +7110,8 @@ static void save_large_map_setting(void) {
     settings.large_maps=s_large_maps;
     if (!ScSettingsSave(&settings,kScSettingsPath)) fprintf(stderr,"settings: could not save larger-map preference\n");
   }
-  fprintf(stderr,"new city map size: %s\n",s_large_maps==2?"480x400":s_large_maps?"240x200":"120x100");
+  fprintf(stderr,"new city map size: %s\n",s_large_maps==3?"960x800":s_large_maps==2?"480x400":s_large_maps?"240x200":"120x100");
 }
-static const int kMapSizes[]={0,1,2};
-static const char *const kMapSizeNames[]={"NORMAL 120X100","BIG 240X200","HUGE 480X400"};
-static void toggle_large_maps(void) { s_large_maps=(s_large_maps+1)%3; save_large_map_setting(); }
 static void menu_action_fit_screen(void) {s_fit_screen_requested=true;}
 
 static void setting_activate(SettingDesc *d) {
@@ -7383,7 +7432,6 @@ static SettingDesc s_settings[] = {
   { "MOUSE CURSOR",          kSettingBool, &s_mouse_enabled,       0,    NULL, NULL, 0 },
   { "DEVELOPMENT SPEED",     kSettingCycle, &s_development_speed, 0, NULL,
     kDevelopmentSpeeds, 5, kDevelopmentSpeedNames },
-  { "NEW MAP SIZE",          kSettingCycle, &s_large_maps, 0, NULL, kMapSizes, 3, kMapSizeNames },
   { "FAST TICKS",            kSettingBool, &s_fast_ticks,          0,    NULL, NULL, 0 },
   { "DRAG TURBO",            kSettingCycle, &s_drag_turbo,          0,    NULL,
     kDragTurbos, (int)(sizeof(kDragTurbos) / sizeof(kDragTurbos[0])) },
@@ -8756,7 +8804,7 @@ int main(int argc, char **argv) {
       const char *as = getenv("SC_MAPGEN_A");
       const unsigned idx = (unsigned)strtoul(st, NULL, 0);
       const int large = getenv("SC_MAPGEN_LARGE")?atoi(getenv("SC_MAPGEN_LARGE")):0;
-      const unsigned cells = large==2?SC_MAPGEN_MAX_CELLS:large?SC_WORLD_CELLS:SC_MAPGEN_CELLS;
+      const unsigned cells = large==3?768000:large==2?192000:large?SC_WORLD_CELLS:SC_MAPGEN_CELLS;
       static ScMapGenState gs;
       ScMapGenPrng pr;
       { const char *pv = getenv("SC_MAPGEN_PREV");
@@ -8775,7 +8823,8 @@ int main(int argc, char **argv) {
          * Kept only as a sweep knob; 1 is correct. */
         g_sc_mapgen_prng_steps = 0;
         for (unsigned r = 0; r < reps; r++) {
-          if (large==2) sc_mapgen_generate_huge(&pr, &gs);
+          if (large==3) sc_mapgen_generate_giant(&pr, &gs);
+          else if (large==2) sc_mapgen_generate_huge(&pr, &gs);
           else if (large) sc_mapgen_generate_large(&pr, &gs);
           else sc_mapgen_generate(&pr, &gs);
         } }
@@ -9680,7 +9729,7 @@ int main(int argc, char **argv) {
   s_custom_renderer.population=&s_population;
   if(s_rom_is_us) ScJourneyMenuInit(g_snes->cart->rom,rom_size);
   { const char *large=getenv("SC_LARGE_MAPS");
-    s_large_maps=large?atoi(large):s_launch_settings.large_maps; if(s_large_maps<0 || s_large_maps>2) s_large_maps=0; }
+    s_large_maps=large?atoi(large):s_launch_settings.large_maps; if(s_large_maps<0 || s_large_maps>3) s_large_maps=0; }
   s_custom_renderer.world=&s_world;
   s_custom_renderer.sylt = s_ninth_scenario;   /* its pin and mark */
   if (!ScRendererResize(&s_custom_renderer,
@@ -9886,10 +9935,6 @@ int main(int argc, char **argv) {
       if (!got) break;
       if (ev.type == SDL_QUIT) quit = true;
       if (getenv("SC_SCRIPTED_INPUT")) continue; /* owned UI regression window */
-      if (s_rom_is_us && ram_w(0x14)==3 && ev.type==SDL_KEYDOWN &&
-          !ev.key.repeat && SC_EVENT_SCANCODE(ev)==SDL_SCANCODE_L) {
-        toggle_large_maps(); continue;
-      }
       if (ev.type == SDL_KEYDOWN && !ev.key.repeat && SC_EVENT_SCANCODE(ev)==SDL_SCANCODE_F11) {
         s_fullscreen=!s_fullscreen;
 #if SNESRECOMP_SDL3
@@ -10144,7 +10189,6 @@ int main(int argc, char **argv) {
     bool mouse_ui_handled = false, mouse_ui_hit = false;
     bool mouse_ui_select = false;
     bool mouse_raw_left = false;
-    bool mouse_world_hit = false;
     bool mouse_navigation_hit = false;
     uint16_t mouse_edge_input = 0;
     int mouse_target_x = 0, mouse_target_y = 0;
@@ -10250,8 +10294,6 @@ int main(int argc, char **argv) {
             s_custom_renderer.pointer_y=mouse_target_y;
           }
           mouse_target_valid = true;
-          mouse_world_hit=s_rom_is_us && ram_w(0x14)==3 && mouse_target_x>=64 &&
-            mouse_target_x<224 && mouse_target_y>=76 && mouse_target_y<92;
           s_mouse_dir = 0;
           if (dx < 0) s_mouse_dir |= kPad_Left;
           if (dx > 0) s_mouse_dir |= kPad_Right;
@@ -10385,7 +10427,7 @@ int main(int argc, char **argv) {
       s_custom_renderer.pointer_active = false;
       s_mouse_dir_frames = 0;
       mouse_edge_input = 0;
-    } else if (!mouse_world_hit && mouse_ui_handled && mouse_ui_select) {
+    } else if (mouse_ui_handled && mouse_ui_select) {
       mouse_ui_point(g_ram, mouse_target_x, mouse_target_y, true, s_ninth_scenario);
       if (g_ram[0x14] == 5 && g_ram[0x0b2d] == 1 && g_ram[0x0b31])
         s_map_mouse_refresh_pending = true;
@@ -10398,11 +10440,6 @@ int main(int argc, char **argv) {
     }
     {
       static bool previous_left;
-      if (mouse_world_hit) {
-        if (mouse_raw_left && !previous_left) toggle_large_maps();
-        mouse_ui_handled=true; mouse_ui_hit=false; mouse_ui_select=false;
-        s_mouse_dir_frames=0;
-      }
       const bool right = mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT);
       const bool hud_hidden = !ram_w(0x01d7);
       const bool on_land = s_custom_video.enabled ? mouse_city_hit :
@@ -10846,17 +10883,6 @@ int main(int argc, char **argv) {
       if (diag < 99 && (s_frames % 60) == 0) {
         fprintf(stderr, "[sdl] lock=%d pitch=%d expect=%d copy=%d err=%s\n",
                 (int)_lok, pitch, (int)s_video_pitch, (int)_cok, SDL_GetError()); } }
-    if (s_rom_is_us && ram_w(0x14)==3 && !s_menu_open) {
-      ScViewport v=s_custom_video.enabled?s_custom_renderer.view:viewport;
-      double sx=s_destination.w/v.width,sy=s_destination.h/v.height;
-      ScRect button=SC_RECT(s_destination.x+(v.core_x+64)*sx,
-        s_destination.y+(v.core_y+76)*sy,160*sx,16*sy);
-      SDL_SetRenderDrawColor(renderer,54,37,13,255); SDL_RenderFillRect(renderer,&button);
-      SDL_SetRenderDrawColor(renderer,255,255,232,255); SDL_RenderDrawRect(renderer,&button);
-      int px=(int)sy; if(px<1) px=1;
-      draw_text(renderer,(int)button.x+4*px,(int)button.y+5*px,px,
-        s_large_maps==2?"L MAP SIZE HUGE 480X400":s_large_maps?"L MAP SIZE BIG 240X200":"L MAP SIZE NORMAL 120X100");
-    }
     if (s_menu_open) render_settings_menu(renderer);
     if (s_replay_open) render_replay_menu(renderer);
 

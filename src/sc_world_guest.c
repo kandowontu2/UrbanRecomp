@@ -89,7 +89,7 @@ unsigned ScWorldGuestFastStep(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t *
     if((c->pc!=0xa04a && c->pc!=0xa0d0) || !c->mf) return 0;
     unsigned width=ScWorldFieldWidth(w,13),height=ScWorldFieldHeight(w,13);
     unsigned x=word(r,c->dp),y=word(r,c->dp+2),i=y*width+x;
-    if(x>=width || y>=height || c->x!=i) return 0;
+    if(x>=width || y>=height || c->x!=(uint16_t)i) return 0;
     const uint8_t *source=w->fields[c->pc==0xa04a?13:14];
     uint8_t *dest=w->fields[c->pc==0xa04a?14:13];
     unsigned dp=(c->dp&255)!=0,sum=0;
@@ -160,13 +160,34 @@ static bool huge_step(ScWorld *w,Interp816 *c,uint8_t *r) {
     case 0x9af7:coord_set(w,r,word(r,c->dp+0x10),word(r,c->dp+0x12));break;
     case 0x9b5c: {
         unsigned x=word(r,c->dp+0x10)+1,y=word(r,c->dp+0x12);
-        if(x==480) {x=0;++y;}
+        if(x==ScWorldWidth(w)) {x=0;++y;}
         put(r,c->dp+0x10,x);put(r,c->dp+0x12,y);
         coord_set(w,r,x,y);
-        c->pc=y<400?0x9af7:0x9b6c;return true;
+        c->pc=y<ScWorldHeight(w)?0x9af7:0x9b6c;return true;
     }
     case 0x9cdf:case 0x9eb0:case 0x9c77:
-        coord_set(w,r,r[c->dp+8]*2,r[c->dp+10]*2);break;
+        coord_set(w,r,word(r,c->dp+8)*2,word(r,c->dp+10)*2);break;
+    case 0xa040:case 0xa0c6:
+        coord_set(w,r,word(r,c->dp)*2,word(r,c->dp+2)*2);break;
+    case 0x9fb7:
+        coord_set(w,r,r[c->dp]*4,r[c->dp+2]*4);break;
+    case 0xa164:case 0xa1e3:case 0xa25c:
+        coord_set(w,r,r[c->dp]*8,r[c->dp+2]*8);break;
+    case 0x9c40: {
+        unsigned x=word(r,c->dp+8)+1,y=word(r,c->dp+10);
+        if(x==ScWorldWidth(w)/2) {x=0;++y;}
+        put(r,c->dp+8,x);put(r,c->dp+10,y);
+        c->pc=y<ScWorldHeight(w)/2?0x9c3b:0x9c50;return true;
+    }
+    case 0x88f3:case 0xb66a:case 0x9b77:w->field_scan=0;break;
+    case 0x8919:case 0xb692:case 0x9b88:
+        ++w->field_scan;c->z=c->c=w->field_scan==ScWorldFieldSizeWorld(w,0);c->n=false;c->pc+=3;return true;
+    case 0xafc1:
+        if(w->giant) {memset(w->fields[5],0,ScWorldFieldSizeWorld(w,5));c->x=(uint16_t)ScWorldFieldSizeWorld(w,5);c->pc=0xafcc;return true;}break;
+    case 0xa141:
+        if(w->giant) {memset(w->fields[13],0,ScWorldFieldSizeWorld(w,13));c->x=(uint16_t)ScWorldFieldSizeWorld(w,13);c->pc=0xa14c;return true;}break;
+    case 0xb10b:
+        if(w->giant) {c->c=!ScWorldContains(w,w->coord[2][0],w->coord[2][1]);c->z=false;c->n=false;c->pc+=3;return true;}break;
     case 0x9b6f: {
         uint32_t count=word(r,c->dp+8)|((uint32_t)word(r,c->dp+10)<<16);
         uint32_t x=word(r,c->dp)|((uint32_t)word(r,c->dp+2)<<16);
@@ -176,10 +197,10 @@ static bool huge_step(ScWorld *w,Interp816 *c,uint8_t *r) {
     }
     case 0x9ba0:c->a=(c->a&0xff00)|(w->center_x&255);break;
     case 0x9baf:c->a=(c->a&0xff00)|(w->center_y&255);break;
-    case 0x9bb6:w->center_x=240;w->center_y=200;w->center_valid=true;break;
+    case 0x9bb6:w->center_x=ScWorldWidth(w)/2;w->center_y=ScWorldHeight(w)/2;w->center_valid=true;break;
     case 0x9e61: {
-        int dx=(c->a&255)-(w->center_valid?w->center_x/2:120);
-        int dy=(c->a>>8)-(w->center_valid?w->center_y/2:100);
+        int dx=lift(c->a&255,w->coord[2][0]/2,256)-(w->center_valid?w->center_x/2:(int)ScWorldWidth(w)/4);
+        int dy=lift(c->a>>8,w->coord[2][1]/2,256)-(w->center_valid?w->center_y/2:(int)ScWorldHeight(w)/4);
         if(dx<0) dx=-dx;if(dy<0) dy=-dy;
         unsigned distance=dx+dy;c->c=distance>=32;if(distance>32) distance=32;
         c->a=((dx&255)<<8)|distance;c->mf=true;nz(c,distance,true);c->pc=0x9e8d;return true;
@@ -187,8 +208,8 @@ static bool huge_step(ScWorld *w,Interp816 *c,uint8_t *r) {
     case 0xb37e:c->n=lift(c->y,w->coord[2][1],256)<0;c->pc+=2;return true;
     case 0xb39a:c->n=lift(c->x,w->coord[2][0],256)<0;c->pc+=2;return true;
     case 0x8343:
-        if(++w->scan_x<480) c->pc=0x82ac;
-        else {w->scan_x=0;if(++w->scan_y<400) c->pc=0x82ac;else c->pc=0x835d;}
+        if(++w->scan_x<ScWorldWidth(w)) c->pc=0x82ac;
+        else {w->scan_x=0;if(++w->scan_y<ScWorldHeight(w)) c->pc=0x82ac;else c->pc=0x835d;}
         coord_set(w,r,w->scan_x,w->scan_y);return true;
     case 0x8ff4: {
         int x=lift(r[0xb85],w->coord[2][0],256),y=lift(r[0xb86],w->coord[2][1],256);
@@ -205,8 +226,8 @@ static bool huge_step(ScWorld *w,Interp816 *c,uint8_t *r) {
         c->mf=false;c->pc=0xb0bd;return true;
     }
     case 0xb0be: {
-        unsigned count=word(r,0xc57);c->c=count>=20000;c->z=count==20000;c->n=false;
-        if(count<20000) {
+        unsigned count=word(r,0xc57);c->c=count>=ScWorldFieldWidth(w,17)-1;c->z=count==ScWorldFieldWidth(w,17)-1;c->n=false;
+        if(count<ScWorldFieldWidth(w,17)-1) {
             ++count;put(w->fields[17],2*count,lift(r[0xb85],w->coord[2][0],256));
             put(w->fields[18],2*count,lift(r[0xb86],w->coord[2][1],256));put(r,0xc57,count);
         }
@@ -312,6 +333,7 @@ void ScWorldGuestStep(ScWorld *w,Interp816 *c,uint8_t *r) {
         unsigned x=c->a&255,y=c->a>>8;
         if(w->huge) {x=lift(x,w->coord[2][0]/(int)div,256/div);y=lift(y,w->coord[2][1]/(int)div,256/div);}
         unsigned offset=y*stride+x;
+        w->field_anchor[div==2?0:div==4?1:2]=offset;
         put(r,0xb3f,x); put(r,0xb3d,y);
         c->a=c->x=(uint16_t)offset; c->mf=true; nz(c,offset,false);
         c->c=false;
@@ -323,7 +345,7 @@ void ScWorldGuestVehicles(ScWorld *w,Interp816 *c,const uint8_t *r,uint8_t my) {
     unsigned x,y;
     if (c->pc==0xb077) { x=word(r,0xa5d); y=word(r,0xa5b); }
     else if (c->pc==0xb4dd) { x=word(r,0xae1)/8; y=word(r,0xae3)/8; }
-    else if (c->pc==0xb719) { x=word(r,0xa61); y=r[0xa5f]; }
+    else if (c->pc==0xb719) { x=word(r,0xa61); y=word(r,0xa5f); }
     else if (c->pc==0xb314) {
         unsigned row=2*my*ScWorldWidth(w);
         int full=(int)row+(int16_t)(c->x-(uint16_t)row);
@@ -460,14 +482,14 @@ static unsigned big_dimension(uint32_t pc) {
 static unsigned dimension(const ScWorld *w,uint32_t pc) {
     unsigned v=big_dimension(pc);
     if(!w->huge) return v;
+    unsigned scale=ScWorldScale(w);
     switch(v) {
-    case 240:return 480;case 200:return 400;case 239:return 479;case 199:return 399;
-    case 238:return 478;case 198:return 398;
-    case 215:return 455;case 178:return 378;case 210:return 450;case 174:return 374;case 172:return 372;
-    case 120:return 240;case 100:return 200;case 119:return 239;case 99:return 199;
-    case 60:return 120;case 50:return 100;case 59:return 119;case 49:return 99;
-    case 30:return 60;case 25:return 50;case 29:return 59;case 24:return 49;
-    case 750:case 1500:case 3000:case 6000:case 12000:return v*4;
+    case 240:case 200:case 120:case 100:case 60:case 50:case 30:case 25:return v*scale;
+    case 239:case 199:case 119:case 99:case 59:case 49:case 29:case 24:return (v+1)*scale-1;
+    case 238:case 198:return (v+2)*scale-2;
+    case 215:case 210:return 240*scale-(240-v);
+    case 178:case 174:case 172:return 200*scale-(200-v);
+    case 750:case 1500:case 3000:case 6000:case 12000:return v*scale*scale;
     default:return v;
     }
 }
@@ -485,6 +507,10 @@ void ScWorldGuestBegin(ScWorldGuest *g,ScWorld *w,const Interp816 *c,
                        const uint8_t *rom,size_t size) {
     memset(g,0,sizeof *g);
     if (!w->active || c->pc<0x8000) return;
+    /* Native city initialization clears a contiguous stock WRAM range.
+     * New host worlds are already zeroed; a loaded world must retain its
+     * restored spatial fields while the native scratch buffers reset. */
+    if(c->k==3 && c->pc==0xc877) return;
     if (c->k==3 && c->pc>=0xcf80) return; /* original-size native save codecs */
     size_t p=(size_t)(c->k&0x7f)*32768+c->pc-0x8000;
     if (p+3>=size) return;
@@ -576,8 +602,15 @@ void ScWorldGuestBegin(ScWorldGuest *g,ScWorld *w,const Interp816 *c,
             g->mapped=true; g->data=g->immediate; return;
         }
         const ScWorldField *layout=&ScWorldFields[field];
-        if(w->huge && (displacement==(int)(layout->width*layout->element_bytes) || displacement==-(int)(layout->width*layout->element_bytes))) displacement*=2;
+        if(w->huge && (displacement==(int)(layout->width*layout->element_bytes) || displacement==-(int)(layout->width*layout->element_bytes))) displacement*=ScWorldScale(w);
         int logical=(int)index+displacement;
+        if(w->giant && c->k==3 && field<17) {
+            unsigned anchor;
+            if(field==5) anchor=((unsigned)w->coord[2][1]*ScWorldWidth(w)+(unsigned)w->coord[2][0])/8;
+            else anchor=w->field_anchor[field<5 || field==13 || field==14?0:field==6 || field==15?1:2]*layout->element_bytes;
+            if((pc>=0x0388fa && pc<=0x038919) || (pc>=0x03b676 && pc<=0x03b692) || (pc>=0x039b7a && pc<=0x039b88)) anchor=w->field_scan;
+            logical=(int)anchor+(int16_t)(index-(uint16_t)anchor)+displacement;
+        }
         if (c->k==2) {
             const ScWorldField *f=&ScWorldFields[field];
             unsigned cell=index/f->element_bytes;
