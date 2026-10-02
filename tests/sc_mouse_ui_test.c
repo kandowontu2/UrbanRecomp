@@ -16,7 +16,11 @@ int main(void) {
   assert(point(100,142) && word(0x3e)==2);
   assert(!point(100,100) && word(0x3e)==2);
   assert(!point(100,134)); /* gap between rows */
+  assert(point(180,164) && word(0x3e)==3); /* Journey below New City */
+  assert(point(180,188) && word(0x3e)==4); /* Scenario moved down */
   put(0x44,1); assert(point(100,108) && word(0x3e)==0);
+  assert(point(180,178) && word(0x3e)==3);
+  assert(point(180,202) && word(0x3e)==4);
   memcpy(before,r,sizeof r); ScMouseUiPoint(r,100,156,false,true);
   assert(!memcmp(before,r,sizeof r)); /* stationary pointer permits pad use */
   put(0x14,5);

@@ -91,6 +91,18 @@ static void routine_bank(unsigned bank,unsigned pc,unsigned a,unsigned y) {
     assert(cpu->sp==0x1fff && cpu->dp==0x1e00);
 }
 static void routine(unsigned pc,unsigned a,unsigned y) { routine_bank(3,pc,a,y); }
+static void terrain_bounds(void) {
+    const int points[][2]={{127,127},{128,128},{223,143},{224,144},{239,199},
+        {255,255},{256,256},{300,300},{450,372},{479,399},{-1,40},{40,-1},{480,40},{40,400}};
+    for(unsigned i=0;i<sizeof points/sizeof *points;++i) {
+        int x=points[i][0],y=points[i][1];bool valid=ScWorldContains(&world,x,y);
+        if(valid) ScWorldPutCell(&world,x,y,0x8015);
+        put(0x1d3,x);put(0x1d5,y);
+        routine_bank(1,0xc772,0,0);
+        assert((ram[0x13b]|ram[0x13c]<<8)==(valid?0x8015:0));
+        assert(valid || (ram[0x13d]|ram[0x13e]<<8)==0x300);
+    }
+}
 int main(int argc,char **argv) {
     assert(argc==2); FILE *f=fopen(argv[1],"rb"); assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom); fclose(f);
@@ -123,6 +135,7 @@ int main(int argc,char **argv) {
     assert(mini_x==226 && mini_y==78);
     routine_bank(1,0xa688,239,0); assert(cpu->a==210);
     routine_bank(1,0xa6a1,199,0); assert(cpu->a==172);
+    terrain_bounds();
     unsigned field; int displacement;
     assert(ScWorldFieldResolve(0xb150,&field,&displacement) && field==10 && displacement== -60);
     assert(ScWorldFieldResolve(0xc17c,&field,&displacement) && field==14 && displacement== -120);
@@ -264,6 +277,7 @@ int main(int argc,char **argv) {
     put(0x1bd,455);put(0x1bf,378);routine_bank(1,0x8aa8,0,0);
     routine_bank(1,0xa688,479,0);assert(cpu->a==450);
     routine_bank(1,0xa6a1,399,0);assert(cpu->a==372);
+    terrain_bounds();
     world.scan_x=479;world.scan_y=399;
     free(data);size=ScWorldEncodedSize();data=malloc(size);assert(data);
     assert(ScWorldEncode(&world,data,size) && ScWorldDecode(&copy,data,size));

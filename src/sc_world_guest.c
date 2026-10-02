@@ -139,9 +139,10 @@ void ScWorldGuestStep(ScWorld *w,Interp816 *c,uint8_t *r) {
         } else if (c->pc==0xb6db || c->pc==0xb6e9 || c->pc==0xb714 ||
                    c->pc==0xb722 || c->pc==0xb8af || c->pc==0xb8bf ||
                    c->pc==0xc779 || c->pc==0xc782) {
-            /* Byte coordinates >=128 are valid; the following unsigned CMP
-             * rejects underflow ($ff) as well as the expanded upper bound. */
-            c->pc+=2;
+            /* Run the untaken BMI so the next instruction gets its own hook.
+             * Skipping directly to CMP bypasses the full-coordinate check,
+             * leaving Huge's byte-sized width/height truncated to 224/144. */
+            c->n=false;
         }
         return;
     }

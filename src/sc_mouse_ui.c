@@ -66,9 +66,9 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
   case 3: { /* Game select: 03:d37c's hand positions, with/without saves. */
     const bool saved = word(r, 0x44) != 0;
     const int first = saved ? 0 : 1;
-    for (int i = first; i < 4; ++i) {
+    for (int i = first; i < 5; ++i) {
       int by = saved ? 100 + 24 * i : 112 + 24 * (i - 1);
-      if (!box(x, y, 48, by, 148, 16)) continue;
+      if (!box(x, y, 48, by, 184, 16)) continue;
       result.hit = true;
       if (select) put(r, 0x3e, (unsigned)i);
     }

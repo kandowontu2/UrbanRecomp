@@ -51,6 +51,7 @@ add_executable(UrbanRecomp
     src/main.c
     src/sc_world.c
     src/sc_world_guest.c
+    src/sc_journey.c
     src/sc_development.c
     src/sc_population.c
     src/sc_mouse_ui.c
@@ -559,4 +560,11 @@ add_executable(UrbanRecompPowerRefreshTest EXCLUDE_FROM_ALL
     src/sc_world.c src/sc_world_guest.c src/sc_mapgen.c
     ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
 target_include_directories(UrbanRecompPowerRefreshTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+
+add_executable(UrbanRecompJourneyTest EXCLUDE_FROM_ALL
+    tests/sc_journey_test.c src/sc_journey.c src/sc_world.c src/sc_mapgen.c
+    src/sc_construction.c src/sc_world_guest.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
+target_include_directories(UrbanRecompJourneyTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)

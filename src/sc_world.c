@@ -93,6 +93,7 @@ bool ScWorldEncode(const ScWorld *w,uint8_t *p,size_t size) {
     put(p+40,w->scan_x); put(p+42,w->scan_y);
     for(unsigned i=0;i<3;++i) for(unsigned j=0;j<2;++j) put(p+44+4*i+2*j,w->coord[i][j]);
     put(p+56,w->center_x);put(p+58,w->center_y);p[60]=w->center_valid;
+    p[61]=w->journey;p[62]=w->journey_notice;p[63]=w->journey_announcing|(w->journey_target<<1);
     memcpy(p+64,w->tiles,SC_WORLD_MAX_TILE_BYTES);
     size_t at=64+SC_WORLD_MAX_TILE_BYTES;
     for(unsigned i=0;i<SC_WORLD_FIELDS;++i) {
@@ -111,12 +112,15 @@ bool ScWorldDecode(ScWorld *w,const uint8_t *p,size_t size) {
     for(unsigned i=0;i<3;++i) if(get32(p+28+i*4)>=bytes && get32(p+28+i*4)!=UINT32_MAX) return false;
     if(!legacy && (word(p+40)>width || word(p+42)>height)) return false;
     if(!legacy && (p[60]>1 || (p[60] && (word(p+56)>=width || word(p+58)>=height)))) return false;
+    if(!legacy && (p[61]>1 || p[62]>2 || p[63]>5 || (!p[61] && (p[62] || p[63])))) return false;
     ScWorldReset(w);w->active=p[12]!=0;w->huge=huge;w->map_anchor=get32(p+16);
     for(unsigned i=0;i<3;++i) w->bank_anchor[i]=get32(p+28+i*4);
     if(!legacy) {
         w->scan_x=word(p+40);w->scan_y=word(p+42);
         for(unsigned i=0;i<3;++i) for(unsigned j=0;j<2;++j) w->coord[i][j]=(int16_t)word(p+44+4*i+2*j);
         w->center_x=word(p+56);w->center_y=word(p+58);w->center_valid=p[60]!=0;
+        w->journey=p[61]!=0;w->journey_notice=p[62];w->journey_announcing=(p[63]&1)!=0;
+        w->journey_target=p[63]>>1;
     }
     size_t at=legacy?48:64,n=legacy?SC_WORLD_TILE_BYTES:SC_WORLD_MAX_TILE_BYTES;
     memcpy(w->tiles,p+at,n);at+=n;

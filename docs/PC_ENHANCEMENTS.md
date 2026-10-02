@@ -55,6 +55,25 @@ generate a continuous full-size landscape; the preview samples the entire
 landscape at 2:1 for Big and 4:1 for Huge. Existing cities keep their saved
 dimensions and scenarios retain their original dimensions.
 
+**START NEW JOURNEY** appears directly below **START NEW CITY** in the original
+menu lettering, with the scenario option moved down. It always starts on a
+Normal 120x100 map, regardless of the new-map preference. Reaching **100,000**
+residents unlocks Big 240x200; reaching **1,000,000** unlocks Huge 480x400.
+Dr. Wright celebrates each expansion using the original adviser window,
+font, animation and fanfare, explaining the new dimensions and available land.
+The Journey celebration replaces the ordinary Metropolis visit.
+
+An expansion generates new terrain around all four borders and preserves every
+existing city tile and persistent spatial simulation field. The city and camera move
+together, so existing buildings stay at the same position in the view. Funds,
+calendar and the live simulation random stream are unchanged by the expansion.
+Threshold crossings are latched, so a later population drop cannot revoke an
+unlocked border. Expansion waits for the end of a complete simulation cycle
+and an idle construction/modal boundary. A pending celebration is completed
+before the next expansion. Journey progress and pending messages persist in
+save states and both native city slots' world sidecars. Ordinary cities and
+scenarios do not expand automatically.
+
 Expanded worlds use host buffers for all 48,000 or 192,000 tiles and their spatial simulation
 fields. Tile reads/writes, zone scans, transport, power, construction, disasters,
 rendering and camera limits use the expanded dimensions without wrapping native
@@ -62,6 +81,10 @@ rendering and camera limits use the expanded dimensions without wrapping native
 city-center calculations and spatial fields also use the full world. The city
 overview samples the entire map, and its viewport marker uses those dimensions.
 This feature supports the verified US ROM with the default interpreter.
+
+Huge terrain rendering now checks full coordinates on the native path as well
+as the widescreen extension. Crossing coordinates 224/144 or 256 no longer
+produces black bands from truncated byte-sized bounds.
 
 Mouse control is enabled by default and can be toggled with F3 or **MOUSE
 CURSOR**. Absolute window coordinates are converted to drawable coordinates,
@@ -144,9 +167,11 @@ rendered separately from the stock graphs.
 Save-state version 4 includes the development context, explicit little-endian
 64-bit population state, and full world tiles and spatial fields. Versions
 1, 2, 3 and legacy states remain readable. The current world payload is version
-3 and includes Huge map coordinates. This build also reads Beta 1/2 world
-payloads and upgrades their city sidecars. Earlier enhanced executables cannot
-read the new world payload; upstream executables cannot read version 4 states.
+3 and includes Huge map coordinates and Journey progress. This build also reads Beta 1/2 world
+payloads and upgrades their city sidecars. Beta 1/2 executables cannot read the
+new world payload; upstream executables cannot read version 4 states.
+Beta 3 can read the current map geometry but does not understand Journey
+progress, so use Beta 4 or later to continue a Journey.
 Normal city saves also write `.srm.population` and `.srm.world` sidecars beside
 the SRAM file. They preserve both city slots' full population, capacity totals,
 history, map dimensions, tiles and simulation fields. **Keep all three files
@@ -160,6 +185,19 @@ The population and development hooks support the verified clean US ROM with
 the default interpreter, not the optional fiber path or regional ROMs.
 
 ## Verified
+
+- The native menu emitter draws all four lines from the original ROM font;
+  mouse and controller selection cover all five choices, including Resume.
+- Journey expands at both thresholds, preserves every old tile and all 17
+  persistent spatial fields, translates the camera, and preserves funds,
+  calendar and live PRNG state. Both save slots retain progress and messages.
+  Original construction and power routines work on newly unlocked Huge land.
+- The actual Journey start flow stays Normal with Huge selected in settings.
+  Real residential fixtures of 100,000 and 1,000,000 residents trigger both
+  expansions; the native Dr. Wright dialogs were rendered and inspected.
+- Original terrain-fetch routines pass at 127/128, 223/224, 143/144, 255/256,
+  the Huge far corner, negative coordinates and both outer bounds. A rendered
+  Huge viewport crossing the former black-band boundaries was inspected.
 
 - Huge generation is deterministic across 16 seeds and preserves all stock
   terrain fingerprints. Native simulation visits all 192,000 cells exactly

@@ -22,7 +22,8 @@ is simply "the game".
 [blackerking/UrbanRecomp](https://github.com/blackerking/UrbanRecomp), preserving
 its history, credits and licenses. It adds F12 development speeds (Normal,
 2x, 5x, 10x, 50x), faster refresh of changed power networks, 64-bit population
-accounting up to 9,999,999,999, playable 240x200 maps, and full-canvas mouse
+accounting up to 9,999,999,999, playable 240x200 and 480x400 maps, Journey mode
+with population-triggered border expansions, and full-canvas mouse
 construction with retained off-screen drags. Widescreen status and navigation
 controls now align with the wider city view.
 
@@ -30,7 +31,7 @@ Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
 Extract it and open `UrbanRecomp.exe`, then select your own clean US ROM.
 The enhancements require the verified US ROM and the interpreter execution
-path. The first enhanced release is a prerelease; see
+path. Enhanced releases are prereleases; see
 [features, controls, save compatibility and testing limits](docs/PC_ENHANCEMENTS.md).
 
 **Adaptive Widescreen, the default renderer:** the shared Mods launcher offers

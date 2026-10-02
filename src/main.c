@@ -105,9 +105,11 @@ uint8_t    g_ram[0x20000];
 #include "sc_construction.h"
 #include "sc_power_refresh.h"
 #include "sc_world_guest.h"
+#include "sc_journey.h"
 static ScWorld s_world;
 static ScWorldGuest s_world_guest;
 static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge */
+static bool s_journey_arming;
 static char s_world_path[1100];
 static void world_saved_city(bool save);
 /* Declared, not #included: cpu_trace.h pulls in cpu_state.h, whose CpuState
@@ -490,6 +492,9 @@ static uint8_t bus_read(void *mem, uint32_t adr) {
   (void)mem;
   uint8_t world_value;
   if (ScWorldGuestRead(&s_world_guest, adr, &world_value)) return world_value;
+  if (ScJourneyMenuRead(adr,g_ram[0x14],&world_value) ||
+       (s_world.journey_announcing && ScJourneyMessageRead(s_world.journey_notice,adr,&world_value)))
+    return world_value;
   uint8_t v = snes_read(g_snes, adr);
   if (s_wram_map) wram_map_note(adr, false);
   uint16_t reg = (uint16_t)adr;
@@ -3529,6 +3534,8 @@ static bool run_one_frame(void) {
     s_population_clock.observed=s_power_refresh.clock.observed=false;
     s_population_clock.previous_gap=s_power_refresh.clock.previous_gap=0;
   }
+  if(s_population.valid && host_map_screen_live())
+    ScJourneyObservePopulation(&s_world,s_population.value);
   if (s_fast_ticks) { g_ram[0x01f3] = 0; g_ram[0x01f4] = 0; }
   sc_maybe_trigger_disaster();
   replay_free_tick();
@@ -3646,17 +3653,18 @@ static bool run_one_frame(void) {
         const char *e = getenv("SC_MAPGEN_FAST");
         fast = (e && *e) ? (*e != '0') : 1;   /* on; SC_MAPGEN_FAST=0 disables */
       }
-      if (!fast && !s_large_maps) ScWorldReset(&s_world);
+      if (!fast && !s_large_maps) {ScWorldReset(&s_world);s_world.journey=s_journey_arming;}
       if (fast || s_large_maps) {
         static ScMapGenState gs;
         ScMapGenPrng pr;
         pr.s0 = (uint16_t)(g_ram[0x59] | (g_ram[0x5a] << 8));
         pr.s1 = (uint16_t)(g_ram[0x5b] | (g_ram[0x5c] << 8));
         pr.t  = (uint16_t)(g_ram[0x5d] | (g_ram[0x5e] << 8));
-        if (s_large_maps && s_rom_fnv==SC_ROM_FNV_US) {
+        if (s_large_maps && !s_journey_arming && s_rom_fnv==SC_ROM_FNV_US) {
           if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr); else ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
         } else {
           ScWorldReset(&s_world); sc_mapgen_generate(&pr, &gs);
+          s_world.journey=s_journey_arming;
         }
         /* The map is at $7F0200 -- bank 7F, so 0x10200 into WRAM. */
         for (unsigned i = 0; !s_world.active && i < SC_MAPGEN_CELLS; i++) {
@@ -3703,6 +3711,52 @@ static bool run_one_frame(void) {
      *
      * 03:ce61 is the scenario equivalent -- map in place, about to return. */
     if (s_ninth_scenario) ninth_scenario_hook(cpu->k, cpu->pc);
+    if (s_rom_is_us) {
+      /* Extend the real five-choice menu and its native hand sprite. */
+      if(cpu->k==2 && cpu->pc==0xbcd6) {
+        ScJourneyMenuFont(g_ppu->vram);
+        ScJourneyMenuFrame(g_ppu->vram,PPU_bgTilemapAdr(g_ppu,2));
+      }
+      if(cpu->k==2 && cpu->pc==0xbcfe && ram_w(0x14)==3)
+        cpu->a=(cpu->a&0xff00)|ScJourneyMenuY(ram_w(0x44)!=0,ram_w(0x3e));
+      if(cpu->k==3 && cpu->pc==0xd369) {
+        unsigned selected=ram_w(0x3e);
+        s_journey_arming=selected==3;
+        if(selected>=3) ram_set_w(0x3e,selected==3?2:3);
+      }
+      /* Keep the native Metropolis achievement/history, but let Journey's
+       * border celebration supply its visit instead of opening two dialogs. */
+      if(cpu->k==3 && cpu->pc==0xc112 && s_world.journey && ram_w(0xca5)==4) {
+        ram_set_w(0x397,0);cpu->pc=0xc118;
+      }
+      /* The full cycle has returned from every spatial scan. Resizing here
+       * cannot change a suspended scan's row pitch or flood-fill stack. */
+      if(cpu->k==3 && cpu->pc==0x8016 && !ram_w(0xd7) && !ram_w(0x379) &&
+          !s_build_pending && !s_build_active && !s_native_power_active && s_population.valid) {
+        unsigned stage=ScJourneyExpand(&s_world,g_ram,s_population.value);
+        if(stage) {
+          reset_refresh_clocks();ScDevelopmentReset(&s_development);
+          memset(&s_world_guest,0,sizeof s_world_guest);
+          ScRendererResetHistory(&s_custom_renderer);
+          fprintf(stderr,"[journey] frame %llu expanded to %ux%u at population %llu\n",
+            (unsigned long long)s_frames,ScWorldWidth(&s_world),ScWorldHeight(&s_world),
+            (unsigned long long)s_population.value);
+        }
+      }
+      if(cpu->k==1 && cpu->pc==0x897f && cpu->dp==0 && cpu->db==0 &&
+          host_map_screen_live() && !ram_w(0xd7) && !ram_w(0x379) &&
+          !ram_w(0x391) && !ram_w(0x395) && !ram_w(0x397) &&
+          s_world.journey_notice && !s_world.journey_announcing) {
+        /* Message 4 supplies the native happy Wright animation and fanfare,
+         * without a gift or scenario side effect. Its text is visit-scoped. */
+        s_world.journey_announcing=true;ram_set_w(0x397,4);ram_set_w(0x395,1);
+      }
+      if(cpu->k==1 && cpu->pc==0xe59b && s_world.journey_announcing && ram_w(0x397)==4)
+        cpu->a=0xfd00; /* virtual text record through the native 24-column writer */
+      if(cpu->k==1 && cpu->pc==0xa63c && s_world.journey_announcing && ram_w(0x397)==4) {
+        s_world.journey_notice=0;s_world.journey_announcing=false;
+      }
+    }
     if (s_rom_is_us && cpu->k==3 && cpu->pc==0x80eb) {
       ScPowerRefreshObserve(&s_power_refresh,s_frames,g_ram[0x193]);
       if (power_diag) fprintf(stderr,"[power native] frame %llu game speed %u tick %u\n",
@@ -3986,7 +4040,10 @@ static bool run_one_frame(void) {
       if (cpu->pc == 0xc8dd) world_saved_city(false);
       if (cpu->pc == 0xcbe2) world_saved_city(true);
       if (cpu->pc == 0xce61) ScPopulationImport(&s_population, g_ram);
-      if (cpu->pc == 0xc73c) ScPopulationImport(&s_population, g_ram);
+      if (cpu->pc == 0xc73c) {
+        ScPopulationImport(&s_population, g_ram);
+        if(s_journey_arming) {s_world.journey=true;s_journey_arming=false;}
+      }
       /* A native census must not replace the current fast count with its
        * pre-development sweep. Recount once at this safe calculation entry. */
       if (cpu->pc==0x81a3) {
@@ -3995,6 +4052,7 @@ static bool run_one_frame(void) {
           ScPopulationRefreshLive(&s_population,g_ram,&s_world,g_snes->cart->rom,g_snes->cart->romSize);
       }
       uint16_t population_pc = ScPopulationStep(&s_population, g_ram, cpu->pc, cpu->dp);
+      if(cpu->pc==0x81a3 && s_population.valid) ScJourneyObservePopulation(&s_world,s_population.value);
       if (population_pc != cpu->pc) {
         cpu->y = (uint16_t)ScPopulationClass(s_population.value);
         cpu->a = (uint16_t)((g_ram[0xba7] | (g_ram[0xba8]<<8)) - 7);
@@ -6472,6 +6530,7 @@ static bool load_state(const char *path) {
   fs.base.func(&fs.base, &s_frames, sizeof(s_frames));
   ScDevelopmentReset(&s_development);
   reset_refresh_clocks();
+  s_journey_arming=false;
   ScWorldReset(&s_world); memset(&s_world_guest,0,sizeof s_world_guest);
   ScPopulationImport(&s_population, g_ram);
   if (versioned) {
@@ -6526,6 +6585,8 @@ static bool load_state(const char *path) {
   if (ok && sc_fiber_active()) ScFiberDrive_AdoptInterpState(g_cpu);
 #endif
   if (ok) {
+    unsigned screen=ram_w(0x14);
+    s_journey_arming=s_world.journey && ((screen>=4 && screen<=9) || screen==21 || screen==22);
     s_build_active = s_build_pending = s_build_cancelled = false;
     s_map_mouse_accept_pending = false;
     s_map_mouse_refresh_pending = false;
@@ -9548,6 +9609,7 @@ int main(int argc, char **argv) {
   host_map_init();
   ScRendererInit(&s_custom_renderer, g_snes->cart->rom, rom_size, s_rom_is_us);
   s_custom_renderer.population=&s_population;
+  if(s_rom_is_us) ScJourneyMenuInit(g_snes->cart->rom,rom_size);
   { const char *large=getenv("SC_LARGE_MAPS");
     s_large_maps=large?atoi(large):s_launch_settings.large_maps; if(s_large_maps<0 || s_large_maps>2) s_large_maps=0; }
   s_custom_renderer.world=&s_world;
@@ -10071,7 +10133,7 @@ int main(int argc, char **argv) {
           }
           mouse_target_valid = true;
           mouse_world_hit=s_rom_is_us && ram_w(0x14)==3 && mouse_target_x>=64 &&
-            mouse_target_x<224 && mouse_target_y>=196 && mouse_target_y<212;
+            mouse_target_x<224 && mouse_target_y>=76 && mouse_target_y<92;
           s_mouse_dir = 0;
           if (dx < 0) s_mouse_dir |= kPad_Left;
           if (dx > 0) s_mouse_dir |= kPad_Right;
@@ -10599,7 +10661,7 @@ int main(int argc, char **argv) {
       ScViewport v=s_custom_video.enabled?s_custom_renderer.view:viewport;
       double sx=s_destination.w/v.width,sy=s_destination.h/v.height;
       ScRect button=SC_RECT(s_destination.x+(v.core_x+64)*sx,
-        s_destination.y+(v.core_y+196)*sy,160*sx,16*sy);
+        s_destination.y+(v.core_y+76)*sy,160*sx,16*sy);
       SDL_SetRenderDrawColor(renderer,54,37,13,255); SDL_RenderFillRect(renderer,&button);
       SDL_SetRenderDrawColor(renderer,255,255,232,255); SDL_RenderDrawRect(renderer,&button);
       int px=(int)sy; if(px<1) px=1;

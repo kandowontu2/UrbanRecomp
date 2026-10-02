@@ -23,6 +23,9 @@ typedef struct ScWorld {
     uint16_t scan_x, scan_y;
     uint16_t center_x,center_y;
     bool center_valid;
+    bool journey, journey_announcing;
+    uint8_t journey_notice; /* 1 Big, 2 Huge; persisted until Wright dismisses it */
+    uint8_t journey_target; /* highest population threshold reached, never regresses */
     int16_t coord[3][2]; /* full coordinates behind native packed-byte proxies */
     uint32_t map_anchor;
     uint32_t bank_anchor[3]; /* rendering/vehicles cannot replace the sim cursor */

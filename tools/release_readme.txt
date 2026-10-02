@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED - 1.2.0 BETA 3
+URBAN RECOMP ENHANCED - 1.2.0 BETA 4
 ===================================
 
 Urban Recomp runs the Super Nintendo city builder SimCity (1991) natively on
@@ -15,6 +15,10 @@ refresh scaled to the selected multiplier. Calendar and budgets keep their
 normal schedule. 64-bit calculated population up to 9,999,999,999; Normal
 120x100, Big 240x200 and Huge 480x400 maps. Use L in the main menu or NEW MAP
 SIZE in F12 to select the size before starting a city.
+START NEW JOURNEY uses the original menu font and starts Normal, expanding
+to Big at 100,000 residents and Huge at 1,000,000. Dr. Wright celebrates each
+expansion. Buildings and city data are preserved; Journey progress is saved.
+Huge maps now render correctly past the old byte-coordinate boundaries.
 Full-widescreen mouse construction, retained off-screen
 drags, and corrected widescreen HUD/minimap placement. See PC_ENHANCEMENTS.md.
 These features require the verified clean US ROM and the interpreter build.
