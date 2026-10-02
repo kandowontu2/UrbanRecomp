@@ -1,4 +1,3 @@
 @echo off
-pushd "%~dp0"
-UrbanRecomp.exe %*
-popd
+start "" /D "%~dp0" "%~dp0UrbanRecomp.exe" %*
+exit /b

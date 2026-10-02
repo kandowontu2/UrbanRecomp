@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED - 1.2.0 BETA 8
+URBAN RECOMP ENHANCED - 1.2.0 BETA 9
 ===================================
 
 Urban Recomp runs the Super Nintendo city builder SimCity (1991) natively on
@@ -35,6 +35,8 @@ slots, Save? confirmation buttons, gift selections and widescreen gift
 placement. END works on the difficulty and confirmation screens.
 Existing stray tiles in previously affected saves require recovery from a
 clean map/backup; this update prevents new corruption without deleting cities.
+Beta 9 launches as a Windows desktop application without opening a console.
+The optional Start-UrbanRecomp.cmd launcher exits after starting the game.
 These features require the verified clean US ROM and the interpreter build.
 This enhanced build is a prerelease; hands-on gameplay testing is ongoing.
 

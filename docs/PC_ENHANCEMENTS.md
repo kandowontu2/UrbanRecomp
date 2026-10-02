@@ -7,6 +7,12 @@ enhancements. Windows packages are available from
 
 ## Implemented
 
+Windows builds launch without a console window. Start `UrbanRecomp.exe`
+directly; the optional batch launcher exits immediately after starting it.
+Developers can build with `-DSC_CONSOLE=ON` to retain the console. Command-line
+arguments, exit codes and diagnostics redirected to files remain available in
+the default desktop build.
+
 F12 opens the host settings overlay; F10 remains an alias. **DEVELOPMENT SPEED**
 cycles through Normal, X2, X5, X10 and X50. The extra work repeats the original
 residential, commercial and industrial development decisions per simulation

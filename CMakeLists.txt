@@ -3,6 +3,17 @@ project(UrbanRecomp VERSION 1.2.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 
+option(SC_CONSOLE "Open a Windows console for development diagnostics" OFF)
+function(sc_configure_windows_app target)
+    if(WIN32 AND NOT SC_CONSOLE)
+        set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE TRUE)
+        if(MSVC)
+            # SDL_MAIN_HANDLED leaves startup in our ordinary main(argc, argv).
+            target_link_options(${target} PRIVATE /ENTRY:mainCRTStartup)
+        endif()
+    endif()
+endfunction()
+
 # Prerequisites: a snesrecomp checkout at ./snesrecomp (pinned submodule); the
 # generated C for the variant you build (run `bash tools/regen.sh` with the
 # verified ROM staged, see CONTRIBUTING.md); SDL3 (vcpkg: `sdl3:x64-windows`),
@@ -161,6 +172,7 @@ target_compile_definitions(UrbanRecomp PRIVATE "SC_VERSION=\"${PROJECT_VERSION}\
 if(WIN32)
     target_sources(UrbanRecomp PRIVATE src/urbanrecomp.rc)
 endif()
+sc_configure_windows_app(UrbanRecomp)
 
 # ── Linux desktop ───────────────────────────────────────────────────────────
 #
@@ -454,6 +466,7 @@ if(SC_GEN_SOURCES)
     if(WIN32)
         target_sources(UrbanRecompAOT PRIVATE src/urbanrecomp.rc)
     endif()
+    sc_configure_windows_app(UrbanRecompAOT)
 endif()
 
 # -- AOT differential harness (migration step 3a) ----------------------------
