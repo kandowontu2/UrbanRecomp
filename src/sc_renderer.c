@@ -859,7 +859,8 @@ static void city_pointer(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
          * land frame. Get the selected tool's authentic outline from ROM. */
         unsigned tool=u16(ram,0x20d);
         if (tool>14) return;
-        unsigned record=rom_read(r,0x018000+tool*2)|(rom_read(r,0x018001+tool*2)<<8);
+        /* 01:8000 is one BYTE per tool, not a word/pointer table. */
+        unsigned record=rom_read(r,0x018000+tool);
         count=ScSelector_Record(record,wx*8-r->scroll_x-r->scroll_adjust_x,
             wy*8-r->scroll_y-r->scroll_adjust_y,sprites,8,rom_read,r);
     } else for (int slot=0;slot<4;++slot) {
@@ -1026,7 +1027,8 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
             (p->screenEnabled[0]&3)==3 && !u16(ram,0x379);
         r->split_hud=hud && r->view.width>256;
         r->pan_frame=city_live(r,p,ram) && !r->advisor_frame && !u16(ram,0x379) &&
-            (p->screenEnabled[0]&16) && (p->oam[81]&255)==0x66 && (p->oam[80]>>8)==46;
+            (p->screenEnabled[0]&16) && (p->oam[81]&255)==0x66 && (p->oam[80]>>8)==46 &&
+            sprite_x(p,40)<256; /* high X bit parks the hidden minimap */
         r->city_input=city_live(r,p,ram) && !r->advisor_frame && !u16(ram,0x379) &&
             !u16(ram,0xd7) && !ram[0x391];
         find_lights(r,p);

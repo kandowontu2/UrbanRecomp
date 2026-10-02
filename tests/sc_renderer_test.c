@@ -349,6 +349,34 @@ int main(void) {
     assert(r.pixels[91*448+397]==0xffff0000); /* tile Y96-5, X400-3 */
     assert(!memcmp(before,p,sizeof *p));
     p->oam[144]=(240<<8)|128;
+    /* The tool table is byte-indexed. Each of the 15 construction tools
+     * must emit only its four original corners, never unrelated ROM art. */
+    const uint8_t tool_records[]={0,0,0,0,0,1,1,1,1,1,2,2,3,2,2,1};
+    memcpy(rom+0x8000,tool_records,sizeof tool_records);
+    const int lefts[]={-3,-4,-3,-3},rights[]={3,19,27,43},bottoms[]={1,18,25,41};
+    for (int record=1;record<=3;++record) {
+        unsigned at=0x2240+(record-1)*20;
+        word(rom,0x2164+record*2,at+0x8000);word(rom,at,0x111);
+        const uint8_t pieces[]={(uint8_t)lefts[record],251,0,0x30,(uint8_t)rights[record],251,0,0x30,
+            (uint8_t)lefts[record],(uint8_t)bottoms[record],0,0x30,
+            (uint8_t)rights[record],(uint8_t)bottoms[record],0,0x30,0};
+        memcpy(rom+at+2,pieces,sizeof pieces);
+    }
+    for (int tool=0;tool<=14;++tool) {
+        word(ram,0x20d,tool);
+        for (int y=0;y<224;++y) {
+            for (int x=0;x<256;++x) native[x]=y>=91 && y<=98 && x>=141 && x<=148?0xffff0000:0xff0000ff;
+            ScRendererLine(&r,p,ram,y,native);
+        }
+        int record=tool_records[tool],xs[]={400+lefts[record],400+rights[record]},ys[]={91,96+bottoms[record]};
+        for (int y=70;y<150;++y) for (int x=70;x<448;++x) {
+            bool corner=false;
+            for (int j=0;j<2;++j) for (int i=0;i<2;++i)
+                if (x>=xs[i] && x<xs[i]+8 && y>=ys[j] && y<ys[j]+8) corner=true;
+            assert((r.pixels[y*448+x]==0xffff0000)==corner);
+        }
+    }
+    word(ram,0x20d,0);
     /* The whole 16px hand crosses the HUD boundary at its relocated X.
      * Parked corners do not become artifacts when the next frame is land. */
     r.pointer_active=false;
@@ -377,6 +405,16 @@ int main(void) {
     for (int slot=0;slot<4;++slot) p->oam[slot*2]=(240<<8)|128;
     p->oam[80]=(46<<8)|190; p->oam[81]=0x3166;
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+    /* A parked minimap must not leave its host position marker floating
+     * at the far right, or intercept the mouse in that invisible panel. */
+    p->highOam[10]=1;
+    for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+    assert(!r.pan_frame && r.pixels[64*448+398]!=0xffffffff);
+    assert(ScRendererWindowToGuest(&r,dest,1000,500,2000,1000,425,134,&gx,&gy,&navigation));
+    assert(!navigation);
+    p->highOam[10]=0;
+    for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+    assert(r.pan_frame);
     ScWorld *large=calloc(1,sizeof *large); assert(large); large->active=true; r.world=large;
     marker=ScRendererMinimapView(&r,ram);
     assert(marker.x==395 && marker.y==60 && marker.w==7 && marker.h==4);

@@ -126,6 +126,8 @@ visible city area using the actual map dimensions and canvas size, including
 240x200 and 480x400 worlds, instead of letting the old marker run outside its frame.
 Right/up/down navigation arrows follow the wider canvas. Mouse hit regions
 follow the relocated elements through window scaling and DPI conversion.
+Tool outlines use the original byte-indexed ROM table for all 15 construction
+tools. A hidden minimap also hides its position marker and mouse hit regions.
 
 Game selection, map preview buttons and number arrows, the name keyboard,
 difficulty and its confirmation, saved-city slots and scenario cards now use
