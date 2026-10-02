@@ -51,7 +51,20 @@ int main(void) {
         assert(g->state.map[0]==old);
         sc_mapgen_seed(&p,0x5c00,(uint8_t)seed,0,0,2,0);
         sc_mapgen_generate(&p,&g->state); assert(hash(g->state.map,12000)==stock[seed]);
+        sc_mapgen_seed(&p,0x5c00,(uint8_t)seed,0,0,2,0);q=p;
+        sc_mapgen_generate_huge(&p,&g->state);sc_mapgen_generate_huge(&q,again);
+        assert(g->state.width==480 && g->state.height==400);
+        assert(!memcmp(g->state.map,again->map,sizeof again->map));
+        memset(counts,0,sizeof counts);
+        for(unsigned y=0;y<400;++y) for(unsigned x=0;x<480;++x) {
+            unsigned v=sc_mapgen_read_cell(&g->state,x,y);assert(v<=0x25);
+            if(v) ++counts[(y>=200)*2+(x>=240)];
+        }
+        for(unsigned i=0;i<4;++i) assert(counts[i]>0);
+        unsigned first=g->state.map[0];sc_mapgen_write_cell(&g->state,479,399,0xc123);
+        assert(g->state.map[191999]==0xc123 && g->state.map[0]==first);
+        assert(g->before==g->after && g->after==UINT64_C(0xfacedeed98765432));
     }
     free(g); free(again);
-    puts("PASS: 16 stock terrain fingerprints, deterministic continuous 240x200 generation, far-bank cells and bounds guards");
+    puts("PASS: 16 stock fingerprints, deterministic continuous Big/Huge terrain, far-bank cells and bounds guards");
 }

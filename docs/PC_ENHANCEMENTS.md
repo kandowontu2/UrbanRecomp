@@ -22,32 +22,45 @@ still require more host CPU work and can reduce performance. Normal takes the
 unaltered guest path. `SC_DEVELOPMENT_SPEED=1|2|5|10|50` selects the initial value
 for testing; the menu setting is otherwise session-only.
 
-At accelerated development speeds, changed electrical networks are checked at
-2x, 5x, 10x or 50x the host refresh cadence. The original power flood fill runs
+At accelerated development speeds, population and electrical networks refresh
+at the selected 2x, 5x, 10x or 50x multiplier of their measured native cadence.
+The scheduler averages alternating native phases and retains fractional-frame
+credit; it does not use a fixed, generally faster polling rate. Population is
+recounted from actual developed RCI zones, without changing the native partial
+simulation tally. The native pre-development census cannot overwrite that
+current count. Normal retains the original population and power schedules.
+
+For changed electrical networks, the original power flood fill runs
 in private CPU/WRAM and commits only its power bitmap and tile power flags.
 New connections and disconnections therefore update without waiting for the
 next full simulation cycle. Original coal/nuclear capacities and conductive
 tile rules still apply; this refresh does not advance time, budgets, demand,
-randomness or disaster checks. Unchanged networks skip the extra flood fill.
-Normal retains the game's original power schedule.
+randomness or disaster checks. Unchanged networks reuse the settled result.
+Power flags remain consistent during native scans, and the completed bitmap
+is published only at safe boundaries. Cached lightning glyphs disappear when
+their zone is powered; coal and nuclear plants retain their original intrinsic
+self-power behavior, including immediately after placement.
 
 The development hooks currently support the verified US ROM with the default
 interpreter. They do not implement acceleration in the optional `SC_FIBER=1`
 execution path or regional ROMs.
 
-The game-selection menu has a **L LARGE MAPS** button. Click it or press **L**
-to toggle new maps between **120x100** and **240x200**: twice the width and
-height, four times the area. F12 also exposes **LARGE NEW MAPS**. This preference
-is saved in `sc-settings.ini`; `SC_LARGE_MAPS=0|1` can override its initial value.
-Choose **Start new city** after enabling it. Map numbers and NEXT generate a
-continuous full-size landscape; the preview shows the whole landscape at half
-scale. Existing cities keep their saved dimensions and scenarios retain their
-original dimensions.
+The game-selection menu's map-size button, or **L**, cycles **Normal 120x100**,
+**Big 240x200**, and **Huge 480x400**. Huge doubles both dimensions of Big:
+four times Big's area and sixteen times Normal's area. F12 also exposes
+**NEW MAP SIZE**. This preference is saved in `sc-settings.ini`;
+`SC_LARGE_MAPS=0|1|2` selects Normal, Big or Huge for testing.
+Choose **Start new city** after selecting the size. Map numbers and NEXT
+generate a continuous full-size landscape; the preview samples the entire
+landscape at 2:1 for Big and 4:1 for Huge. Existing cities keep their saved
+dimensions and scenarios retain their original dimensions.
 
-Large worlds use host buffers for all 48,000 tiles and their spatial simulation
+Expanded worlds use host buffers for all 48,000 or 192,000 tiles and their spatial simulation
 fields. Tile reads/writes, zone scans, transport, power, construction, disasters,
 rendering and camera limits use the expanded dimensions without wrapping native
-16-bit byte offsets. The city overview samples the whole world at half scale.
+16-bit byte offsets or 8-bit coordinates. Power stacks, population density,
+city-center calculations and spatial fields also use the full world. The city
+overview samples the entire map, and its viewport marker uses those dimensions.
 This feature supports the verified US ROM with the default interpreter.
 
 Mouse control is enabled by default and can be toggled with F3 or **MOUSE
@@ -77,7 +90,7 @@ Adaptive widescreen now keeps the date and tools on the left and places
 population, money and RCI demand at the far right, on a continuous header.
 The navigation minimap moves to the right edge; its outline projects the
 visible city area using the actual map dimensions and canvas size, including
-240x200 worlds, instead of letting the old marker run outside its frame.
+240x200 and 480x400 worlds, instead of letting the old marker run outside its frame.
 Right/up/down navigation arrows follow the wider canvas. Mouse hit regions
 follow the relocated elements through window scaling and DPI conversion.
 
@@ -102,7 +115,7 @@ preflights every eligible placement with a temporary treasury, rejects the
 whole gesture if actual funds are insufficient, and commits once at the city's
 idle input boundary. It does not advance the guest calendar or budget clock.
 The transaction preserves live stacks, scheduler context, pointer and selected
-tool. Leaving the playable surface, changing tools, losing focus or loading a
+tool. Changing tools or camera, losing focus, opening a modal or loading a
 save state cancels an unfinished gesture. These controls have not yet had
 hands-on desktop testing.
 
@@ -120,7 +133,7 @@ views; narrow views place them beside the date to retain full-size digits.
 The empty-city cap screenshot is a forced formatting fixture, not a calculated
 population; ordinary gameplay continues to calculate population from zones.
 
-Small cities take the original population routine when it can represent the
+At Normal speed, small cities take the original population routine when it can represent the
 correct result. At overflow, the host bypasses its narrow arithmetic. Native
 population/class gates use a bounded compatibility value, preserving all
 original milestone thresholds. The authoritative population is the host value;
@@ -130,7 +143,10 @@ rendered separately from the stock graphs.
 
 Save-state version 4 includes the development context, explicit little-endian
 64-bit population state, and full world tiles and spatial fields. Versions
-1, 2, 3 and legacy states remain readable. Older executables cannot read version 4.
+1, 2, 3 and legacy states remain readable. The current world payload is version
+3 and includes Huge map coordinates. This build also reads Beta 1/2 world
+payloads and upgrades their city sidecars. Earlier enhanced executables cannot
+read the new world payload; upstream executables cannot read version 4 states.
 Normal city saves also write `.srm.population` and `.srm.world` sidecars beside
 the SRAM file. They preserve both city slots' full population, capacity totals,
 history, map dimensions, tiles and simulation fields. **Keep all three files
@@ -145,6 +161,24 @@ the default interpreter, not the optional fiber path or regional ROMs.
 
 ## Verified
 
+- Huge generation is deterministic across 16 seeds and preserves all stock
+  terrain fingerprints. Native simulation visits all 192,000 cells exactly
+  once; density, pollution, land value, fire coverage and city-center routines
+  complete across the full map. A full residential fixture calculates
+  17,024,000 residents before development, without native counter wrap.
+- All normal construction tools work beyond coordinate 255. Power tests cover
+  both coordinate-256 seams, disconnection, and original coal/nuclear capacities.
+- Population capacity for every RCI center tile matches the original ROM
+  routine. Live growth/removal, ten-digit arithmetic, histories and save slots
+  pass. Power tests verify every selected multiplier, fractional cadence,
+  speed changes and safe bitmap publication during an in-flight native scan.
+- Huge save/reload and older Big world/sidecar migration pass. A 7,200-frame
+  Huge-city qualification completes multiple native simulation cycles.
+- The actual Start New City flow generates a 480x400 map, accepts its preview,
+  name and difficulty through mouse controls, and enters a playable city.
+- A sparse Huge city with a far-corner nuclear plant renders at approximately
+  60.1 FPS under SDL's software renderer. Crowded Huge-city performance remains
+  dependent on CPU load, especially at 50x.
 - Windows SDL3 executable builds with GCC/Ninja.
 - Actual ROM zone routines: Normal produces byte-identical WRAM to the stock
   path; each RCI handler executes 2/5/10/50 attempts, counts the zone once,

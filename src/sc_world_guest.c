@@ -7,8 +7,110 @@ static void put(uint8_t *r,unsigned p,unsigned v) { r[p]=(uint8_t)v; r[p+1]=(uin
 static void nz(Interp816 *c,unsigned v,bool byte) {
     c->z=(v&(byte?255:65535))==0; c->n=(v&(byte?128:32768))!=0;
 }
+static unsigned big_dimension(uint32_t pc);
+static unsigned dimension(const ScWorld *w,uint32_t pc);
+static int lift(int low,int reference,int modulus) {
+    int delta=(low-reference)%modulus;
+    if(delta>modulus/2) delta-=modulus;
+    if(delta<-modulus/2) delta+=modulus;
+    return reference+delta;
+}
+static void coord_set(ScWorld *w,uint8_t *r,int x,int y) {
+    w->coord[2][0]=x;w->coord[2][1]=y;r[0xb85]=(uint8_t)x;r[0xb86]=(uint8_t)y;
+}
+static bool huge_step(ScWorld *w,Interp816 *c,uint8_t *r) {
+    if(c->k==1) {
+        /* These bounds read byte proxies; compare their full coordinate. */
+        unsigned axis=0;bool bound=true;
+        switch(c->pc) {
+        case 0xb6dd:case 0xb716:case 0xb8b1:case 0xc77b:axis=0;break;
+        case 0xb6eb:case 0xb724:case 0xb8c1:case 0xc784:axis=1;break;
+        default:bound=false;break;
+        }
+        if(bound) {
+            int reference=c->pc==0xc77b?(int16_t)word(r,0x1d3):c->pc==0xc784?(int16_t)word(r,0x1d5):word(r,0x205+2*axis);
+            int v=lift(c->a&255,reference,256);unsigned limit=axis?ScWorldHeight(w):ScWorldWidth(w);
+            c->c=v<0 || (unsigned)v>=limit;c->z=(unsigned)v==limit;c->n=false;c->pc+=2;return true;
+        }
+    }
+    if(!w->huge) return false;
+    unsigned pc=((unsigned)c->k<<16)|c->pc,big=big_dimension(pc);
+    bool load=pc==0x00b05f || pc==0x00b2f6 || pc==0x00b4c2 || pc==0x00b706 || pc==0x00b9f8 ||
+        pc==0x01be51 || pc==0x01c794 || pc==0x03accf || pc==0x03acfe || pc==0x03bc9f || pc==0x03bca7;
+    if(c->mf && !load && (big==240 || big==200 || big==239 || big==199)) {
+        unsigned axis=big==200 || big==199;
+        int reference=w->coord[c->k<3?c->k:2][axis];
+        if(c->k==0) reference=(int16_t)word(r,axis?0x1bf:0x1bd)+16;
+        unsigned raw=pc==0x03b385?c->x:pc==0x03b38f?c->y:c->a;
+        int v=lift(raw&255,reference,256);unsigned limit=dimension(w,pc);
+        c->c=v<0 || (unsigned)v>=limit;c->z=(unsigned)v==limit;c->n=false;c->pc+=2;return true;
+    }
+    if(c->k!=3) return false;
+    switch(c->pc) {
+    case 0x8297:w->scan_x=w->scan_y=0;coord_set(w,r,0,0);break;
+    case 0x82ae:coord_set(w,r,w->scan_x,w->scan_y);break;
+    case 0x9af7:coord_set(w,r,word(r,c->dp+0x10),word(r,c->dp+0x12));break;
+    case 0x9b5c: {
+        unsigned x=word(r,c->dp+0x10)+1,y=word(r,c->dp+0x12);
+        if(x==480) {x=0;++y;}
+        put(r,c->dp+0x10,x);put(r,c->dp+0x12,y);
+        coord_set(w,r,x,y);
+        c->pc=y<400?0x9af7:0x9b6c;return true;
+    }
+    case 0x9cdf:case 0x9eb0:case 0x9c77:
+        coord_set(w,r,r[c->dp+8]*2,r[c->dp+10]*2);break;
+    case 0x9b6f: {
+        uint32_t count=word(r,c->dp+8)|((uint32_t)word(r,c->dp+10)<<16);
+        uint32_t x=word(r,c->dp)|((uint32_t)word(r,c->dp+2)<<16);
+        uint32_t y=word(r,c->dp+4)|((uint32_t)word(r,c->dp+6)<<16);
+        if(count) {w->center_x=x/count;w->center_y=y/count;w->center_valid=true;}
+        break;
+    }
+    case 0x9ba0:c->a=(c->a&0xff00)|(w->center_x&255);break;
+    case 0x9baf:c->a=(c->a&0xff00)|(w->center_y&255);break;
+    case 0x9bb6:w->center_x=240;w->center_y=200;w->center_valid=true;break;
+    case 0x9e61: {
+        int dx=(c->a&255)-(w->center_valid?w->center_x/2:120);
+        int dy=(c->a>>8)-(w->center_valid?w->center_y/2:100);
+        if(dx<0) dx=-dx;if(dy<0) dy=-dy;
+        unsigned distance=dx+dy;c->c=distance>=32;if(distance>32) distance=32;
+        c->a=((dx&255)<<8)|distance;c->mf=true;nz(c,distance,true);c->pc=0x9e8d;return true;
+    }
+    case 0xb37e:c->n=lift(c->y,w->coord[2][1],256)<0;c->pc+=2;return true;
+    case 0xb39a:c->n=lift(c->x,w->coord[2][0],256)<0;c->pc+=2;return true;
+    case 0x8343:
+        if(++w->scan_x<480) c->pc=0x82ac;
+        else {w->scan_x=0;if(++w->scan_y<400) c->pc=0x82ac;else c->pc=0x835d;}
+        coord_set(w,r,w->scan_x,w->scan_y);return true;
+    case 0x8ff4: {
+        int x=lift(r[0xb85],w->coord[2][0],256),y=lift(r[0xb86],w->coord[2][1],256);
+        unsigned direction=c->a&255;
+        int nx=x+(direction==1)-(direction==3),ny=y+(direction==2)-(direction==0);
+        bool valid=ScWorldContains(w,nx,ny);
+        if(direction<=3 && valid) coord_set(w,r,nx,ny);else coord_set(w,r,x,y);
+        c->x=(uint8_t)(valid?nx:x);c->y=(uint8_t)(valid?ny:y);
+        c->a=valid?1:0;c->mf=c->xf=false;c->z=!valid;c->n=false;c->pc=0x9034;return true;
+    }
+    case 0xb0a3: {
+        unsigned count=word(r,0xc57);c->x=count;
+        if(count) {coord_set(w,r,word(w->fields[17],2*count),word(w->fields[18],2*count));put(r,0xc57,count-1);}
+        c->mf=false;c->pc=0xb0bd;return true;
+    }
+    case 0xb0be: {
+        unsigned count=word(r,0xc57);c->c=count>=20000;c->z=count==20000;c->n=false;
+        if(count<20000) {
+            ++count;put(w->fields[17],2*count,lift(r[0xb85],w->coord[2][0],256));
+            put(w->fields[18],2*count,lift(r[0xb86],w->coord[2][1],256));put(r,0xc57,count);
+        }
+        c->x=count;c->mf=false;c->pc=0xb0dc;return true;
+    }
+    default:break;
+    }
+    return false;
+}
 void ScWorldGuestStep(ScWorld *w,Interp816 *c,uint8_t *r) {
     if (!w->active) return;
+    if(huge_step(w,c,r)) return;
     if (c->k==1) {
         if (c->pc==0x8abf || c->pc==0x8acb) {
             int camera=(int16_t)word(r,c->pc==0x8abf?0x1bd:0x1bf);
@@ -19,18 +121,20 @@ void ScWorldGuestStep(ScWorld *w,Interp816 *c,uint8_t *r) {
         /* The placement helper packs Y in the low byte, X in the high byte. */
         if (c->pc==0xba3f || c->pc==0xbdce || c->pc==0xbe07) {
             bool read=c->pc==0xba3f;
-            unsigned x=read?c->a>>8:word(r,0x219),y=read?c->a&255:word(r,0x21b);
-            unsigned offset=2*(y*SC_WORLD_WIDTH+x);
-            w->bank_anchor[1]=ScWorldBounds(x,y)?offset:UINT32_MAX;
+            int x=read?c->a>>8:word(r,0x219),y=read?c->a&255:word(r,0x21b);
+            if(w->huge) {x=lift(x,word(r,0x205),256);y=lift(y,word(r,0x207),256);}
+            unsigned offset=2*(y*ScWorldWidth(w)+x);
+            w->bank_anchor[1]=ScWorldContains(w,x,y)?offset:UINT32_MAX;
             c->x=(uint16_t)offset; c->mf=false;
-            if (read) { put(r,0x79,y*SC_WORLD_WIDTH); c->a=ScWorldCell(w,x,y)&1023; c->pc=0xba7f; }
+            if (read) { put(r,0x79,y*ScWorldWidth(w)); c->a=ScWorldCell(w,x,y)&1023; c->pc=0xba7f; }
             else { c->a=(uint16_t)word(r,0x215); ScWorldPutCell(w,x,y,c->a); c->pc=c->pc==0xbdce?0xbe06:0xbe3f; }
             nz(c,c->a,false); c->c=offset>65535;
         } else if (c->pc==0xc7b4 || c->pc==0xbe71 || c->pc==0xbe82) {
             unsigned pos=c->pc==0xc7b4?0x1d3:0x233;
             int x=(int16_t)word(r,pos),y=(int16_t)word(r,pos+2);
-            unsigned offset=2*(y*SC_WORLD_WIDTH+x);
-            w->bank_anchor[1]=ScWorldBounds(x,y)?offset:UINT32_MAX;
+            if(w->huge && pos==0x233) {x=lift(x,word(r,0x205),256);y=lift(y,word(r,0x207),256);}
+            unsigned offset=2*(y*ScWorldWidth(w)+x);
+            w->bank_anchor[1]=ScWorldContains(w,x,y)?offset:UINT32_MAX;
             c->x=(uint16_t)offset;
         } else if (c->pc==0xb6db || c->pc==0xb6e9 || c->pc==0xb714 ||
                    c->pc==0xb722 || c->pc==0xb8af || c->pc==0xb8bf ||
@@ -43,9 +147,10 @@ void ScWorldGuestStep(ScWorld *w,Interp816 *c,uint8_t *r) {
     }
     if (c->k!=3) return;
     if (c->pc==0xb120) {
-        unsigned row=r[0xb86]*30;
-        put(r,0xc5b,row); c->x=(uint16_t)(row+r[0xb85]/8);
-        c->y=c->a=r[0xb85]&7; c->mf=false; c->c=false;
+        if(w->huge) coord_set(w,r,lift(r[0xb85],w->coord[2][0],256),lift(r[0xb86],w->coord[2][1],256));
+        unsigned row=(w->huge?w->coord[2][1]:r[0xb86])*(ScWorldWidth(w)/8);
+        put(r,0xc5b,row); c->x=(uint16_t)(row+(w->huge?w->coord[2][0]:r[0xb85])/8);
+        c->y=c->a=(w->huge?w->coord[2][0]:r[0xb85])&7; c->mf=false; c->c=false;
         nz(c,c->a,false); c->pc=0xb151;
     } else if (c->pc==0xb37e || c->pc==0xb39a) {
         c->n=(c->pc==0xb37e?c->y:c->x)==255;
@@ -55,14 +160,16 @@ void ScWorldGuestStep(ScWorld *w,Interp816 *c,uint8_t *r) {
         if (c->x==(uint16_t)(w->map_anchor+2)) w->map_anchor+=2;
     } else if (c->pc==0xae17) {
         unsigned end=w->map_anchor+2;
-        c->z=c->c=end==SC_WORLD_TILE_BYTES; c->n=false; c->pc=0xae1a;
+        c->z=c->c=end==(ScWorldCells(w)*2); c->n=false; c->pc=0xae1a;
     } else if (c->pc==0xaca7 || c->pc==0xacda || c->pc==0xad09 || c->pc==0xbaca) {
-        unsigned x=word(r,c->dp),y=word(r,c->dp+4),offset=2*(y*SC_WORLD_WIDTH+x);
-        w->map_anchor=ScWorldBounds(x,y)?offset:UINT32_MAX; c->x=(uint16_t)offset;
+        unsigned x=word(r,c->dp),y=word(r,c->dp+4),offset=2*(y*ScWorldWidth(w)+x);
+        if(w->huge) {w->coord[2][0]=x;w->coord[2][1]=y;}
+        w->map_anchor=ScWorldContains(w,x,y)?offset:UINT32_MAX; c->x=(uint16_t)offset;
     } else if (c->pc==0x849e || c->pc==0x84c4) {
-        unsigned x=c->a&255,y=c->a>>8;
-        unsigned offset=2*(y*SC_WORLD_WIDTH+x);
-        bool valid=ScWorldBounds(x,y);
+        int x=c->a&255,y=c->a>>8;
+        if(w->huge) {x=lift(x,w->coord[2][0],256);y=lift(y,w->coord[2][1],256);}
+        unsigned offset=2*(y*ScWorldWidth(w)+x);
+        bool valid=ScWorldContains(w,x,y);
         w->map_anchor=valid?offset:UINT32_MAX;
         put(r,0xb3f,x*2); put(r,0xb3d,y*32);
         c->x=(uint16_t)offset; c->mf=false;
@@ -77,23 +184,25 @@ void ScWorldGuestStep(ScWorld *w,Interp816 *c,uint8_t *r) {
     } else if (c->pc==0xb152) {
         /* A byte offset for 48,000 tiles cannot be represented by native X.
          * Apply the original MSB-first power bitmap to every full-size cell. */
-        for (unsigned i=0;i<SC_WORLD_CELLS;++i) {
+        for (unsigned i=0;i<ScWorldCells(w);++i) {
             unsigned tile=word(w->tiles,i*2)&0x7fff;
             if (w->fields[5][i/8]&(128>>(i&7))) tile|=0x8000;
             put(w->tiles,i*2,tile);
         }
-        put(r,0x23f,0); c->a=0; c->x=(uint16_t)SC_WORLD_TILE_BYTES;
-        c->y=SC_WORLD_CELLS/8; c->mf=false; c->c=true;
+        put(r,0x23f,0); c->a=0; c->x=(uint16_t)(ScWorldCells(w)*2);
+        c->y=ScWorldCells(w)/8; c->mf=false; c->c=true;
         nz(c,c->dp,false); c->pc=0xb1a4;
     } else if (c->pc==0x82b9) {
         /* The native sweep keeps a byte offset in its DP frame. Reconstruct
          * it from the full unsigned coordinates before each load; the second
          * bank of cells must not alias the first after offset 65,535. */
-        unsigned offset=2*(r[0xb86]*SC_WORLD_WIDTH+r[0xb85]);
+        unsigned offset=2*((w->huge?w->scan_y:r[0xb86])*ScWorldWidth(w)+(w->huge?w->scan_x:r[0xb85]));
         put(r,c->dp,offset); w->map_anchor=offset;
     } else if (c->pc==0xa29a || c->pc==0xa2b9 || c->pc==0xa2d7) {
-        unsigned stride=c->pc==0xa29a?120:c->pc==0xa2b9?60:30;
-        unsigned x=c->a&255,y=c->a>>8,offset=y*stride+x;
+        unsigned div=c->pc==0xa29a?2:c->pc==0xa2b9?4:8,stride=ScWorldWidth(w)/div;
+        unsigned x=c->a&255,y=c->a>>8;
+        if(w->huge) {x=lift(x,w->coord[2][0]/(int)div,256/div);y=lift(y,w->coord[2][1]/(int)div,256/div);}
+        unsigned offset=y*stride+x;
         put(r,0xb3f,x); put(r,0xb3d,y);
         c->a=c->x=(uint16_t)offset; c->mf=true; nz(c,offset,false);
         c->c=false;
@@ -107,25 +216,25 @@ void ScWorldGuestVehicles(ScWorld *w,Interp816 *c,const uint8_t *r,uint8_t my) {
     else if (c->pc==0xb4dd) { x=word(r,0xae1)/8; y=word(r,0xae3)/8; }
     else if (c->pc==0xb719) { x=word(r,0xa61); y=r[0xa5f]; }
     else if (c->pc==0xb314) {
-        unsigned row=2*my*SC_WORLD_WIDTH;
+        unsigned row=2*my*ScWorldWidth(w);
         int full=(int)row+(int16_t)(c->x-(uint16_t)row);
-        w->bank_anchor[0]=full>=0 && full<SC_WORLD_TILE_BYTES?(uint32_t)full:UINT32_MAX;
+        w->bank_anchor[0]=full>=0 && full<(ScWorldCells(w)*2)?(uint32_t)full:UINT32_MAX;
         return;
     } else if (c->pc==0xb8f3 || c->pc==0xb968 || c->pc==0xb9ab) {
         int delta=(int16_t)c->a;
         int row=delta>=0?(delta+120)/240:(delta-120)/240;
-        c->a=(uint16_t)(delta+row*240); return;
+        c->a=(uint16_t)(delta+row*(2*(ScWorldWidth(w)-120))); return;
     } else if (c->pc==0xb8f6 || c->pc==0xb96b || c->pc==0xb9ae) {
-        unsigned row=2*my*SC_WORLD_WIDTH;
+        unsigned row=2*my*ScWorldWidth(w);
         int full=(int)row+(int16_t)(c->a-(uint16_t)row);
-        w->bank_anchor[0]=full>=0 && full<SC_WORLD_TILE_BYTES?(uint32_t)full:UINT32_MAX;
-        c->c=full<0 || full>=SC_WORLD_TILE_BYTES; c->z=false; c->n=c->c; c->pc+=3; return;
+        w->bank_anchor[0]=full>=0 && full<(ScWorldCells(w)*2)?(uint32_t)full:UINT32_MAX;
+        c->c=full<0 || full>=(ScWorldCells(w)*2); c->z=false; c->n=c->c; c->pc+=3; return;
     } else return;
-    unsigned offset=2*(y*SC_WORLD_WIDTH+x);
-    w->bank_anchor[0]=ScWorldBounds(x,y)?offset:UINT32_MAX; c->x=(uint16_t)offset;
+    unsigned offset=2*(y*ScWorldWidth(w)+x);
+    w->bank_anchor[0]=ScWorldContains(w,x,y)?offset:UINT32_MAX; c->x=(uint16_t)offset;
 }
 /* Verified map geometry only; preserve currency, tile IDs and time lengths. */
-static unsigned dimension(uint32_t pc) {
+static unsigned big_dimension(uint32_t pc) {
     switch (pc) {
     case 0x00ac85: return 240;
     case 0x00ac9d: return 200;
@@ -239,6 +348,20 @@ static unsigned dimension(uint32_t pc) {
     default: return 0;
     }
 }
+static unsigned dimension(const ScWorld *w,uint32_t pc) {
+    unsigned v=big_dimension(pc);
+    if(!w->huge) return v;
+    switch(v) {
+    case 240:return 480;case 200:return 400;case 239:return 479;case 199:return 399;
+    case 238:return 478;case 198:return 398;
+    case 215:return 455;case 178:return 378;case 210:return 450;case 174:return 374;case 172:return 372;
+    case 120:return 240;case 100:return 200;case 119:return 239;case 99:return 199;
+    case 60:return 120;case 50:return 100;case 59:return 119;case 49:return 99;
+    case 30:return 60;case 25:return 50;case 29:return 59;case 24:return 49;
+    case 750:case 1500:case 3000:case 6000:case 12000:return v*4;
+    default:return v;
+    }
+}
 static bool map_base(unsigned base) {
     switch (base) {
     case 0x001a: case 0x010c: case 0x010e: case 0x01fc: case 0x01fe:
@@ -258,13 +381,15 @@ void ScWorldGuestBegin(ScWorldGuest *g,ScWorld *w,const Interp816 *c,
     if (p+3>=size) return;
     unsigned op=rom[p],base=word(rom,(unsigned)p+1),index=0,bank=c->db;
     uint32_t pc=((uint32_t)c->k<<16)|c->pc;
-    unsigned dim=(op==0xa9 || op==0xc9 || op==0xe0 || op==0xc0)?dimension(pc):0;
+    unsigned dim=(op==0xa9 || op==0xc9 || op==0xe0 || op==0xc0)?dimension(w,pc):0;
     if (dim) {
         bool index_width=op==0xe0 || op==0xc0;
         g->bytes=(index_width?c->xf:c->mf)?1:2;
         g->immediate[0]=(uint8_t)dim; g->immediate[1]=(uint8_t)(dim>>8);
         g->data=g->immediate; g->mapped=true; g->address=pc+1; return;
     }
+    /* Byte-sized geometry operands are emulated before the opcode, not
+     * truncated to an 8-bit immediate. Most geometry is already 16-bit. */
     bool indexed=false;
     switch (op) {
     case 0x1f: case 0x3f: case 0x5f: case 0x7f:
@@ -289,7 +414,7 @@ void ScWorldGuestBegin(ScWorldGuest *g,ScWorld *w,const Interp816 *c,
         if (c->k==3 && c->pc>=0xcf80) return; /* native map codecs, handled separately */
         int offset=(int)base-0x200;
         int row=offset>=0?(offset+120)/240:(offset-120)/240;
-        offset+=row*240; /* double row pitch; retain the column displacement */
+        offset+=row*(2*(ScWorldWidth(w)-120)); /* double row pitch; retain the column displacement */
         uint32_t anchor=c->k==3?w->map_anchor:c->k<3?w->bank_anchor[c->k]:UINT32_MAX;
         int logical=(int)anchor;
         if (indexed) logical+=(int16_t)(index-(uint16_t)anchor);
@@ -297,12 +422,12 @@ void ScWorldGuestBegin(ScWorldGuest *g,ScWorld *w,const Interp816 *c,
         logical+=offset;
         if (c->k==2) {
             unsigned cell=index/2;
-            logical=2*((cell/120)*2*SC_WORLD_WIDTH+(cell%120)*2)+offset;
+            logical=2*((cell/120)*(ScWorldWidth(w)/120)*ScWorldWidth(w)+(cell%120)*(ScWorldWidth(w)/120))+offset;
             anchor=0;
         }
         g->mapped=true;
         if (anchor!=UINT32_MAX && logical>=0 &&
-            (unsigned)logical+g->bytes<=SC_WORLD_TILE_BYTES) g->data=w->tiles+logical;
+            (unsigned)logical+g->bytes<=(ScWorldCells(w)*2)) g->data=w->tiles+logical;
     } else {
         unsigned field; int displacement;
         if (!ScWorldFieldResolve((uint16_t)base,&field,&displacement)) return;
@@ -310,26 +435,30 @@ void ScWorldGuestBegin(ScWorldGuest *g,ScWorld *w,const Interp816 *c,
             /* An overview pixel represents two cells along each axis. Packed
              * power bytes need bit resampling, rather than a wider byte stride. */
             for (unsigned i=0;i<g->bytes;++i) {
-                unsigned original=index+i,y=original/15*2,x=original%15*16;
+                unsigned scale=ScWorldWidth(w)/120;
+                unsigned original=index+i,y=original/15*scale,x=original%15*8*scale;
                 unsigned bits=0;
-                if (y<SC_WORLD_HEIGHT) for (unsigned bit=0;bit<8;++bit) {
-                    unsigned cell=y*SC_WORLD_WIDTH+x+bit*2;
+                if (y<ScWorldHeight(w)) for (unsigned bit=0;bit<8;++bit) {
+                    unsigned cell=y*ScWorldWidth(w)+x+bit*scale;
                     if (w->fields[5][cell/8]&(128>>(cell&7))) bits|=128>>bit;
                 }
                 g->immediate[i]=(uint8_t)bits;
             }
             g->mapped=true; g->data=g->immediate; return;
         }
+        const ScWorldField *layout=&ScWorldFields[field];
+        if(w->huge && (displacement==(int)(layout->width*layout->element_bytes) || displacement==-(int)(layout->width*layout->element_bytes))) displacement*=2;
         int logical=(int)index+displacement;
         if (c->k==2) {
             const ScWorldField *f=&ScWorldFields[field];
             unsigned cell=index/f->element_bytes;
-            unsigned y=cell/f->stock_width*2,x=cell%f->stock_width*2;
-            if (y>=f->height) y=f->height-1;
-            logical=(y*f->width+x)*f->element_bytes+displacement;
+            unsigned scale=ScWorldWidth(w)/120;
+            unsigned y=cell/f->stock_width*scale,x=cell%f->stock_width*scale;
+            if (y>=ScWorldFieldHeight(w,field)) y=ScWorldFieldHeight(w,field)-1;
+            logical=(y*ScWorldFieldWidth(w,field)+x)*f->element_bytes+displacement;
         }
         g->mapped=true;
-        if (logical>=0 && (unsigned)logical+g->bytes<=ScWorldFieldSize(field))
+        if (logical>=0 && (unsigned)logical+g->bytes<=ScWorldFieldSizeWorld(w,field))
             g->data=w->fields[field]+logical;
     }
 }

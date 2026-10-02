@@ -24,4 +24,7 @@ ScBuildResult ScConstructionCommitWorld(uint8_t *ram, ScWorld *world,
 /* Original power flood fill in private CPU/WRAM; commits power bits only. */
 bool ScConstructionRefreshPower(uint8_t *ram, ScWorld *world,
                                const uint8_t *rom, size_t size);
+/* Same native flood fill, without publishing into live guest state. */
+bool ScConstructionPowerBitmap(const uint8_t *ram,const ScWorld *world,
+    const uint8_t *rom,size_t size,uint8_t *bitmap,size_t bitmap_size);
 #endif

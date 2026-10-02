@@ -26,7 +26,7 @@ uint16_t ScDevelopmentStepWorld(ScDevelopment *s, const ScWorld *w, uint8_t *ram
     if (!s->remaining && (pc==0x922f || pc==0x92ce || pc==0x937a)) {
         s->entry=pc; s->dp=dp; s->sp=sp;
         s->cell=(uint16_t)word(ram,0x0b49);
-        if ((s->cell&1) || (large?!ScWorldBounds(ram[0xb85],ram[0xb86]):s->cell>=24000)) return pc;
+        if ((s->cell&1) || (large?!ScWorldContains(w,w->huge?w->coord[2][0]:ram[0xb85],w->huge?w->coord[2][1]:ram[0xb86]):s->cell>=24000)) return pc;
         s->remaining=speed;
         s->repeating=false;
         if (pc==0x922f) {
@@ -50,7 +50,7 @@ uint16_t ScDevelopmentStepWorld(ScDevelopment *s, const ScWorld *w, uint8_t *ram
             s->remaining=0; s->repeating=false; return pc;
         }
         if (--s->remaining>0) {
-            unsigned raw=large?ScWorldCell(w,ram[0xb85],ram[0xb86]):word(ram,0x10200+s->cell), tile=raw&0x3ff;
+            unsigned raw=large?ScWorldCell(w,w->huge?w->coord[2][0]:ram[0xb85],w->huge?w->coord[2][1]:ram[0xb86]):word(ram,0x10200+s->cell), tile=raw&0x3ff;
             if (zone(tile)!=s->entry) {
                 s->remaining=0; s->repeating=false; return pc;
             }

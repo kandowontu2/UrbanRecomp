@@ -103,10 +103,11 @@ uint8_t    g_ram[0x20000];
 #include "sc_population.h"
 #include "sc_mouse_ui.h"
 #include "sc_construction.h"
+#include "sc_power_refresh.h"
 #include "sc_world_guest.h"
 static ScWorld s_world;
 static ScWorldGuest s_world_guest;
-static bool s_large_maps;
+static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge */
 static char s_world_path[1100];
 static void world_saved_city(bool save);
 /* Declared, not #included: cpu_trace.h pulls in cpu_state.h, whose CpuState
@@ -136,7 +137,8 @@ static uint64_t s_build_release_frame;
 static bool s_map_mouse_accept_pending;
 static bool s_map_mouse_refresh_pending;
 static void commit_mouse_construction(void);
-static void refresh_fast_power(void);
+static void refresh_fast_power(bool bitmap_available);
+static void ram_set_w(uint32_t a,uint16_t v);
 static uint16_t ram_w(uint32_t a);
 Snes      *g_snes;
 Ppu       *g_ppu;
@@ -2467,6 +2469,17 @@ static const int kDevelopmentSpeeds[] = {1, 2, 5, 10, 50};
 static const char *const kDevelopmentSpeedNames[] = {"NORMAL", "X2", "X5", "X10", "X50"};
 static ScDevelopment s_development;
 static ScPopulation s_population;
+static ScRefreshClock s_population_clock;
+static ScPowerRefresh s_power_refresh;
+static bool s_native_power_active;
+static int s_population_game_speed=-1;
+static unsigned s_population_clock_cells;
+static void reset_refresh_clocks(void) {
+  ScRefreshClockReset(&s_population_clock,200);
+  ScPowerRefreshReset(&s_power_refresh);
+  s_native_power_active=false; s_population_game_speed=-1;s_population_clock_cells=0;
+}
+static int s_pop_override = -1;
 static void population_saved_city(bool save);
 static char s_population_path[1100];
 
@@ -2518,18 +2531,21 @@ static void world_saved_city(bool save) {
   ScWorldCitiesInit(data);
   FILE *f=fopen(s_world_path,"rb");
   if (f) {
-    bool ok=fread(data,1,size,f)==size; ok=fgetc(f)==EOF && ok; fclose(f);
-    if (!ok || !ScWorldCitiesValid(data,size)) ScWorldCitiesInit(data);
+    fseek(f,0,SEEK_END);long old_size=ftell(f);rewind(f);
+    uint8_t *old=old_size>0 && (size_t)old_size<=size?malloc(old_size):NULL;
+    bool ok=old && fread(old,1,old_size,f)==(size_t)old_size;fclose(f);
+    if(!ok || !ScWorldCitiesUpgrade(data,old,old_size)) ScWorldCitiesInit(data);
+    free(old);
   }
   unsigned addr=save?0x423:0x421;
   unsigned slot=(g_ram[addr]|(g_ram[addr+1]<<8))==1?0:1;
   if (!save) {
     if (ScWorldCityLoad(&s_world,data,size,g_snes->cart->ram,slot)) {
-      fprintf(stderr,"world: loaded city slot %u (%s)\n",slot+1,s_world.active?"240x200":"120x100");
+      fprintf(stderr,"world: loaded city slot %u (%s)\n",slot+1,s_world.active?(s_world.huge?"480x400":"240x200"):"120x100");
       if (s_world.active) {
         bool hud=(g_ram[0x1d7]|g_ram[0x1d8])!=0;
-        g_ram[0x1c5]=hud?215:210; g_ram[0x1c6]=0;
-        g_ram[0x1c9]=hud?178:174; g_ram[0x1ca]=0;
+        ram_set_w(0x1c5,ScWorldWidth(&s_world)-(hud?25:30));
+        ram_set_w(0x1c9,ScWorldHeight(&s_world)-(hud?22:26));
       }
     }
     free(data); return;
@@ -3362,7 +3378,7 @@ static void sc_classifier_hook(Interp816 *cpu) {
 
   if (cpu->pc == 0x8b36) {
     const uint16_t idx  = (uint16_t)(g_ram[0x0d63] | (g_ram[0x0d64] << 8));
-    const uint16_t cell = s_world.active?ScWorldCell(&s_world,2*(idx/2%120),2*(idx/2/120)):
+    const uint16_t cell = s_world.active?ScWorldCell(&s_world,(ScWorldWidth(&s_world)/120)*(idx/2%120),(ScWorldWidth(&s_world)/120)*(idx/2/120)):
       (uint16_t)(g_ram[0x10200 + idx] | (g_ram[0x10201 + idx] << 8));
     const uint16_t tile = (uint16_t)(cell & 0x03ff);
     s_cls_tile = tile;
@@ -3491,6 +3507,28 @@ static bool run_one_frame(void) {
 #ifdef SC_AOT_TIER
   if (s_fiber_mode) return run_one_frame_fiber();
 #endif
+  unsigned population_cells=s_world.active?ScWorldCells(&s_world):12000;
+  if (s_population_game_speed!=g_ram[0x193] || s_population_clock_cells!=population_cells) {
+    s_population_game_speed=g_ram[0x193];
+    s_population_clock_cells=population_cells;
+    ScRefreshClockReset(&s_population_clock,(s_population_game_speed==0?800:s_population_game_speed==1?400:200)*(population_cells/12000));
+  }
+  bool population_due=ScRefreshClockDue(&s_population_clock,s_frames,s_development_speed);
+  if (s_development_speed<=1 || !s_rom_is_us || s_pop_override>=0) s_population.live=false;
+  else if (host_map_screen_live() && !ram_w(0xd7) &&
+      (!s_population.live || population_due)) {
+    uint64_t prior=s_population.value;
+    ScPopulationRefreshLive(&s_population,g_ram,&s_world,g_snes->cart->rom,g_snes->cart->romSize);
+    if (getenv("SC_POPULATION_DIAG") && s_population.value!=prior)
+      fprintf(stderr,"[population] frame %llu speed %d value %llu -> %llu\n",
+          (unsigned long long)s_frames,s_development_speed,
+          (unsigned long long)prior,(unsigned long long)s_population.value);
+  }
+  if (s_rom_is_us && host_map_screen_live() && !ram_w(0xd7)) refresh_fast_power(false);
+  else {
+    s_population_clock.observed=s_power_refresh.clock.observed=false;
+    s_population_clock.previous_gap=s_power_refresh.clock.previous_gap=0;
+  }
   if (s_fast_ticks) { g_ram[0x01f3] = 0; g_ram[0x01f4] = 0; }
   sc_maybe_trigger_disaster();
   replay_free_tick();
@@ -3508,6 +3546,7 @@ static bool run_one_frame(void) {
     brief_diag = getenv("SC_BRIEF_DIAG") != NULL;
   }
   long guard = 20000000L * s_development_speed;
+  const bool power_diag=getenv("SC_POWER_DIAG")!=NULL;
   /* The extra attempts are bounded but can share one host frame; give
    * them a proportional instruction allowance. Normal retains the old bar. */
   while (s_frames < target && guard-- > 0) {
@@ -3615,7 +3654,7 @@ static bool run_one_frame(void) {
         pr.s1 = (uint16_t)(g_ram[0x5b] | (g_ram[0x5c] << 8));
         pr.t  = (uint16_t)(g_ram[0x5d] | (g_ram[0x5e] << 8));
         if (s_large_maps && s_rom_fnv==SC_ROM_FNV_US) {
-          ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
+          if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr); else ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
         } else {
           ScWorldReset(&s_world); sc_mapgen_generate(&pr, &gs);
         }
@@ -3641,9 +3680,9 @@ static bool run_one_frame(void) {
 
         if (getenv("SC_MAPGEN_FAST_DIAG")) {
           unsigned nz = 0;
-          unsigned cells=s_world.active?SC_WORLD_CELLS:SC_MAPGEN_CELLS;
+          unsigned cells=s_world.active?ScWorldCells(&s_world):SC_MAPGEN_CELLS;
           for (unsigned i = 0; i < cells; i++)
-            if ((s_world.active?ScWorldCell(&s_world,i%240,i/240):gs.map[i]) & 0x3ff) nz++;
+            if ((s_world.active?ScWorldCell(&s_world,i%ScWorldWidth(&s_world),i/ScWorldWidth(&s_world)):gs.map[i]) & 0x3ff) nz++;
           fprintf(stderr, "[mapgen_fast] %u cells, %lu draws, prng %04X/%04X, "
                           "return %02X:%04X\n",
                   nz, g_sc_mapgen_prng_steps, (unsigned)pr.s0, (unsigned)pr.s1,
@@ -3664,12 +3703,25 @@ static bool run_one_frame(void) {
      *
      * 03:ce61 is the scenario equivalent -- map in place, about to return. */
     if (s_ninth_scenario) ninth_scenario_hook(cpu->k, cpu->pc);
+    if (s_rom_is_us && cpu->k==3 && cpu->pc==0x80eb) {
+      ScPowerRefreshObserve(&s_power_refresh,s_frames,g_ram[0x193]);
+      if (power_diag) fprintf(stderr,"[power native] frame %llu game speed %u tick %u\n",
+          (unsigned long long)s_frames,g_ram[0x193],ram_w(0xb51));
+    }
+    if (s_rom_is_us && cpu->k==3 && cpu->pc==0xafb0) s_native_power_active=true;
+    if (s_rom_is_us && cpu->k==3 && cpu->pc==0xb1a4) {
+      s_native_power_active=false;
+      if (s_development_speed>1) refresh_fast_power(true);
+    }
     if (s_build_pending && s_rom_is_us && cpu->k == 1 && cpu->pc == 0x897f &&
         cpu->dp == 0 && cpu->db == 0 && host_map_screen_live())
       commit_mouse_construction();
-    if (s_rom_is_us && s_development_speed>1 && cpu->k==1 && cpu->pc==0x897f &&
+    if (s_population.live && s_rom_is_us && cpu->k==1 && cpu->pc==0x897f &&
         cpu->dp==0 && cpu->db==0 && host_map_screen_live() && !ram_w(0xd7))
-      refresh_fast_power();
+      ScPopulationMirror(&s_population,g_ram);
+    if (s_development_speed>1 && s_rom_is_us && cpu->k==1 && cpu->pc==0x897f &&
+        cpu->dp==0 && cpu->db==0 && host_map_screen_live() && !ram_w(0xd7))
+      refresh_fast_power(true);
     if (s_rom_is_us && cpu->k == 3 && cpu->pc == 0xd3e0 && g_ram[0x0b2d] == 1 &&
         (s_map_mouse_refresh_pending || s_map_mouse_accept_pending)) {
       if (g_ram[0x0b31]) {
@@ -3916,10 +3968,16 @@ static bool run_one_frame(void) {
     if (s_rom_fnv == SC_ROM_FNV_US) {
       if (cpu->k==3 && (cpu->pc==0xce2e || cpu->pc==0xc8c8)) {
         ScRendererBeginMapLoad(&s_custom_renderer);
+        reset_refresh_clocks();
         ScWorldReset(&s_world);
       }
       if (cpu->k==3 && cpu->pc==0xcf89) ScWorldMirror(&s_world,g_ram);
+      bool power_writeback=cpu->k==3 && cpu->pc==0xb152 && s_world.active;
       ScWorldGuestStep(&s_world, cpu, g_ram);
+      if(power_writeback && cpu->pc==0xb1a4) {
+        s_native_power_active=false;
+        if(s_development_speed>1) refresh_fast_power(true);
+      }
       ScWorldGuestVehicles(&s_world, cpu, g_ram, g_snes->multiplyA);
     }
     if (s_rom_fnv == SC_ROM_FNV_US && cpu->k == 3) {
@@ -3929,6 +3987,13 @@ static bool run_one_frame(void) {
       if (cpu->pc == 0xcbe2) world_saved_city(true);
       if (cpu->pc == 0xce61) ScPopulationImport(&s_population, g_ram);
       if (cpu->pc == 0xc73c) ScPopulationImport(&s_population, g_ram);
+      /* A native census must not replace the current fast count with its
+       * pre-development sweep. Recount once at this safe calculation entry. */
+      if (cpu->pc==0x81a3) {
+        ScRefreshClockObserve(&s_population_clock,s_frames);
+        if (s_population.live)
+          ScPopulationRefreshLive(&s_population,g_ram,&s_world,g_snes->cart->rom,g_snes->cart->romSize);
+      }
       uint16_t population_pc = ScPopulationStep(&s_population, g_ram, cpu->pc, cpu->dp);
       if (population_pc != cpu->pc) {
         cpu->y = (uint16_t)ScPopulationClass(s_population.value);
@@ -6406,6 +6471,7 @@ static bool load_state(const char *path) {
   interp816_saveload(g_cpu, &fs.base);
   fs.base.func(&fs.base, &s_frames, sizeof(s_frames));
   ScDevelopmentReset(&s_development);
+  reset_refresh_clocks();
   ScWorldReset(&s_world); memset(&s_world_guest,0,sizeof s_world_guest);
   ScPopulationImport(&s_population, g_ram);
   if (versioned) {
@@ -6425,11 +6491,13 @@ static bool load_state(const char *path) {
       if (!fs.ok || !ScPopulationDecode(&s_population, population_data, sizeof population_data)) fs.ok = false;
     }
     if (header[1] >= 4) {
-      size_t size=ScWorldEncodedSize(); uint8_t *data=malloc(size);
-      if (!data) fs.ok=false;
+      uint8_t head[48]={0};fs.base.func(&fs.base,head,sizeof head);
+      uint32_t size=(uint32_t)head[20]|(uint32_t)head[21]<<8|(uint32_t)head[22]<<16|(uint32_t)head[23]<<24;
+      uint8_t *data=fs.ok && size>=48 && size<=ScWorldEncodedSize()?malloc(size):NULL;
+      if(!data) fs.ok=false;
       else {
-        fs.base.func(&fs.base,data,size);
-        if (!fs.ok || !ScWorldDecode(&s_world,data,size)) fs.ok=false;
+        memcpy(data,head,48);fs.base.func(&fs.base,data+48,size-48);
+        if(!fs.ok || !ScWorldDecode(&s_world,data,size)) fs.ok=false;
         free(data);
       }
     }
@@ -6590,7 +6658,6 @@ static const char *const kScenarioOverrideNames[] = { "OFF", "LAS VEGAS", "FREE 
  * every frame while active; the next simulation sweep otherwise recalculates
  * population from zone capacities. INT_MAX represents the ten-billion profile
  * in this int-valued menu; ScPopulationSet receives the actual 64-bit limit. */
-static int s_pop_override = -1;
 static const int kPopOverrides[] = { -1, 0, 2000, 10000, 50000, 100000, 500000, 600000,
                                     1000000, 1000000000, INT_MAX };
 static const char *const kPopOverrideNames[] = { "OFF", "0", "2000", "10000", "50000", "100000",
@@ -6866,9 +6933,11 @@ static void save_large_map_setting(void) {
     settings.large_maps=s_large_maps;
     if (!ScSettingsSave(&settings,kScSettingsPath)) fprintf(stderr,"settings: could not save larger-map preference\n");
   }
-  fprintf(stderr,"new city map size: %s\n",s_large_maps?"240x200":"120x100");
+  fprintf(stderr,"new city map size: %s\n",s_large_maps==2?"480x400":s_large_maps?"240x200":"120x100");
 }
-static void toggle_large_maps(void) { s_large_maps=!s_large_maps; save_large_map_setting(); }
+static const int kMapSizes[]={0,1,2};
+static const char *const kMapSizeNames[]={"NORMAL 120X100","BIG 240X200","HUGE 480X400"};
+static void toggle_large_maps(void) { s_large_maps=(s_large_maps+1)%3; save_large_map_setting(); }
 
 static void setting_activate(SettingDesc *d) {
   switch (d->kind) {
@@ -6971,26 +7040,12 @@ static void commit_mouse_construction(void) {
       (SDL_GetPerformanceCounter()-started)*1000.0/SDL_GetPerformanceFrequency());
   if (r != SC_BUILD_OK) g_ram[5] = 2; /* The game's normal reject sound. */
 }
-static void refresh_fast_power(void) {
-  static uint64_t checked_frame;
-  static uint32_t last_hash;
-  static bool have_hash;
-  unsigned interval=60/(unsigned)s_development_speed;
-  if (!interval) interval=1;
-  if (have_hash && s_frames-checked_frame<interval) return;
-  checked_frame=s_frames;
-  unsigned count=s_world.active?SC_WORLD_CELLS:12000;
-  const uint8_t *tiles=s_world.active?s_world.tiles:g_ram+0x10200;
-  uint32_t hash=2166136261u;
-  for (unsigned i=0;i<count;++i) {
-    unsigned tile=(tiles[2*i]|tiles[2*i+1]<<8)&1023;
-    hash=(hash^(tile&255))*16777619u; hash=(hash^(tile>>8))*16777619u;
-  }
-  hash=(hash^(s_world.active?1:0))*16777619u;
-  if (have_hash && hash==last_hash) return;
-  if (ScConstructionRefreshPower(g_ram,&s_world,s_rom_data,s_rom_size)) {
-    have_hash=true; last_hash=hash;
-  }
+static void refresh_fast_power(bool bitmap_available) {
+  bool solved=ScPowerRefreshStep(&s_power_refresh,g_ram,&s_world,g_snes->cart->rom,
+      g_snes->cart->romSize,s_frames,s_development_speed,bitmap_available && !s_native_power_active);
+  if (solved && getenv("SC_POWER_DIAG"))
+    fprintf(stderr,"[power refresh] frame %llu speed %d native period %.1f frames\n",
+        (unsigned long long)s_frames,s_development_speed,s_power_refresh.clock.budget/2.0);
 }
 
 static struct {
@@ -7198,7 +7253,7 @@ static SettingDesc s_settings[] = {
   { "MOUSE CURSOR",          kSettingBool, &s_mouse_enabled,       0,    NULL, NULL, 0 },
   { "DEVELOPMENT SPEED",     kSettingCycle, &s_development_speed, 0, NULL,
     kDevelopmentSpeeds, 5, kDevelopmentSpeedNames },
-  { "LARGE NEW MAPS",        kSettingBool, &s_large_maps, 0, NULL, NULL, 0 },
+  { "NEW MAP SIZE",          kSettingCycle, &s_large_maps, 0, NULL, kMapSizes, 3, kMapSizeNames },
   { "FAST TICKS",            kSettingBool, &s_fast_ticks,          0,    NULL, NULL, 0 },
   { "DRAG TURBO",            kSettingCycle, &s_drag_turbo,          0,    NULL,
     kDragTurbos, (int)(sizeof(kDragTurbos) / sizeof(kDragTurbos[0])) },
@@ -8570,8 +8625,8 @@ int main(int argc, char **argv) {
       const char *cs = getenv("SC_MAPGEN_CARRY");
       const char *as = getenv("SC_MAPGEN_A");
       const unsigned idx = (unsigned)strtoul(st, NULL, 0);
-      const bool large = getenv("SC_MAPGEN_LARGE") && *getenv("SC_MAPGEN_LARGE") == '1';
-      const unsigned cells = large ? SC_MAPGEN_MAX_CELLS : SC_MAPGEN_CELLS;
+      const int large = getenv("SC_MAPGEN_LARGE")?atoi(getenv("SC_MAPGEN_LARGE")):0;
+      const unsigned cells = large==2?SC_MAPGEN_MAX_CELLS:large?SC_WORLD_CELLS:SC_MAPGEN_CELLS;
       static ScMapGenState gs;
       ScMapGenPrng pr;
       { const char *pv = getenv("SC_MAPGEN_PREV");
@@ -8590,7 +8645,8 @@ int main(int argc, char **argv) {
          * Kept only as a sweep knob; 1 is correct. */
         g_sc_mapgen_prng_steps = 0;
         for (unsigned r = 0; r < reps; r++) {
-          if (large) sc_mapgen_generate_large(&pr, &gs);
+          if (large==2) sc_mapgen_generate_huge(&pr, &gs);
+          else if (large) sc_mapgen_generate_large(&pr, &gs);
           else sc_mapgen_generate(&pr, &gs);
         } }
       if (outp && *outp) {
@@ -9493,7 +9549,7 @@ int main(int argc, char **argv) {
   ScRendererInit(&s_custom_renderer, g_snes->cart->rom, rom_size, s_rom_is_us);
   s_custom_renderer.population=&s_population;
   { const char *large=getenv("SC_LARGE_MAPS");
-    s_large_maps=large?atoi(large)!=0:s_launch_settings.large_maps!=0; }
+    s_large_maps=large?atoi(large):s_launch_settings.large_maps; if(s_large_maps<0 || s_large_maps>2) s_large_maps=0; }
   s_custom_renderer.world=&s_world;
   s_custom_renderer.sylt = s_ninth_scenario;   /* its pin and mark */
   if (!ScRendererResize(&s_custom_renderer,
@@ -9535,16 +9591,16 @@ int main(int argc, char **argv) {
      * the new-city option. Old cities keep their top-left tiles and fields. */
     if (getenv("SC_WORLD_TEST") && !s_world.active && s_rom_is_us) {
       ScMapGenPrng pr={0}; sc_mapgen_prng_seed_from_spin(&pr,0xc7);
-      ScWorldGenerate(&s_world,&pr);
-      for (unsigned y=0;y<100;++y) memcpy(s_world.tiles+y*480,g_ram+0x10200+y*240,240);
+      if(atoi(getenv("SC_WORLD_TEST"))==2) ScWorldGenerateHuge(&s_world,&pr);else ScWorldGenerate(&s_world,&pr);
+      for (unsigned y=0;y<100;++y) memcpy(s_world.tiles+y*ScWorldWidth(&s_world)*2,g_ram+0x10200+y*240,240);
       for (unsigned i=0;i<SC_WORLD_FIELDS;++i) {
         const ScWorldField *field=&ScWorldFields[i];
         unsigned bytes=field->stock_width*field->element_bytes;
         for (unsigned y=0;y<field->stock_height;++y)
-          memcpy(s_world.fields[i]+y*field->width*field->element_bytes,g_ram+0x10000+field->base+y*bytes,bytes);
+          memcpy(s_world.fields[i]+y*ScWorldFieldWidth(&s_world,i)*field->element_bytes,g_ram+0x10000+field->base+y*bytes,bytes);
       }
-      g_ram[0x1c5]=215; g_ram[0x1c6]=0; g_ram[0x1c9]=178; g_ram[0x1ca]=0;
-      fprintf(stderr,"world: diagnostic 240x200 city enabled\n");
+      ram_set_w(0x1c5,ScWorldWidth(&s_world)-25);ram_set_w(0x1c9,ScWorldHeight(&s_world)-22);
+      fprintf(stderr,"world: diagnostic %ux%u city enabled\n",ScWorldWidth(&s_world),ScWorldHeight(&s_world));
     }
     return run_qualification(qualify_frames);
   }
@@ -10548,7 +10604,7 @@ int main(int argc, char **argv) {
       SDL_SetRenderDrawColor(renderer,255,255,232,255); SDL_RenderDrawRect(renderer,&button);
       int px=(int)sy; if(px<1) px=1;
       draw_text(renderer,(int)button.x+4*px,(int)button.y+5*px,px,
-        s_large_maps?"L LARGE MAPS ON 240X200":"L LARGE MAPS OFF 120X100");
+        s_large_maps==2?"L MAP SIZE HUGE 480X400":s_large_maps?"L MAP SIZE BIG 240X200":"L MAP SIZE NORMAL 120X100");
     }
     if (s_menu_open) render_settings_menu(renderer);
     if (s_replay_open) render_replay_menu(renderer);

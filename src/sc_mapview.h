@@ -25,7 +25,7 @@ bool ScMapView_Render(uint8_t *out, int pitch, int cols, int rows,
 
 /* The map ($7F0200, 120x100 words) and palette ($7E2440, 256 words) as
  * ScMapView_Snapshot copies them. */
-#define SC_MAPVIEW_MAP_BYTES SC_WORLD_TILE_BYTES
+#define SC_MAPVIEW_MAP_BYTES SC_WORLD_MAX_TILE_BYTES
 #define SC_MAPVIEW_PAL_BYTES 512u
 
 /* Draw from these copies instead of WRAM; NULL, NULL draws WRAM again. */

@@ -44,8 +44,8 @@ extern Snes    *g_snes;
 #define SC_TILU_ADDR (SC_TILE_ADDR - 0x77Cu)
 
 static const ScWorld *s_world;
-#define SC_MAP_W (s_world && s_world->active?SC_WORLD_WIDTH:120)
-#define SC_MAP_H (s_world && s_world->active?SC_WORLD_HEIGHT:100)
+#define SC_MAP_W (s_world && s_world->active?ScWorldWidth(s_world):120)
+#define SC_MAP_H (s_world && s_world->active?ScWorldHeight(s_world):100)
 
 static bool s_rom_is_us;
 

@@ -7,7 +7,7 @@
 /* The map is 120 x 100 cells. Confirmed by the power bitmap at 03:b0f8, whose
  * CPX #$05dc bounds it at 1500 bytes = 12000 bits, one per cell. */
 enum { SC_MAPGEN_W = 120, SC_MAPGEN_H = 100, SC_MAPGEN_CELLS = 12000 };
-enum { SC_MAPGEN_LARGE_W = 240, SC_MAPGEN_LARGE_H = 200, SC_MAPGEN_MAX_CELLS = 48000 };
+enum { SC_MAPGEN_LARGE_W = 240, SC_MAPGEN_LARGE_H = 200, SC_MAPGEN_MAX_CELLS = 192000 };
 
 /* $59 / $5b / $5d -- two 16-bit state words plus the temp the step writes. */
 typedef struct ScMapGenPrng {
@@ -84,6 +84,7 @@ void sc_mapgen_generate(ScMapGenPrng *p, ScMapGenState *st);
 /* One continuous terrain, twice the width and height. This API prepares the
  * host world; it must not be copied into the stock 24,000-byte WRAM buffer. */
 void sc_mapgen_generate_large(ScMapGenPrng *p, ScMapGenState *st);
+void sc_mapgen_generate_huge(ScMapGenPrng *p, ScMapGenState *st);
 
 /* 01:f843 -- the generator's own bounds test. Coordinates arrive jittered and
  * can be negative, so the signed check is load-bearing. */

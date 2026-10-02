@@ -40,8 +40,8 @@
 
 /* Geometry belongs to each generation, so a large map cannot leak its
  * stride into a subsequent stock generation or the standalone helpers. */
-static unsigned map_width(const ScMapGenState *st) { return st->width==240 && st->height==200 ? 240 : 120; }
-static unsigned map_height(const ScMapGenState *st) { return st->width==240 && st->height==200 ? 200 : 100; }
+static unsigned map_width(const ScMapGenState *st) { return st->width==480 && st->height==400 ? 480 : st->width==240 && st->height==200 ? 240 : 120; }
+static unsigned map_height(const ScMapGenState *st) { return st->width==480 && st->height==400 ? 400 : st->width==240 && st->height==200 ? 200 : 100; }
 static int map_bounds(const ScMapGenState *st, int x, int y) {
     return x>=0 && y>=0 && (unsigned)x<map_width(st) && (unsigned)y<map_height(st);
 }
@@ -237,8 +237,8 @@ uint16_t sc_mapgen_rand_below(ScMapGenPrng *p, uint16_t n) {
      * gave centre (74,54) where the guest's $0457/$0459 hold (68,59); the low
      * byte reproduces 68, 59 and the bearing 1 exactly. */
     const unsigned rand8 = r & 0xffu;
-    const unsigned mul = (unsigned)((n + 1u) & 0xffu) * rand8;   /* 8x8 -> 16 */
-    return (uint16_t)((mul >> 8) & 0xffu);           /* RDMPYH, then AND #$00ff */
+    const unsigned mul = (unsigned)(n + 1u) * rand8;   /* 8x8 -> 16 */
+    return (uint16_t)(mul >> 8);           /* RDMPYH, then AND #$00ff */
 }
 
 /* ── Feature: centre point ─────────────────────────────────────────────────
@@ -293,7 +293,7 @@ void sc_mapgen_feature_centre(ScMapGenPrng *p, ScMapGenState *st) {
  * so the stream position depends on the count drawn first. Getting that order
  * wrong desynchronises everything after it. */
 void sc_mapgen_feature_scatter(ScMapGenPrng *p, ScMapGenState *st) {
-    uint16_t count = (uint16_t)((sc_mapgen_rand_below(p, 0x0064) + 0x0032u) * (map_width(st)==240 ? 4 : 1));
+    uint16_t count = (uint16_t)((sc_mapgen_rand_below(p, 0x0064) + 0x0032u) * (map_width(st)*map_height(st)/SC_MAPGEN_CELLS));
     st->count = count;
     while (count) {
         st->px = sc_mapgen_rand_below(p, map_width(st)-1);   /* $044b, 0..119 */
@@ -430,7 +430,7 @@ void sc_mapgen_path_walk_narrow(ScMapGenPrng *p, ScMapGenState *st) {
  * then per blob 3 (x, y, and the direct draw for the 1-in-4). The direct draw
  * happens EVERY blob, not only when it branches. */
 void sc_mapgen_feature_clusters(ScMapGenPrng *p, ScMapGenState *st) {
-    unsigned clusters = (sc_mapgen_rand_below(p, 0x000a) + 1u) * (map_width(st)==240 ? 4 : 1);      /* $0445 */
+    unsigned clusters = (sc_mapgen_rand_below(p, 0x000a) + 1u) * (map_width(st)*map_height(st)/SC_MAPGEN_CELLS);      /* $0445 */
     while (clusters) {
         const uint16_t cx = (uint16_t)(sc_mapgen_rand_below(p, map_width(st)-21) + 0x000au);
         const uint16_t cy = (uint16_t)(sc_mapgen_rand_below(p, map_height(st)-20) + 0x000au);
@@ -477,7 +477,8 @@ void sc_mapgen_feature_clusters(ScMapGenPrng *p, ScMapGenState *st) {
  * generation-in-progress flag; it is reproduced because it is cheap, not
  * because its effect is understood. */
 static void generate(ScMapGenPrng *p, ScMapGenState *st, int large) {
-    st->width=large?240:120; st->height=large?200:100;
+    st->width=large==2?480:large?240:120; st->height=large==2?400:large?200:100;
+    memset(st->map,0,sizeof st->map);
     g_sc_mapgen_cur = st;
     const unsigned pick = sc_mapgen_prng_step(p) & 0x00ffu;
     if (pick < 0x0056u) {
@@ -520,6 +521,7 @@ static void generate(ScMapGenPrng *p, ScMapGenState *st, int large) {
 
 void sc_mapgen_generate(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,0); }
 void sc_mapgen_generate_large(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,1); }
+void sc_mapgen_generate_huge(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,2); }
 
 /* ── What is decompiled, and what the comparison says ──────────────────
  *

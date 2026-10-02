@@ -354,6 +354,15 @@ int main(void) {
     r.view.width=256; r.split_hud=false;
     marker=ScRendererMinimapView(&r,ram);
     assert(marker.x==203 && marker.y==60 && marker.w==4 && marker.h==4);
+    large->huge=true;r.scroll_x=450*8;r.scroll_y=372*8;
+    marker=ScRendererMinimapView(&r,ram);
+    assert(marker.w>0 && marker.h>0 && marker.x>=200 && marker.x+marker.w<=230);
+    r.scroll_x=160;r.scroll_y=240;r.city_input=true;
+    assert(ScRendererCityPoint(&r,ram,400,100,&wx,&wy)==false); /* current 256-wide canvas */
+    r.view.width=684;r.scroll_x=430*8;r.scroll_y=350*8;
+    assert(ScRendererCityPoint(&r,ram,380,120,&wx,&wy) && wx==477 && wy==365);
+    assert(!ScRendererCityPoint(&r,ram,600,120,&wx,&wy)); /* actual map edge */
+    r.scroll_x=160;r.scroll_y=240;r.view.width=256;
     free(large); r.world=NULL;
     /* Ten-digit population uses the exact OBJ font used by native money.
      * Its 5..9 glyphs live on a different tile row; assuming consecutive
@@ -381,12 +390,46 @@ int main(void) {
         for (int y=0;y<8;++y) for (int x=0;x<8;++x)
             assert(r.pixels[(22+y)*448+395+x]==r.pixels[(30+y)*448+387+x]);
     }
+    /* Fast counts below one million use the host value too. Stale native
+     * digits must not survive, and six-column padding keeps the icon fixed. */
+    pop.live=true;
+    for (int digit=0;digit<10;++digit) {
+        pop.value=(unsigned)digit;
+        p->oam[55]=(uint16_t)(0x3100|digit_tiles[digit]);
+        memcpy(before,p,sizeof *p);
+        for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+        for (int y=0;y<8;++y) for (int x=0;x<8;++x)
+            assert(r.pixels[(22+y)*448+395+x]==r.pixels[(30+y)*448+387+x]);
+        assert(!memcmp(before,p,sizeof *p));
+    }
+    pop.live=false;
     pop.value=SC_POPULATION_MAX;
     assert(ScRendererResize(&r,(ScViewport){256,224,0,0,1}));
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(r.pixels[10*256+131]==0xffff0000 && r.pixels[17*256+131]==0xffff0000);
     assert(r.pixels[22*256+147]!=0xffff0000); /* no stale native counter */
     r.population=NULL;
+    /* A stale cached lightning tile must clear without a camera pan. Keep
+     * the same glyph when its real building is still unpowered. */
+    memset(p,0,sizeof *p); memset(ram,0,0x20000);
+    for(int i=0;i<32;++i) p->brightnessMult[i]=(i<<3)|(i>>2);
+    p->inidisp=15;p->bgmode=1;p->screenEnabled[0]=3;p->bgXsc[0]=0x40;p->bgXsc[1]=0x50;
+    p->cgram[49]=31;p->cgram[2]=31<<5;
+    for(int y=0;y<8;++y) {p->vram[0x376*16+y]=0xff;p->vram[0x10*16+y]=0xff00;}
+    word(rom,0x156a9,0x10);word(rom,0x156a9+0x84*2,0x10);word(rom,0x156a9+0x27c*2,0x10);
+    rom[0x184eb+0x84]=rom[0x184eb+0x27c]=1;
+    p->vram[0x4000+12*32+16]=0x1376;
+    ram[0x3e]=1;word(ram,0x10200+2*(12*120+16),0x84);
+    for(int x=0;x<256;++x) native[x]=0xffff0000;
+    ScRendererResetHistory(&r);
+    for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+    assert(r.pixels[96*256+128]==0xffff0000);
+    word(ram,0x10200+2*(12*120+16),0x8084);memcpy(before,p,sizeof *p);
+    for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+    assert(r.pixels[96*256+128]==0xff00ff00 && !memcmp(before,p,sizeof *p));
+    word(ram,0x10200+2*(12*120+16),0x27c);ScRendererResetHistory(&r);
+    for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+    assert(r.pixels[96*256+128]==0xff00ff00);
     ScRendererDestroy(&r); free(p); free(before); free(ram); free(rom);
     puts("PASS: tile flips, overlays, map bounds, native pixels, tall/wide surfaces and PPU immutability");
     return 0;

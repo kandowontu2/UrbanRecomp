@@ -123,7 +123,7 @@ static void find_lights(ScRenderer *r,const Ppu *p) {
 static unsigned cell_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
                            int x,int y,bool overlay) {
     bool large=r->map_hold?r->held_large:r->world && r->world->active;
-    unsigned width=large?SC_WORLD_WIDTH:120,height=large?SC_WORLD_HEIGHT:100;
+    unsigned width=large?(r->map_hold?(r->held_huge?480:240):ScWorldWidth(r->world)):120,height=large?(r->map_hold?(r->held_huge?400:200):ScWorldHeight(r->world)):100;
     if (!r->rom || x<0 || y<0 || (unsigned)x>=width*8 || (unsigned)y>=height*8) return 0;
     unsigned offset_cell=((y/8)*width+x/8)*2;
     const uint8_t *map=large?r->world->tiles:ram+MAP;
@@ -189,7 +189,7 @@ static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     }
     bool large=r->world && r->world->active;
     const uint8_t *map=large?r->world->tiles:ram+MAP;
-    unsigned bytes=large?SC_WORLD_TILE_BYTES:24000;
+    unsigned bytes=large?ScWorldCells(r->world)*2:24000;
     bool black=PPU_forcedBlank(p) || !PPU_brightness(p);
     if (r->map_valid) {
         for (unsigned i=0;i<bytes;i+=2) {
@@ -210,7 +210,7 @@ static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
         memcpy(r->held_ppu,p,sizeof *p);
         r->held_x=r->scroll_x+r->scroll_adjust_x;
         r->held_y=r->scroll_y+r->scroll_adjust_y;
-        r->held_large=large;
+        r->held_large=large; r->held_huge=large && r->world->huge;
     }
     r->map_valid=true;
 }
@@ -257,13 +257,22 @@ static void object_row(const ScRenderer *r,const Ppu *p,int y,uint16_t *pixels) 
 uint32_t ScRendererMapPixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,int x,int y) {
     bool large=r->world && r->world->active;
     if (!r->rom_is_us || !r->rom || x<0 || y<0 ||
-        x>=(large?240:120)*8 || y>=(large?200:100)*8)
+        (unsigned)x>=(large?ScWorldWidth(r->world):120)*8 || (unsigned)y>=(large?ScWorldHeight(r->world):100)*8)
         return color(p,0);
     unsigned ci=cell_pixel(r,p,ram,x,y,false);
     /* Both tables reference the city CHR (BG2). Roofs extend one whole
      * cell up-left: the covering tile belongs to the southeast neighbor. */
     unsigned over=cell_pixel(r,p,ram,x+8,y+8,true);
     return color(p,over ? over : ci);
+}
+static unsigned bg_word(const Ppu *p,int layer,int x,int y) {
+    x=(x+p->hScroll[layer])&1023; y=(y+p->vScroll[layer])&1023;
+    int bits=PPU_bigTiles(p,layer) ? 4 : 3;
+    unsigned addr=PPU_bgTilemapAdr(p,layer)+((y>>bits)&31)*32+((x>>bits)&31);
+    if ((x&(32<<bits)) && PPU_bgTilemapWider(p,layer)) addr+=0x400;
+    if ((y&(32<<bits)) && PPU_bgTilemapHigher(p,layer))
+        addr+=PPU_bgTilemapWider(p,layer) ? 0x800 : 0x400;
+    return p->vram[addr&0x7fff];
 }
 static unsigned bg_sample(const Ppu *p,int layer,int x,int y,bool *priority) {
     int mode=PPU_mode(p);
@@ -284,6 +293,27 @@ static unsigned bg_sample(const Ppu *p,int layer,int x,int y,bool *priority) {
         word=(word&~1023u)|(n&1023);
     }
     return tile_pixel(p,word,PPU_bgTileAdr(p,layer),x,y,depth,mode==0 ? layer*32 : 0);
+}
+/* BG1 caches the lightning glyph independently of the power bitmap. A
+ * building centre owns the glyph in its 3x3 footprint. Plants supply their
+ * own power (the native 03:b0f8 helper also treats them as powered). */
+static bool stale_power_warning(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
+                                int x,int y,int sx,int sy) {
+    if (bg_word(p,0,x,y+1)!=0x1376 || !r->rom) return false;
+    if (u16(ram,0x1d7) && (y<46 || (x<56 && y<224))) return false;
+    int wx=(sx+x)/8,wy=(sy+y+1)/8;
+    int width=r->world && r->world->active?ScWorldWidth(r->world):120;
+    int height=r->world && r->world->active?ScWorldHeight(r->world):100;
+    for (int dy=-1;dy<=1;++dy) for (int dx=-1;dx<=1;++dx) {
+        int a=wx+dx,b=wy+dy;
+        if (a<0 || b<0 || a>=width || b>=height) continue;
+        const uint8_t *map=r->world && r->world->active?r->world->tiles:ram+MAP;
+        unsigned raw=u16(map,2*(b*width+a));
+        unsigned tile=raw&1023;
+        if (tile<CELL_TYPES && (r->rom[0x184eb+tile]&1))
+            return (raw&0x8000)!=0 || tile==0x27c || tile==0x28c;
+    }
+    return false;
 }
 static unsigned bg_pixel(const Ppu *p,int layer,int x,int y) {
     return bg_sample(p,layer,x,y,NULL);
@@ -702,8 +732,8 @@ bool ScRendererCityPoint(const ScRenderer *r,const uint8_t *ram,
         y+r->view.core_y<0 || y+r->view.core_y>=r->view.height) return false;
     if (u16(ram,0x1d7) && ((y>=0 && y<46) || in_rect(x,y,0,46,56,178))) return false;
     int px=r->scroll_x+r->scroll_adjust_x+x,py=r->scroll_y+r->scroll_adjust_y+y;
-    int width=r->world && r->world->active?240:120;
-    int height=r->world && r->world->active?200:100;
+    int width=r->world && r->world->active?ScWorldWidth(r->world):120;
+    int height=r->world && r->world->active?ScWorldHeight(r->world):100;
     if (px<0 || py<0 || px>=width*8 || py>=height*8) return false;
     *wx=px/8; *wy=py/8; return true;
 }
@@ -715,8 +745,8 @@ static uint32_t bare_city_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *
     return composite_color(p,ci,ci?1:5,0,5,x);
 }
 static bool changed_cell(const ScRenderer *r,int x,int y) {
-    int width=r->world && r->world->active?240:120;
-    int height=r->world && r->world->active?200:100;
+    int width=r->world && r->world->active?ScWorldWidth(r->world):120;
+    int height=r->world && r->world->active?ScWorldHeight(r->world):100;
     return x>=0 && y>=0 && x<width*8 && y<height*8 &&
         r->changed_cells[(y/8)*width+x/8];
 }
@@ -731,7 +761,8 @@ static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
     int sy=r->scroll_y+r->scroll_adjust_y+scroll_delta(p->vScroll[1],r->scroll_v);
     uint32_t *out=r->pixels+(size_t)(y+r->view.core_y)*r->view.width+r->view.core_x;
     for (int x=0;x<256;++x) {
-        if (!changed_cell(r,sx+x,sy+y+1) && !changed_cell(r,sx+x+8,sy+y+9)) continue;
+        bool clear_warning=stale_power_warning(r,p,ram,x,y,sx,sy);
+        if (!clear_warning && !changed_cell(r,sx+x,sy+y+1) && !changed_cell(r,sx+x+8,sy+y+9)) continue;
         unsigned ci=cell_pixel(r,p,ram,sx+x,sy+y+1,false);
         unsigned over=cell_pixel(r,p,ram,sx+x+8,sy+y+9,true);
         if (over) ci=over;
@@ -743,6 +774,7 @@ static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
                 samples[sub]=ci; owners[sub]=ci?1:5; rank=ci?(over?11:7):0;
             }
             for (int layer=0;layer<=2;layer+=2) {
+                if (layer==0 && clear_warning) continue;
                 if (!(p->screenEnabled[sub]&(1<<layer)) ||
                     ((p->screenWindowed[sub]&(1<<layer)) && window_contains(p,layer,x))) continue;
                 bool high=false;
@@ -796,13 +828,14 @@ static uint32_t hud_ground(const Ppu *p) {
     return 0xff000000 | (uint32_t)p->brightnessMult[6]<<16 |
         (uint32_t)p->brightnessMult[4]<<8 | p->brightnessMult[1];
 }
-static bool population_extended(const ScRenderer *r) {
-    return r->rom_is_us && r->population && r->population->valid && r->population->value>999999;
+static bool population_host_draw(const ScRenderer *r) {
+    return r->rom_is_us && r->population && r->population->valid &&
+        (r->population->live || r->population->value>999999);
 }
 void ScRendererPopulationRow(const ScRenderer *r,const Ppu *p,ScViewport v,
                              bool split,int y,uint32_t *out) {
-    if (!population_extended(r)) return;
-    char digits[24]; snprintf(digits,sizeof digits,"%llu",(unsigned long long)r->population->value);
+    if (!population_host_draw(r)) return;
+    char digits[24]; snprintf(digits,sizeof digits,"%6llu",(unsigned long long)r->population->value);
     int count=(int)strlen(digits),extra=(count-6)*8;
     int shift=split?v.width-v.core_x-256:0;
     /* Narrow views have space beside the date, above the toolbar. Keep the
@@ -816,6 +849,7 @@ void ScRendererPopulationRow(const ScRenderer *r,const Ppu *p,ScViewport v,
     if (y<top || y>=top+8) return;
     for (int x=icon;x<v.core_x+shift+212 && x<v.width;++x) if (x>=0) out[x]=hud_ground(p);
     for (int glyph=-2;glyph<count;++glyph) {
+        if (glyph>=0 && digits[glyph]==' ') continue;
         unsigned attr=glyph<0?p->oam[(19+glyph+2)*2+1]:
             (p->oam[53]&0xff00)|rom_read((void *)r,0x0085e1+(unsigned)(digits[glyph]-'0'));
         int left=glyph<0?icon+(glyph+2)*8:first+glyph*8;
@@ -828,7 +862,7 @@ void ScRendererPopulationRow(const ScRenderer *r,const Ppu *p,ScViewport v,
 }
 ScVideoRect ScRendererMinimapView(const ScRenderer *r,const uint8_t *ram) {
     bool large=r->world && r->world->active;
-    int width=(large?240:120)*8,height=(large?200:100)*8;
+    int width=(large?ScWorldWidth(r->world):120)*8,height=(large?ScWorldHeight(r->world):100)*8;
     int x0=r->scroll_x+r->scroll_adjust_x+
         (r->view.core_x?-r->view.core_x:u16(ram,0x1d7)?56:0);
     int y0=r->scroll_y+r->scroll_adjust_y+
@@ -857,7 +891,7 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
          * together. Capture no terrain from behind the native status text. */
         for (int slot=71;slot>=0;--slot) {
             if (slot>33 && slot<64) continue;
-            if (population_extended(r) && slot>=19 && slot<=26) continue;
+            if (population_host_draw(r) && slot>=19 && slot<=26) continue;
             int ox=sprite_x(p,slot),row=(y-(p->oam[slot*2]>>8))&255;
             if (row>=64 || ox>=256) continue;
             int dx=(slot>=4 && slot<=10) || (slot>=19 && slot<=33)?shift:0;

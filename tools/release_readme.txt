@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED - 1.2.0 BETA 1
+URBAN RECOMP ENHANCED - 1.2.0 BETA 3
 ===================================
 
 Urban Recomp runs the Super Nintendo city builder SimCity (1991) natively on
@@ -10,13 +10,15 @@ US cartridge.
 Enhanced fork, documentation and issues: https://github.com/kandowontu2/UrbanRecomp
 Original project and credits: https://github.com/blackerking/UrbanRecomp
 
-F12 development speed: Normal, 2x, 5x, 10x and 50x, with faster power refresh
-when accelerated. Calendar and budgets keep their normal schedule.
-64-bit calculated population up to 9,999,999,999, playable 240x200 maps
-(four times the area), full-widescreen mouse construction, retained off-screen
+F12 development speed: Normal, 2x, 5x, 10x and 50x, with population and power
+refresh scaled to the selected multiplier. Calendar and budgets keep their
+normal schedule. 64-bit calculated population up to 9,999,999,999; Normal
+120x100, Big 240x200 and Huge 480x400 maps. Use L in the main menu or NEW MAP
+SIZE in F12 to select the size before starting a city.
+Full-widescreen mouse construction, retained off-screen
 drags, and corrected widescreen HUD/minimap placement. See PC_ENHANCEMENTS.md.
 These features require the verified clean US ROM and the interpreter build.
-This first enhanced build is a prerelease; hands-on gameplay testing is ongoing.
+This enhanced build is a prerelease; hands-on gameplay testing is ongoing.
 
 
 START

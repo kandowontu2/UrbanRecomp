@@ -8,7 +8,10 @@ enum {
     SC_WORLD_WIDTH = 240, SC_WORLD_HEIGHT = 200,
     SC_WORLD_CELLS = SC_WORLD_WIDTH * SC_WORLD_HEIGHT,
     SC_WORLD_TILE_BYTES = SC_WORLD_CELLS * 2,
-    SC_WORLD_FIELDS = 19, SC_WORLD_FIELD_BYTES = 20001
+    SC_WORLD_MAX_WIDTH = 480, SC_WORLD_MAX_HEIGHT = 400,
+    SC_WORLD_MAX_CELLS = SC_WORLD_MAX_WIDTH * SC_WORLD_MAX_HEIGHT,
+    SC_WORLD_MAX_TILE_BYTES = SC_WORLD_MAX_CELLS * 2,
+    SC_WORLD_FIELDS = 19, SC_WORLD_FIELD_BYTES = 48000
 };
 typedef struct ScWorldField {
     uint16_t base, stock_width, stock_height, width, height;
@@ -16,19 +19,34 @@ typedef struct ScWorldField {
 } ScWorldField;
 typedef struct ScWorld {
     bool active;
+    bool huge;
+    uint16_t scan_x, scan_y;
+    uint16_t center_x,center_y;
+    bool center_valid;
+    int16_t coord[3][2]; /* full coordinates behind native packed-byte proxies */
     uint32_t map_anchor;
     uint32_t bank_anchor[3]; /* rendering/vehicles cannot replace the sim cursor */
-    uint8_t tiles[SC_WORLD_TILE_BYTES];
+    uint8_t tiles[SC_WORLD_MAX_TILE_BYTES];
     uint8_t fields[SC_WORLD_FIELDS][SC_WORLD_FIELD_BYTES];
 } ScWorld;
 
 extern const ScWorldField ScWorldFields[SC_WORLD_FIELDS];
+static inline unsigned ScWorldWidth(const ScWorld *w) { return w && w->huge?480:240; }
+static inline unsigned ScWorldHeight(const ScWorld *w) { return w && w->huge?400:200; }
+static inline unsigned ScWorldCells(const ScWorld *w) { return ScWorldWidth(w)*ScWorldHeight(w); }
+static inline bool ScWorldContains(const ScWorld *w,int x,int y) {
+    return x>=0 && y>=0 && (unsigned)x<ScWorldWidth(w) && (unsigned)y<ScWorldHeight(w);
+}
 void ScWorldReset(ScWorld *world);
 void ScWorldGenerate(ScWorld *world, ScMapGenPrng *prng);
+void ScWorldGenerateHuge(ScWorld *world, ScMapGenPrng *prng);
 bool ScWorldBounds(int x, int y);
 uint16_t ScWorldCell(const ScWorld *world, int x, int y);
 bool ScWorldPutCell(ScWorld *world, int x, int y, uint16_t tile);
 unsigned ScWorldFieldSize(unsigned field);
+unsigned ScWorldFieldWidth(const ScWorld *w,unsigned field);
+unsigned ScWorldFieldHeight(const ScWorld *w,unsigned field);
+unsigned ScWorldFieldSizeWorld(const ScWorld *w,unsigned field);
 /* Resolve the original instruction's ARRAY BASE, not the resulting guest
  * address: expanded arrays overlap in guest address space and live separately
  * here. Neighbour bases (e.g. $b16c = $b16e-2) retain their row/column meaning. */
@@ -39,6 +57,7 @@ bool ScWorldDecode(ScWorld *world, const uint8_t *data, size_t size);
 size_t ScWorldCitiesSize(void);
 void ScWorldCitiesInit(uint8_t *data);
 bool ScWorldCitiesValid(const uint8_t *data, size_t size);
+bool ScWorldCitiesUpgrade(uint8_t *out,const uint8_t *data,size_t size);
 bool ScWorldCitySave(uint8_t *data, const uint8_t *sram, unsigned slot, const ScWorld *world);
 bool ScWorldCityLoad(ScWorld *world, const uint8_t *data, size_t size, const uint8_t *sram, unsigned slot);
 /* The native save codec stores the original-sized top-left region; the host record

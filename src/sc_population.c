@@ -8,6 +8,46 @@ static uint32_t dword(const uint8_t *r, unsigned p) { return word(r,p) | ((uint3
 static void put(uint8_t *r, unsigned p, unsigned v) { r[p]=(uint8_t)v; r[p+1]=(uint8_t)(v>>8); }
 static void put32(uint8_t *r, unsigned p, uint32_t v) { put(r,p,v); put(r,p+2,v>>16); }
 static uint64_t cap(uint64_t v) { return v>SC_POPULATION_MAX ? SC_POPULATION_MAX : v; }
+static unsigned map_cell(const uint8_t *map,int width,int height,int x,int y) {
+    if (x<0 || y<0 || x>=width || y>=height) return 0;
+    return word(map,2*(y*width+x))&1023;
+}
+bool ScPopulationRefreshLive(ScPopulation *s,const uint8_t *ram,const ScWorld *world,
+                             const uint8_t *rom,size_t size) {
+    if (!rom || size!=0x80000) return false;
+    bool large=world && world->active;
+    int width=large?ScWorldWidth(world):120,height=large?ScWorldHeight(world):100;
+    const uint8_t *map=large?world->tiles:ram+0x10200;
+    uint64_t capacity[3]={0,0,0};
+    for (int y=0;y<height;++y) for (int x=0;x<width;++x) {
+        unsigned tile=map_cell(map,width,height,x,y);
+        /* US 03:84eb bit 0 is the same once-per-object dispatch used by the
+         * native sweep. Ignore the other eight tiles, flags, and non-RCI art. */
+        if (tile>=958 || !(rom[0x184eb+tile]&1)) continue;
+        if ((tile>=0x80 && tile<0x129) || (tile>=0x376 && tile<0x39a)) {
+            unsigned n=0;
+            if (tile>=0x376) n=48;
+            else if (tile==0x84) {
+                /* 03:9a3e counts occupied houses surrounding a free zone. */
+                for (int dy=-1;dy<=1;++dy) for (int dx=-1;dx<=1;++dx) {
+                    if (!dx && !dy) continue;
+                    unsigned house=map_cell(map,width,height,x+dx,y+dy);
+                    n+=house>=0x89 && house<0x95;
+                }
+            } else if (tile>=0x99) n=(2+(tile-0x99)%36/9)*8;
+            capacity[0]+=n;
+        } else if ((tile>=0x137 && tile<0x1f4) || tile>=0x39a) {
+            capacity[1]+=tile>=0x39a?6:tile>=0x144?1+(tile-0x144)%45/9:0;
+        } else if (tile>=0x1f4 && tile<0x249) {
+            capacity[2]+=tile>=0x201?1+(tile-0x201)%36/9:0;
+        }
+    }
+    if (!s->valid) ScPopulationImport(s,ram);
+    s->value=cap((capacity[0]+(capacity[1]+capacity[2])*8)*20);
+    s->change=(int64_t)s->value-(int64_t)s->previous;
+    s->live=true;
+    return true;
+}
 unsigned ScPopulationClass(uint64_t v) {
     const unsigned limits[]={2000,10000,50000,100000,500000};
     unsigned n=0; while (n<5 && v>=limits[n]) ++n; return n;
@@ -35,14 +75,15 @@ void ScPopulationMirror(const ScPopulation *s, uint8_t *r) {
 void ScPopulationReport(const ScPopulation *s, uint8_t *r, bool change) {
     if (!s->valid) return;
     int64_t value=change?s->change:(int64_t)s->value;
-    if (value>=-999999 && value<=999999) return;
+    bool small=value>=-999999 && value<=999999;
+    if (small && !s->live) return;
     char digits[32]; snprintf(digits,sizeof digits,"%lld",(long long)value);
-    unsigned columns=change?11:10, end=change?0x19c:0x13c;
+    unsigned columns=change?11:small?6:10, end=change?0x19c:small?0x11c:0x13c;
     unsigned start=end+1-columns, count=(unsigned)strlen(digits);
     /* The population row has a label immediately before its six digits.
      * Place the expanded value on the spare row below, instead of erasing
      * part of that label. Migration already has a separate value row. */
-    if (!change) for (unsigned i=0x117;i<=0x11c;++i) put(r,0x2840+i*2,0x3ff);
+    if (!change && !small) for (unsigned i=0x117;i<=0x11c;++i) put(r,0x2840+i*2,0x3ff);
     for (unsigned i=0;i<columns;++i) {
         unsigned tile=0x3ff;
         if (i+count>=columns) {
@@ -81,12 +122,12 @@ uint16_t ScPopulationStep(ScPopulation *s, uint8_t *r, uint16_t pc, uint16_t dp)
         uint64_t com=s->tally_active[1]?s->capacity[1]:word(r,0xb93);
         uint64_t ind=s->tally_active[2]?s->capacity[2]:word(r,0xb8f);
         uint64_t units=res+(com+ind)*8;
-        s->value=cap(units*20);
+        if (!s->live) s->value=cap(units*20);
         s->change=(int64_t)s->value-(int64_t)s->previous;
         /* Small cities continue through the original calculation, including
          * its exact register/flag/scratch behavior. At overflow bypass only
          * the calculation and class ladder, returning through its PLD/RTS. */
-        s->calculation_wide=units>65535 || s->value>999999 || s->previous>999999;
+        s->calculation_wide=s->live || units>65535 || s->value>999999 || s->previous>999999;
         if (s->calculation_wide) {
             ScPopulationMirror(s,r);
             return 0x821b;
@@ -106,6 +147,7 @@ void ScPopulationEncode(const ScPopulation *s, uint8_t out[SC_POPULATION_BYTES])
     for (unsigned i=0;i<3;++i) encode64(out+32+i*8,s->capacity[i]);
     encode64(out+56,s->history_head); encode64(out+64,s->history_count);
     memcpy(out+72,s->tally_active,3); out[75]=s->valid; out[76]=s->calculation_wide;
+    out[77]=s->live;
     for (unsigned i=0;i<SC_POPULATION_HISTORY;++i) encode64(out+80+i*8,s->history[i]);
 }
 bool ScPopulationDecode(ScPopulation *s, const uint8_t *p, size_t size) {
@@ -119,8 +161,9 @@ bool ScPopulationDecode(ScPopulation *s, const uint8_t *p, size_t size) {
         if (t.capacity[i]>SC_POPULATION_MAX || t.tally_active[i]>1) return false;
     }
     uint64_t head=decode64(p+56), count=decode64(p+64);
-    if (head>=SC_POPULATION_HISTORY || count>SC_POPULATION_HISTORY || p[75]>1 || p[76]>1) return false;
+    if (head>=SC_POPULATION_HISTORY || count>SC_POPULATION_HISTORY || p[75]>1 || p[76]>1 || p[77]>1) return false;
     t.history_head=(uint32_t)head; t.history_count=(uint32_t)count; t.valid=p[75]!=0; t.calculation_wide=p[76]!=0;
+    t.live=p[77]!=0;
     for (unsigned i=0;i<SC_POPULATION_HISTORY;++i) {
         t.history[i]=decode64(p+80+i*8);
         if (t.history[i]>SC_POPULATION_MAX) return false;

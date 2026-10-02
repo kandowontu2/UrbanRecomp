@@ -58,7 +58,7 @@ bool ScConstructionPlan(ScBuildPlan *p, unsigned tool, int x0, int y0, int x1, i
 bool ScConstructionPlanWorld(ScBuildPlan *p, const ScWorld *w, unsigned tool,
                              int x0, int y0, int x1, int y1) {
   memset(p,0,sizeof *p);
-  int width=w && w->active?SC_WORLD_WIDTH:120,height=w && w->active?SC_WORLD_HEIGHT:100;
+  int width=w && w->active?ScWorldWidth(w):120,height=w && w->active?ScWorldHeight(w):100;
   if (tool>15 || x0<0 || x0>=width || x1<0 || x1>=width ||
       y0<0 || y0>=height || y1<0 || y1>=height) return false;
   p->tool=tool;
@@ -83,7 +83,7 @@ ScBuildResult ScConstructionCommitWorld(uint8_t *ram,ScWorld *w,const uint8_t *r
   if (!rom || size!=0x80000 || p->tool>15 || !p->count || p->count>SC_BUILD_MAX ||
       (p->tool>=10 && p->count!=1))
     return SC_BUILD_INVALID;
-  int width=w && w->active?SC_WORLD_WIDTH:120,height=w && w->active?SC_WORLD_HEIGHT:100;
+  int width=w && w->active?ScWorldWidth(w):120,height=w && w->active?ScWorldHeight(w):100;
   for (unsigned i=0;i<p->count;++i)
     if (p->cells[i].x<0 || p->cells[i].x>=width || p->cells[i].y<0 || p->cells[i].y>=height)
       return SC_BUILD_INVALID;
@@ -107,6 +107,7 @@ ScBuildResult ScConstructionCommitWorld(uint8_t *ram,ScWorld *w,const uint8_t *r
      * Give each private placement a camera containing its cell, so a long
      * drag cannot wrap the cursor and build elsewhere in the world. */
     put(b->ram,0x01bd,x-16); put(b->ram,0x01bf,y-16);
+    if(b->world) {b->world->coord[1][0]=x;b->world->coord[1][1]=y;}
     put(b->ram,0x0205,x); put(b->ram,0x0207,y); put(b->ram,0x020d,p->tool);
     put(b->ram,0x01eb,128); put(b->ram,0x01ed,128);
     put(b->ram,0x1ffe,0x6fff);
@@ -149,8 +150,9 @@ ScBuildResult ScConstructionCommitWorld(uint8_t *ram,ScWorld *w,const uint8_t *r
   }
   interp816_free(cpu); free(b->world); free(b); return result;
 }
-bool ScConstructionRefreshPower(uint8_t *ram,ScWorld *w,const uint8_t *rom,size_t size) {
-  if (!rom || size!=0x80000) return false;
+bool ScConstructionPowerBitmap(const uint8_t *ram,const ScWorld *w,const uint8_t *rom,size_t size,
+                               uint8_t *bitmap,size_t bitmap_size) {
+  if (!rom || size!=0x80000 || !bitmap || bitmap_size<(w && w->active?ScWorldCells(w)/8:1500u)) return false;
   BuildBus *b=calloc(1,sizeof *b);
   if (!b) return false;
   b->rom=rom; b->size=size; memcpy(b->ram,ram,sizeof b->ram);
@@ -159,7 +161,7 @@ bool ScConstructionRefreshPower(uint8_t *ram,ScWorld *w,const uint8_t *rom,size_
     if (!b->world) { free(b); return false; }
     memcpy(b->world,w,sizeof *w);
   }
-  int width=b->world?240:120,height=b->world?200:100;
+  int width=b->world?ScWorldWidth(b->world):120,height=b->world?ScWorldHeight(b->world):100;
   unsigned plants=0,coal=0,nuclear=0;
   /* These are the original plant centre tiles and the same one-based seed
    * stack produced by 03:aa9f. Do not rerun zone development or nuclear
@@ -170,7 +172,10 @@ bool ScConstructionRefreshPower(uint8_t *ram,ScWorld *w,const uint8_t *rom,size_
     if (plants>=(b->world?20000u:5000u)) { free(b->world); free(b); return false; }
     if (tile==0x28c) ++coal; else ++nuclear;
     ++plants;
-    if (b->world) { b->world->fields[17][plants]=(uint8_t)x; b->world->fields[18][plants]=(uint8_t)y; }
+    if (b->world) {
+      if(b->world->huge) {put(b->world->fields[17],2*plants,x);put(b->world->fields[18],2*plants,y);}
+      else {b->world->fields[17][plants]=(uint8_t)x;b->world->fields[18][plants]=(uint8_t)y;}
+    }
     else { b->ram[0x1d1e4+plants]=(uint8_t)x; b->ram[0x1e56c+plants]=(uint8_t)y; }
   }
   put(b->ram,0xe0d,coal); put(b->ram,0xe0f,nuclear);
@@ -193,14 +198,21 @@ bool ScConstructionRefreshPower(uint8_t *ram,ScWorld *w,const uint8_t *rom,size_
   bool ok=!b->fault && cpu->sp==0x1fff && cpu->dp==0x1e00;
   if (ok) {
     const uint8_t *power=b->world?b->world->fields[5]:b->ram+0x1a598;
-    for (int y=0;y<height;++y) for (int x=0;x<width;++x) {
+    memcpy(bitmap,power,(size_t)width*height/8);
+  }
+  interp816_free(cpu); free(b->world); free(b); return ok;
+}
+bool ScConstructionRefreshPower(uint8_t *ram,ScWorld *w,const uint8_t *rom,size_t size) {
+  uint8_t power[SC_WORLD_MAX_CELLS/8];
+  if (!ScConstructionPowerBitmap(ram,w,rom,size,power,sizeof power)) return false;
+  int width=w && w->active?ScWorldWidth(w):120,height=w && w->active?ScWorldHeight(w):100;
+  for (int y=0;y<height;++y) for (int x=0;x<width;++x) {
       unsigned i=y*width+x;
       unsigned tile=(w && w->active?ScWorldCell(w,x,y):word(ram,0x10200+2*i))&0x7fff;
       if (power[i/8]&(128>>(i&7))) tile|=0x8000;
       if (w && w->active) ScWorldPutCell(w,x,y,tile); else put(ram,0x10200+2*i,tile);
-    }
-    if (w && w->active) memcpy(w->fields[5],power,6000);
-    else memcpy(ram+0x1a598,power,1500);
   }
-  interp816_free(cpu); free(b->world); free(b); return ok;
+  if (w && w->active) memcpy(w->fields[5],power,ScWorldCells(w)/8);
+  else memcpy(ram+0x1a598,power,1500);
+  return true;
 }

@@ -113,5 +113,39 @@ int main(int argc,char **argv) {
     powered+=(ScWorldCell(&world,x,y)&0x8000)!=0;
   if (powered!=700) fprintf(stderr,"power capacity: %u\n",powered);
   assert(powered==700);
+  for(unsigned tool=0;tool<=14;++tool) {
+    reset(100000);ScWorldReset(&world);world.active=world.huge=true;
+    if(!tool) ScWorldPutCell(&world,460,380,0x30);
+    assert(ScConstructionPlanWorld(&plan,&world,tool,460,380,460,380));
+    assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK && cost);
+    if(ScWorldCell(&world,204,124)) fprintf(stderr,"huge alias tool %u tile %x\n",tool,ScWorldCell(&world,204,124));
+    assert(!ScWorldCell(&world,204,124));
+    if(tool>=5 && tool<=9) for(int y=380;y<383;++y) for(int x=460;x<463;++x)
+      assert((ScWorldCell(&world,x,y)&1023)>=0x80);
+    if(tool==14) {
+      assert(ScConstructionPlanWorld(&plan,&world,3,464,381,470,381));
+      assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
+      assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));
+      assert(ScWorldCell(&world,461,381)&0x8000);
+      assert(ScWorldCell(&world,470,381)&0x8000);
+    }
+  }
+  /* A continuous power line crosses both byte-coordinate seams. It must
+   * reach the far plant/zone instead of reconnecting their modulo proxies. */
+  reset(100000);ScWorldReset(&world);world.active=world.huge=true;
+  ScWorldPutCell(&world,253,253,0x27c);
+  for(int y=253;y<=260;++y) ScWorldPutCell(&world,253,y,y==253?0x27c:wire);
+  for(int x=254;x<=270;++x) ScWorldPutCell(&world,x,260,wire);
+  assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));
+  assert(ScWorldCell(&world,270,260)&0x8000);
+  ScWorldPutCell(&world,253,256,0);
+  assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));
+  assert(!(ScWorldCell(&world,270,260)&0x8000));
+  ScWorldReset(&world);world.active=world.huge=true;ScWorldPutCell(&world,300,300,0x27c);
+  for(int y=300;y<325;++y) for(int x=300;x<400;++x)
+    if(x!=300 || y!=300) ScWorldPutCell(&world,x,y,wire);
+  assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));powered=0;
+  for(int y=300;y<325;++y) for(int x=300;x<400;++x) powered+=(ScWorldCell(&world,x,y)&0x8000)!=0;
+  assert(powered==2000);
   puts("PASS: actual ROM costs, road joins, obstacles, zone spacing, atomic budget rejection, rail, power, parks and bulldozing");
 }

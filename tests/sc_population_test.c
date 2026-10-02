@@ -42,6 +42,93 @@ static void routine(ScPopulation *s,bool enhanced) {
     assert(cpu->sp==0x1fff && cpu->dp==0x1e00);
     interp816_free(cpu);
 }
+/* Oracle: stop the original zone handler immediately after its capacity
+ * helper, before transport/development changes anything in the fixture. */
+static unsigned native_capacity(unsigned tile,unsigned kind) {
+    const unsigned entries[]={0x937a,0x92ce,0x922f};
+    const unsigned stops[]={0x93a4,0x92ee,0x9242};
+    put(0xb89,tile); put(0xb87,tile); ram[0xb85]=60; ram[0xb86]=50;
+    Interp816 *cpu=interp816_init(NULL,read_bus,write_bus); assert(cpu);
+    interp816_reset(cpu); cpu->k=cpu->db=3; cpu->pc=entries[kind];
+    cpu->sp=0x1ffd; cpu->dp=0x1e00; cpu->e=cpu->mf=cpu->xf=false; cpu->i=true;
+    unsigned steps=0;
+    while (cpu->pc!=stops[kind]) { assert(++steps<10000); interp816_runOpcode(cpu); }
+    unsigned result=word(cpu->dp);
+    interp816_free(cpu); return result;
+}
+static void live_census_tests(void) {
+    ScPopulation s={0};
+    /* Compare every RCI centre from the ROM's own dispatch table with the
+     * original capacity code, including stadium/combined zone variants. */
+    for (unsigned tile=0x80;tile<958;++tile) {
+        if (!(rom[0x184eb+tile]&1)) continue;
+        unsigned kind;
+        if (tile<0x129 || (tile>=0x376 && tile<0x39a)) kind=0;
+        else if ((tile>=0x137 && tile<0x1f4) || tile>=0x39a) kind=1;
+        else if (tile>=0x1f4 && tile<0x249) kind=2;
+        else continue;
+        memset(ram,0,sizeof ram); memset(&s,0,sizeof s);
+        put(0x10200+2*(50*120+60),tile|0xc000);
+        unsigned expected=native_capacity(tile,kind)*(kind?160:20);
+        memcpy(baseline,ram,sizeof ram);
+        assert(ScPopulationRefreshLive(&s,ram,NULL,rom,sizeof rom));
+        assert(s.live && s.value==expected);
+        assert(!memcmp(ram,baseline,sizeof ram));
+    }
+    /* Empty free zones contribute zero; actual houses count one each. The
+     * eight surrounding cells never become eight duplicate zone tallies. */
+    memset(ram,0,sizeof ram); memset(&s,0,sizeof s);
+    put(0x10200+2*(50*120+60),0x84);
+    for (unsigned houses=0;houses<=8;++houses) {
+        unsigned n=0;
+        for (int dy=-1;dy<=1;++dy) for (int dx=-1;dx<=1;++dx) {
+            if (!dx && !dy) continue;
+            put(0x10200+2*((50+dy)*120+60+dx),n++<houses?0x89+n%12:0x80);
+        }
+        unsigned expected=native_capacity(0x84,0)*20;
+        assert(expected==houses*20);
+        assert(ScPopulationRefreshLive(&s,ram,NULL,rom,sizeof rom) && s.value==expected);
+    }
+    /* Growth/demolition are visible without a native census. Partial native
+     * sweep accumulators, history and calendar must not be replaced. */
+    s.previous=100; s.capacity[0]=1234; s.tally_active[0]=1;
+    s.history[0]=77; s.history_count=1;
+    put(0xb53,1991); put(0xb55,6);
+    put(0x10200+2*(50*120+60),0x99);
+    memcpy(baseline,ram,sizeof ram);
+    assert(ScPopulationRefreshLive(&s,ram,NULL,rom,sizeof rom) && s.value==320 && s.change==220);
+    assert(s.capacity[0]==1234 && s.tally_active[0]==1 && s.previous==100);
+    assert(s.history[0]==77 && s.history_count==1 && !memcmp(baseline,ram,sizeof ram));
+    routine(&s,true); /* The stale sweep would incorrectly produce 24,680. */
+    assert(s.value==320 && dword(0xba5)==320 && s.change==220);
+    ScPopulationReport(&s,ram,false);
+    assert(word(0x2840+0x11c*2)==0x420 && word(0x2840+0x11b*2)==0x422);
+    put(0x10200+2*(50*120+60),0);
+    assert(ScPopulationRefreshLive(&s,ram,NULL,rom,sizeof rom) && s.value==0 && s.change==-100);
+    assert(word(0xb53)==1991 && word(0xb55)==6 && s.history_count==1);
+    uint8_t data[SC_POPULATION_BYTES]; ScPopulationEncode(&s,data);
+    ScPopulation restored={0}; assert(ScPopulationDecode(&restored,data,sizeof data) && restored.live);
+    data[77]=0; assert(ScPopulationDecode(&restored,data,sizeof data) && !restored.live); /* Beta 1/2 */
+    data[77]=2; assert(!ScPopulationDecode(&restored,data,sizeof data));
+    /* Full-width and second-bank centres, including houses at the far edge. */
+    ScWorld *w=calloc(1,sizeof *w); assert(w); w->active=true;
+    memset(ram,0,sizeof ram); memset(&s,0,sizeof s);
+    put(0x10200+2*(50*120+60),0x99); /* normal mirror must not be counted */
+    unsigned pos=2*(198*240+238);
+    w->tiles[pos]=0x84;
+    for (int dy=-1;dy<=1;++dy) for (int dx=-1;dx<=1;++dx) {
+        if (!dx && !dy) continue;
+        w->tiles[2*((198+dy)*240+238+dx)]=0x89;
+    }
+    assert(ScPopulationRefreshLive(&s,ram,w,rom,sizeof rom) && s.value==160);
+    pos=2*(100*240+200); w->tiles[pos]=0x44; w->tiles[pos+1]=1; /* C: 0x144 */
+    pos=2*(180*240+200); w->tiles[pos]=1; w->tiles[pos+1]=2; /* I: 0x201 */
+    assert(ScPopulationRefreshLive(&s,ram,w,rom,sizeof rom) && s.value==480);
+    ScPopulation snapshot=s;
+    assert(!ScPopulationRefreshLive(&s,ram,w,NULL,sizeof rom) && !memcmp(&s,&snapshot,sizeof s));
+    free(w);
+
+}
 int main(int argc,char **argv) {
     assert(argc==2); FILE *f=fopen(argv[1],"rb"); assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom); fclose(f);
@@ -120,5 +207,6 @@ int main(int argc,char **argv) {
     assert(ScPopulationCityLoad(&t,cities,sizeof cities,sram,0));
     assert(!ScPopulationCityLoad(&t,cities,sizeof cities-1,sram,0));
     cities[7]=2; assert(!ScPopulationCityLoad(&t,cities,sizeof cities,sram,0));
-    puts("PASS: native small-city equivalence, overflow-free population, 9,999,999,999 cap, classes, signed change, history and portable save encoding");
+    live_census_tests();
+    puts("PASS: native small-city equivalence, 9,999,999,999 arithmetic, live census vs every native RCI capacity, houses, growth/removal, stale sweep protection, full-world counts, cadence and saves");
 }

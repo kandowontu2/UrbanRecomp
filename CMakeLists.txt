@@ -54,7 +54,7 @@ add_executable(UrbanRecomp
     src/sc_development.c
     src/sc_population.c
     src/sc_mouse_ui.c
-    src/sc_construction.c
+    src/sc_construction.c src/sc_refresh_clock.c src/sc_power_refresh.c
     src/sc_launcher.c
     src/sc_sram.c
     src/sc_icon.c
@@ -403,7 +403,7 @@ if(SC_GEN_SOURCES)
         src/sc_development.c
         src/sc_population.c
         src/sc_mouse_ui.c
-        src/sc_construction.c
+        src/sc_construction.c src/sc_refresh_clock.c src/sc_power_refresh.c
         src/sc_launcher.c
         src/sc_sram.c
         src/sc_icon.c
@@ -552,4 +552,11 @@ add_executable(UrbanRecompWorldTest EXCLUDE_FROM_ALL
     src/sc_population.c
     ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
 target_include_directories(UrbanRecompWorldTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+
+add_executable(UrbanRecompPowerRefreshTest EXCLUDE_FROM_ALL
+    tests/sc_power_refresh_test.c src/sc_refresh_clock.c src/sc_power_refresh.c src/sc_construction.c
+    src/sc_world.c src/sc_world_guest.c src/sc_mapgen.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
+target_include_directories(UrbanRecompPowerRefreshTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
