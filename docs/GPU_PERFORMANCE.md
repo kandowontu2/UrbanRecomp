@@ -184,3 +184,24 @@ next full frame. The four CTest tests and GPU differential tests passed.
 `SC_TAB_TEST_BATCH=1..6` fixes the batch count. `SC_TAB_SKIP_PIXELS=0` restores
 the full-raster reference and its budget estimate; neither override is used
 in ordinary play. No publishing is part of this local optimization.
+
+## Scrolling cache correction
+
+A held left/right pan reproduced a black strip within valid Huge-map terrain.
+The native 32-column staging cache retained obsolete city tile words well inside
+the authentic viewport, beyond the previously repaired overscan edges. Camera
+movement now enables live-world validation of base/roof tile words, once per
+eight-pixel span. Mismatched cells use the existing live compositor, suppressing
+stale cached roofs/lightning while retaining UI and evaluated object priority.
+Validation ends when a complete frame has no mismatches; modal pages defer it.
+The GPU path receives the same repaired pixels without any shader/readback change.
+
+The captured valid-land rectangle had 152 black artifact pixels before and zero
+after, excluding the legitimate navigation arrow. Thirty-six independent cases
+cover all map sizes, Huge coordinates, fine reversals and larger scroll steps,
+centered/tall surfaces, CPU/deferred output, roofs, toolbar/object ownership,
+modal preservation and cache recovery. All five CTest tests passed.
+Actual Direct3D replays of Huge panning, ultrawide Ctrl+Tab panning and portrait
+Normal-map X/arrow input preserved the pre-change complete saved state, with
+identical CPU/GPU presented screenshots. These are correctness checks, not
+performance measurements. Builds remain local and unpublished.

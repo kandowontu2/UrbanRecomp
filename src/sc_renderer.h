@@ -32,6 +32,8 @@ typedef struct ScRenderer {
     int pointer_x, pointer_y; /* full canvas position, relative to the native anchor */
     int light_slot, light_x, light_pitch;
     bool scroll_valid;
+    bool scroll_repair; /* validate staged city tiles until one complete frame agrees */
+    unsigned staged_mismatches;
     int scroll_x, scroll_y, scroll_h, scroll_v, scroll_adjust_x, scroll_adjust_y, scroll_still;
     bool objects_valid;
     int16_t object_raw[128], object_x[128];

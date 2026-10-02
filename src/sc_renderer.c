@@ -164,11 +164,12 @@ static bool city_live(const ScRenderer *r,const Ppu *p,const uint8_t *ram) {
            r->wood_layer<0 && !(!(p->screenEnabled[0]&2) && (p->screenEnabled[0]&1));
 }
 static void track_scroll(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
-    if (!city_live(r,p,ram)) { r->scroll_valid=false; return; }
+    if (!city_live(r,p,ram)) { r->scroll_valid=r->scroll_repair=false; return; }
     int h=p->hScroll[1]&255,v=p->vScroll[1]&255;
     int x=(int16_t)u16(ram,0x1bd)*8+(h&7),y=(int16_t)u16(ram,0x1bf)*8+(v&7);
     if (r->scroll_valid) {
         int dx=scroll_delta(h,r->scroll_h),dy=scroll_delta(v,r->scroll_v);
+        if(dx || dy || x!=r->scroll_x || y!=r->scroll_y) r->scroll_repair=true;
         if (abs(dx)<32 && abs(dy)<32) {
             int ax=dx-(x-r->scroll_x),ay=dy-(y-r->scroll_y);
             if (ax%8==0) r->scroll_adjust_x+=ax;
@@ -663,6 +664,7 @@ static void terrain_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y,int 
     }
 }
 void ScRendererResetHistory(ScRenderer *r) {
+    r->scroll_repair=false;r->staged_mismatches=0;
     r->scroll_valid=r->objects_valid=r->map_valid=r->map_hold=r->title_live=false;
     r->city_input=r->pointer_active=false;
     memset(r->changed_cells,0,sizeof r->changed_cells);
@@ -886,6 +888,29 @@ static bool changed_cell(const ScRenderer *r,int x,int y) {
     return x>=0 && y>=0 && x<width*8 && y<height*8 &&
         r->changed_cells[(y/8)*width+x/8];
 }
+/* Scrolling reuses a 32-column native staging map. Incoming columns can still
+ * contain old terrain, roofs or lightning, even well inside the visible core.
+ * Check tile words, once per eight-pixel span, against their actual world cell.
+ * Keep UI out of this validation and stop once a complete frame agrees. */
+static bool staged_city_matches(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
+                                int x,int y,int sx,int sy) {
+    bool large=r->world && r->world->active;
+    unsigned width=large?ScWorldWidth(r->world):120,height=large?ScWorldHeight(r->world):100;
+    int wx=(sx+x)/8,wy=(sy+y+1)/8;
+    if(sx+x<0 || sy+y+1<0 || (unsigned)wx>=width || (unsigned)wy>=height) return false;
+    const uint8_t *map=large?r->world->tiles:ram+MAP;
+    unsigned cell=u16(map,2*(wy*width+wx))&1023;
+    if(cell>=CELL_TYPES || TILES+2*cell+1>=r->rom_size) return false;
+    if(bg_word(p,1,x,y+1)!=u16(r->rom,TILES+2*cell)) return false;
+    if(!(p->screenEnabled[0]&1)) return true;
+    unsigned roof=0x2300;
+    if((unsigned)(wx+1)<width && (unsigned)(wy+1)<height) {
+        cell=u16(map,2*((wy+1)*width+wx+1))&1023;
+        if(cell<CELL_TYPES) roof=u16(r->rom,OVERLAYS+2*cell);
+    }
+    unsigned staged=bg_word(p,0,x,y+1);
+    return staged==roof || (staged==0x1376 && power_warning_cell(r,ram,sx+x,sy+y+1));
+}
 /* Construction and development update world cells before the SNES's small
  * tile cache reaches them. Draw those cells from the same source as the
  * margins, keeping native UI and the PPU's evaluated objects intact. Keep
@@ -896,11 +921,21 @@ static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
     int sx=r->scroll_x+r->scroll_adjust_x+scroll_delta(p->hScroll[1],r->scroll_h);
     int sy=r->scroll_y+r->scroll_adjust_y+scroll_delta(p->vScroll[1],r->scroll_v);
     uint32_t *out=r->pixels+(size_t)(y+r->view.core_y)*r->view.width+r->view.core_x;
+    int staged_cell=-1;bool cache_bad=false;
+    bool cache_live=r->scroll_repair && !u16(ram,0xd7) && !u16(ram,0x379) && !ram[0x391];
     for (int x=0;x<256;++x) {
+        bool land=!u16(ram,0x1d7) || (y>=46 && x>=56);
+        if(cache_live && land) {
+            int cell=(sx+x)/8;
+            if(cell!=staged_cell) {
+                cache_bad=!staged_city_matches(r,p,ram,x,y,sx,sy);staged_cell=cell;
+            }
+            if(cache_bad) ++r->staged_mismatches;
+        } else cache_bad=false;
         bool clear_warning=stale_power_warning(r,p,ram,x,y,sx,sy);
         bool warning_cell=power_warning_cell(r,ram,sx+x,sy+y+1) &&
             !(u16(ram,0x1d7) && (y<46 || (x<56 && y<224)));
-        if (!clear_warning && !warning_cell && !changed_cell(r,sx+x,sy+y+1) && !changed_cell(r,sx+x+8,sy+y+9)) continue;
+        if (!cache_bad && !clear_warning && !warning_cell && !changed_cell(r,sx+x,sy+y+1) && !changed_cell(r,sx+x+8,sy+y+9)) continue;
         unsigned warning=power_warning_pixel(r,p,ram,x,y,sx,sy);
         unsigned ci=cell_pixel(r,p,ram,sx+x,sy+y+1,false);
         unsigned over=cell_pixel(r,p,ram,sx+x+8,sy+y+9,true);
@@ -913,7 +948,7 @@ static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
                 samples[sub]=ci; owners[sub]=ci?1:5; rank=ci?(over?11:7):0;
             }
             for (int layer=0;layer<=2;layer+=2) {
-                if (layer==0 && clear_warning) continue;
+                if (layer==0 && (clear_warning || cache_bad)) continue;
                 if (!(p->screenEnabled[sub]&(1<<layer)) ||
                     ((p->screenWindowed[sub]&(1<<layer)) && window_contains(p,layer,x))) continue;
                 bool high=false;
@@ -1151,6 +1186,7 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
 void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const uint32_t *native) {
     if (!r->pixels || !p || !ram || !native || line<0 || line>=224) return;
     if (line==0) {
+        r->staged_mismatches=0;
         r->terrain.deferred=0;
         r->city_frame=false;
         if (ram[0x14]==1) r->title_live=true;
@@ -1217,5 +1253,6 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         fill_flat_margins(r);
         if (r->advisor_frame) place_advisor(r);
         city_pointer(r,p,ram);
+        if(!r->staged_mismatches && !u16(ram,0xd7) && !u16(ram,0x379) && !ram[0x391]) r->scroll_repair=false;
     }
 }

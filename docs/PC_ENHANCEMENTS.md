@@ -360,6 +360,18 @@ measured Tab multiplier. Only the latest
 batch audio is queued, avoiding accumulated playback behind the picture.
 `SC_FAST_FORWARD=1` records the same held-Tab path for dummy-SDL testing.
 
+Camera scrolling now validates the native staging cache throughout the city
+viewport, rather than repairing only its outer eight-pixel bands. Stale terrain,
+roof and lightning tiles are rebuilt from the live world while keeping the
+toolbar, relocated minimap/arrows, higher-priority objects and modal pages.
+Validation stops once a complete frame agrees with the staging cache. Checks
+run once per eight-pixel span and do not modify guest memory or PPU state.
+Regression cases cover Normal/Big/Huge maps, Huge coordinates beyond 255,
+fine-scroll reversals, Ctrl-sized steps, centered/tall views, CPU/deferred
+rendering and recovery to the native renderer. Windowed X/arrow and pan replays,
+including Ctrl and fixed Tab batches, retained identical complete saved states;
+CPU and GPU screenshots matched byte for byte.
+
 The rendering path now caches decoded 4-bit tile rows while checking live VRAM
 on every access, skips unused colour math, and culls edge sprites before pixel
 sampling. Power refresh compares tile IDs directly instead of hashing the

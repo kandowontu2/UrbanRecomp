@@ -266,6 +266,11 @@ if(BUILD_TESTING)
                    src/sc_selector.c src/sc_titlesign.c)
     target_include_directories(sc_renderer_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
     add_test(NAME simcity_renderer COMMAND sc_renderer_test)
+    add_executable(sc_scroll_renderer_test tests/sc_scroll_renderer_test.c src/sc_renderer.c src/sc_terrain.c
+                   src/sc_video.c src/sc_selector.c src/sc_titlesign.c)
+    target_include_directories(sc_scroll_renderer_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
+    list(APPEND SC_RENDER_TESTS sc_scroll_renderer_test)
+    add_test(NAME simcity_scroll_renderer COMMAND sc_scroll_renderer_test)
     add_executable(sc_terrain_test tests/sc_terrain_test.c src/sc_renderer.c src/sc_terrain.c
                    src/sc_video.c src/sc_selector.c src/sc_titlesign.c)
     target_include_directories(sc_terrain_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
