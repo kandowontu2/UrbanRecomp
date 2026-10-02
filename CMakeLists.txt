@@ -3,6 +3,15 @@ project(UrbanRecomp VERSION 1.2.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 
+# Embed our compute shader in the executable; no external shader or game data
+# is needed at runtime. Reconfigure automatically when its source changes.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS src/sc_gpu_terrain.hlsl)
+file(READ "${CMAKE_SOURCE_DIR}/src/sc_gpu_terrain.hlsl" SC_GPU_SHADER)
+string(REPLACE "\\" "\\\\" SC_GPU_SHADER "${SC_GPU_SHADER}")
+string(REPLACE "\"" "\\\"" SC_GPU_SHADER "${SC_GPU_SHADER}")
+string(REPLACE "\n" "\\n\"\n\"" SC_GPU_SHADER "${SC_GPU_SHADER}")
+file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/sc_gpu_shader.h" CONTENT "static const char sc_gpu_shader[] = \"${SC_GPU_SHADER}\";\n")
+
 option(SC_CONSOLE "Open a Windows console for development diagnostics" OFF)
 function(sc_configure_windows_app target)
     if(WIN32 AND NOT SC_CONSOLE)
@@ -79,10 +88,12 @@ add_executable(UrbanRecomp
     src/sc_video.c
     $<$<BOOL:${SC_HAVE_LAUNCHER}>:${CMAKE_SOURCE_DIR}/src/sc_mods.c>
     src/sc_renderer.c
+    src/sc_terrain.c src/sc_gpu_terrain.c
 )
 
 target_include_directories(UrbanRecomp PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_BINARY_DIR}
     ${CMAKE_SOURCE_DIR}/recomp
     ${SNESRECOMP_RUNNER_INCLUDE_DIRS}
 )
@@ -251,10 +262,23 @@ if(BUILD_TESTING)
     add_test(NAME simcity_video COMMAND sc_video_test ${CMAKE_CURRENT_BINARY_DIR}/sc-test-video.ini)
     list(APPEND SC_RENDER_TESTS sc_video_test)
     endif()
-    add_executable(sc_renderer_test tests/sc_renderer_test.c src/sc_renderer.c src/sc_video.c
+    add_executable(sc_renderer_test tests/sc_renderer_test.c src/sc_renderer.c src/sc_terrain.c src/sc_video.c
                    src/sc_selector.c src/sc_titlesign.c)
     target_include_directories(sc_renderer_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
     add_test(NAME simcity_renderer COMMAND sc_renderer_test)
+    add_executable(sc_terrain_test tests/sc_terrain_test.c src/sc_renderer.c src/sc_terrain.c
+                   src/sc_video.c src/sc_selector.c src/sc_titlesign.c)
+    target_include_directories(sc_terrain_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
+    list(APPEND SC_RENDER_TESTS sc_terrain_test)
+    add_test(NAME simcity_deferred_terrain COMMAND sc_terrain_test)
+    add_executable(UrbanRecompGpuTest EXCLUDE_FROM_ALL tests/sc_terrain_test.c src/sc_renderer.c
+                   src/sc_terrain.c src/sc_gpu_terrain.c src/sc_video.c src/sc_selector.c src/sc_titlesign.c)
+    target_include_directories(UrbanRecompGpuTest PRIVATE src ${CMAKE_BINARY_DIR} ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
+    target_compile_definitions(UrbanRecompGpuTest PRIVATE SC_TEST_GPU=1)
+    snesrecomp_target_sdl(UrbanRecompGpuTest)
+    if(NOT MSVC)
+        target_link_libraries(UrbanRecompGpuTest PRIVATE m)
+    endif()
     foreach(test ${SC_RENDER_TESTS})
         if(MSVC)
             target_compile_options(${test} PRIVATE /UNDEBUG)
@@ -433,6 +457,7 @@ if(SC_GEN_SOURCES)
     src/sc_video.c
     $<$<BOOL:${SC_HAVE_LAUNCHER}>:${CMAKE_SOURCE_DIR}/src/sc_mods.c>
     src/sc_renderer.c
+    src/sc_terrain.c src/sc_gpu_terrain.c
         ${SNESRECOMP_ROOT}/runner/src/cpu_state.c
         ${SNESRECOMP_ROOT}/runner/src/common_cpu_infra.c
         ${SNESRECOMP_ROOT}/runner/src/common_rtl.c
@@ -447,6 +472,7 @@ if(SC_GEN_SOURCES)
         ${SC_DEVICE_SOURCES}
     )
     target_include_directories(UrbanRecompAOT PRIVATE
+        ${CMAKE_BINARY_DIR}
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/recomp
         ${SNESRECOMP_RUNNER_INCLUDE_DIRS}

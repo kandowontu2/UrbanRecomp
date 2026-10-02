@@ -587,6 +587,7 @@ bool ScRendererResize(ScRenderer *r,ScViewport v) {
         if (!r->advisor_pixels) return false;
     }
     size_t count=(size_t)v.width*v.height;
+    if(r->defer_terrain && !ScTerrainResize(&r->terrain,v.width,v.height)) return false;
     if (count>r->capacity) {
         uint32_t *pixels=realloc(r->pixels,count*sizeof(*pixels));
         if (!pixels) return false;
@@ -597,7 +598,69 @@ bool ScRendererResize(ScRenderer *r,ScViewport v) {
     return true;
 }
 void ScRendererDestroy(ScRenderer *r) {
+    ScTerrainDestroy(&r->terrain);
     free(r->pixels); free(r->held_ppu); free(r->advisor_pixels); memset(r,0,sizeof(*r));
+}
+bool ScRendererDeferTerrain(ScRenderer *r,bool enabled) {
+    if(enabled && !ScTerrainResize(&r->terrain,r->view.width,r->view.height)) return false;
+    if(!enabled && r->defer_terrain) {
+        for(int y=0;y<r->view.height;++y) for(int x=0;x<r->view.width;++x) {
+            size_t at=(size_t)y*r->view.width+x;
+            if(r->pixels[at]==SC_TERRAIN_PIXEL) r->pixels[at]=ScTerrainPixel(&r->terrain,x,y);
+        }
+        r->terrain.deferred=0;
+    }
+    r->defer_terrain=enabled;return true;
+}
+uint32_t ScRendererPixel(const ScRenderer *r,int x,int y) {
+    uint32_t pixel=r->pixels[(size_t)y*r->view.width+x];
+    return pixel==SC_TERRAIN_PIXEL?ScTerrainPixel(&r->terrain,x,y):pixel;
+}
+/* Capture the exact live row's two plane pairs; no end-of-frame VRAM or
+ * whole-map snapshot can replace data that changes between scanlines. */
+static uint32_t terrain_planes(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
+                              int x,int y,bool roof,unsigned *word) {
+    *word=0;
+    bool large=r->world && r->world->active;
+    unsigned width=large?ScWorldWidth(r->world):120,height=large?ScWorldHeight(r->world):100;
+    if(x<0 || y<0 || (unsigned)x>=width*8 || (unsigned)y>=height*8) return 0;
+    const uint8_t *map=r->map_hold?r->held_map:large?r->world->tiles:ram+MAP;
+    unsigned cell=u16(map,2*((y/8)*width+x/8))&1023;
+    if(cell>=CELL_TYPES) return 0;
+    size_t at=(roof?OVERLAYS:TILES)+2*cell;
+    if(at+1>=r->rom_size) return 0;
+    *word=u16(r->rom,at);
+    if(roof && (*word&1023)==0x300) {*word=0;return 0;}
+    unsigned row=*word&0x8000?7-(y&7):y&7;
+    unsigned base=(PPU_bgTileAdr(p,1)+(*word&1023)*16+row)&0x7fff;
+    return p->vram[base]|(uint32_t)p->vram[(base+8)&0x7fff]<<16;
+}
+static void terrain_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y,int sx,int sy) {
+    ScTerrainFrame *f=&r->terrain;unsigned ay=y+r->view.core_y;
+    int start=sx-r->view.core_x;unsigned phase=(unsigned)start&7;
+    ScTerrainRow *row=f->rows+ay;
+    row->phase=phase;row->core_x=r->view.core_x;row->main=p->screenEnabled[0];row->sub=p->screenEnabled[1];
+    row->window_main=p->screenWindowed[0];row->window_sub=p->screenWindowed[1];
+    row->windows=p->windowsel;row->logic=p->wbgobjlog;
+    row->bounds=p->window1left|(uint32_t)p->window1right<<8|(uint32_t)p->window2left<<16|(uint32_t)p->window2right<<24;
+    row->math=p->cgadsub;row->control=p->cgwsel;row->fixed=p->fixedColor;
+    for(unsigned i=0;i<32;++i) row->brightness[i]=p->brightnessMult[i];
+    for(unsigned i=0;i<256;++i) f->palette[(size_t)ay*256+i]=p->cgram[i];
+    if(p->screenEnabled[1]&4) {
+        int yy=y<0?0:y>223?223:y;
+        for(int x=0;x<256;++x) {
+            if(y>=0 && y<224 && x>=8 && x<248) continue;
+            row->sub_bg[x]=bg_pixel(p,2,x,yy+1);
+        }
+    }
+    for(unsigned i=0;i<f->stride;++i) {
+        int wx=start-(int)phase+(int)i*8,wy=sy+y+1;unsigned base,roof;
+        ScTerrainTile *t=f->tiles+(size_t)ay*f->stride+i;
+        t->base=terrain_planes(r,p,ram,wx,wy,false,&base);
+        t->roof=terrain_planes(r,p,ram,wx+8,wy+8,true,&roof);
+        t->attributes=((base>>10)&7)*16|(((roof>>10)&7)*16)<<8|
+            (base&0x4000?1u<<16:0)|(roof&0x4000?1u<<17:0);t->reserved=0;
+    }
 }
 void ScRendererResetHistory(ScRenderer *r) {
     r->scroll_valid=r->objects_valid=r->map_valid=r->map_hold=r->title_live=false;
@@ -634,6 +697,8 @@ static void render_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
     }
     uint16_t objects[SC_MAX_CANVAS], marks[SC_MAX_CANVAS];
     if (city) object_row(r,p,y,objects);
+    bool deferred=city && r->defer_terrain && !r->advisor_frame && !PPU_forcedBlank(p);
+    if(deferred) terrain_row(r,p,ram,y,sx,sy);
     r->selector_row=NULL;
     if (!city && (r->selector_count || r->sign_count)) {
         host_sprites_row(r,p,y,marks); r->selector_row=marks;
@@ -644,10 +709,13 @@ static void render_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
             !((local<8 && (r->repaired_edges[y]&1)) ||
               (local>=248 && (r->repaired_edges[y]&2)))) continue;
         if (!city) { out[x]=scenery(r,p,ram,local,y); continue; }
+        unsigned warning=power_warning_pixel(r,p,ram,local,y,sx,sy);
+        if(deferred && !objects[x] && !warning) {
+            out[x]=SC_TERRAIN_PIXEL;++r->terrain.deferred;continue;
+        }
         unsigned ci=cell_pixel(r,p,ram,sx+local,sy+y+1,false);
         unsigned over=cell_pixel(r,p,ram,sx+local+8,sy+y+9,true);
         if (over) ci=over;
-        unsigned warning=power_warning_pixel(r,p,ram,local,y,sx,sy);
         int edge=local<0 ? 0 : local>255 ? 255 : local;
         if (r->advisor_frame) {
             /* Advice uses an opaque BG3/OBJ page on MAIN and the dimmed
@@ -1083,6 +1151,7 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
 void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const uint32_t *native) {
     if (!r->pixels || !p || !ram || !native || line<0 || line>=224) return;
     if (line==0) {
+        r->terrain.deferred=0;
         r->city_frame=false;
         if (ram[0x14]==1) r->title_live=true;
         else if (ram[0x14]!=2 || PPU_forcedBlank(p) || !PPU_brightness(p)) r->title_live=false;

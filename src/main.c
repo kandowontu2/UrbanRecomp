@@ -31,6 +31,7 @@
  * explicitly at their call sites -- see runner/src/desktop/mmx23_host_main.inc
  * for how upstream does each one. */
 #include "sc_sdl_compat.h"
+#include "sc_gpu_terrain.h"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -136,6 +137,7 @@ void cpu_trace_dump_wram(const char *tag, int scan_n);
 #endif
 static ScVideoSettings s_custom_video;
 static bool s_fit_screen_requested;
+static bool s_gpu_terrain_enabled;
 static ScRenderer s_custom_renderer;
 static const char *s_video_config = "sc-video.ini";
 static int s_window_width = 1024, s_window_height = 768;
@@ -6358,7 +6360,8 @@ static bool write_ppm(const char *path) {
     const uint32_t *row = s_custom_video.enabled ? s_custom_renderer.pixels + (size_t)y * width :
       (const uint32_t *)(s_video_pixels + (size_t)y * s_video_pitch);
     for (int x = 0; x < width; x++) {
-      uint8_t rgb[3] = { (uint8_t)(row[x] >> 16), (uint8_t)(row[x] >> 8), (uint8_t)row[x] };
+      uint32_t pixel=s_custom_video.enabled?ScRendererPixel(&s_custom_renderer,x,y):row[x];
+      uint8_t rgb[3] = { (uint8_t)(pixel >> 16), (uint8_t)(pixel >> 8), (uint8_t)pixel };
       if (fwrite(rgb, 1, 3, f) != 3) { fclose(f); return false; }
     }
   }
@@ -7375,6 +7378,7 @@ static SettingDesc s_settings[] = {
    * render_settings_menu()'s width math. */
   { "QOL",                   kSettingHeader, NULL, 0, NULL, NULL, 0 },
   { "FIT TO SCREEN",         kSettingAction, NULL, 0, menu_action_fit_screen, NULL, 0 },
+  { "GPU TERRAIN",           kSettingBool, &s_gpu_terrain_enabled, 0, NULL, NULL, 0 },
   { "MOUSE CURSOR",          kSettingBool, &s_mouse_enabled,       0,    NULL, NULL, 0 },
   { "DEVELOPMENT SPEED",     kSettingCycle, &s_development_speed, 0, NULL,
     kDevelopmentSpeeds, 5, kDevelopmentSpeedNames },
@@ -9827,6 +9831,9 @@ int main(int argc, char **argv) {
   double audio_acc = 0.0;
   int16_t audio_buf[1024 * 2];
   bool quit = false;
+  ScGpuTerrain *gpu_terrain=NULL;
+  bool gpu_failed=false;
+  {const char *e=getenv("SC_GPU_TERRAIN");s_gpu_terrain_enabled=e && *e=='1';}
   /* Live FPS counter in the window title, updated once/sec -- lets a user
    * on a slow host (e.g. a VM) tell at a glance whether the emulator itself
    * is keeping up with real time, independent of anything ROM-side. */
@@ -9839,11 +9846,13 @@ int main(int argc, char **argv) {
   enum { kPerfInput, kPerfEmu, kPerfAudio, kPerfDraw, kPerfSleep, kPerfPresent,
          kPerfCount };
   double perf_sum[kPerfCount] = {0}, perf_max[kPerfCount] = {0};
+  double perf_total[kPerfCount]={0};
+  uint64_t perf_total_frames=0,perf_total_guests=0;
   int perf_frames = 0;
   const double perf_ms = 1000.0 / (double)SDL_GetPerformanceFrequency();
 #define SC_PERF_ADD(slot, t0, t1) do { if (perf_on) { \
     const double _ms = (double)((t1) - (t0)) * perf_ms; \
-    perf_sum[slot] += _ms; if (_ms > perf_max[slot]) perf_max[slot] = _ms; } } while (0)
+    perf_sum[slot] += _ms; perf_total[slot]+=_ms; if (_ms > perf_max[slot]) perf_max[slot] = _ms; } } while (0)
   uint64_t fps_window_frames = 0;
   uint64_t fps_guest_frames=0;
   double full_frame_ms=8.0,extra_frame_ms=6.0;
@@ -10508,6 +10517,18 @@ int main(int argc, char **argv) {
     /* Deterministic equivalent of Ctrl for mouse/keyboard scroll replays. */
     {const char *e=getenv("SC_SCROLL_MULTIPLIER");if(e && !s_menu_open) s_scroll_multiplier=atoi(e)==3?3:1;}
     s_measure_custom_frame=fast_forward;
+    if(s_gpu_terrain_enabled && s_custom_video.enabled && !gpu_terrain && !gpu_failed) {
+      gpu_terrain=ScGpuTerrainCreate(renderer,s_linear_filter);
+      if(!gpu_terrain) {
+        fprintf(stderr,"[gpu terrain] unavailable; retaining CPU renderer\n");
+        s_gpu_terrain_enabled=false;gpu_failed=true;
+      }
+    }
+    if(gpu_failed) s_gpu_terrain_enabled=false;
+    if(!ScRendererDeferTerrain(&s_custom_renderer,s_gpu_terrain_enabled && s_custom_video.enabled && gpu_terrain!=NULL)) {
+      fprintf(stderr,"[gpu terrain] capture allocation failed; retaining CPU renderer\n");
+      s_gpu_terrain_enabled=false;ScRendererDeferTerrain(&s_custom_renderer,false);
+    }
     int frames_this_iter = fast_forward ? 6 : (dragging ? s_drag_turbo : 1);
     const uint64_t batch_t0=SDL_GetPerformanceCounter();
     const double frame_budget_ms=kTargetFrameSeconds*1000.0-2.0;
@@ -10552,6 +10573,7 @@ int main(int argc, char **argv) {
           break;
         }
         ++fps_guest_frames;
+        if(perf_on) ++perf_total_guests;
         double guest_ms=(SDL_GetPerformanceCounter()-guest_t0)*s_perf_clock_ms;
         double *estimate=s_skip_custom_frame?&extra_frame_ms:&full_frame_ms;
         /* React immediately to an expensive simulation phase; recover the
@@ -10706,7 +10728,16 @@ int main(int argc, char **argv) {
     const uint64_t draw_t0 = perf_on ? SDL_GetPerformanceCounter() : 0;
     SC_PERF_ADD(kPerfAudio, emu_t1, draw_t0);
     void *pixels = NULL; int pitch = 0;
-    bool _lok = SDL_LockTexture(texture, NULL, &pixels, &pitch) SC_SDL_OK;
+    SDL_Texture *present_texture=texture;
+    if(s_custom_renderer.defer_terrain && s_custom_renderer.terrain.deferred) {
+      SDL_Texture *computed=ScGpuTerrainDraw(gpu_terrain,&s_custom_renderer);
+      if(computed) present_texture=computed;
+      else {
+        fprintf(stderr,"[gpu terrain] dispatch failed; reverting to CPU renderer\n");
+        s_gpu_terrain_enabled=false;gpu_failed=true;ScRendererDeferTerrain(&s_custom_renderer,false);
+      }
+    }
+    bool _lok = present_texture==texture && (SDL_LockTexture(texture, NULL, &pixels, &pitch) SC_SDL_OK);
     /* Row-wise, NOT one memcpy of the whole array. s_video_pixels is sized for
      * the maximum widescreen width so the allocation never depends on the
      * runtime value -- copying sizeof() of it into a narrower texture would
@@ -10728,7 +10759,7 @@ int main(int argc, char **argv) {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     ScRect dest = SC_RECT(s_destination.x, s_destination.y, s_destination.w, s_destination.h);
-    bool _cok = SDL_RenderCopy(renderer, texture, NULL, &dest) SC_SDL_OK;
+    bool _cok = SDL_RenderCopy(renderer, present_texture, NULL, &dest) SC_SDL_OK;
     if ((s_build_active || s_build_pending) && host_map_screen_live() && !s_menu_open) {
       ScViewport v = s_custom_video.enabled ? s_custom_renderer.view : viewport;
       double sx = (double)s_destination.w / v.width;
@@ -10883,6 +10914,7 @@ int main(int argc, char **argv) {
     }
     SC_PERF_ADD(kPerfSleep, sleep_t0, SDL_GetPerformanceCounter());
     fps_window_frames++;
+    if(perf_on) ++perf_total_frames;
     double fps_window_elapsed = (double)(SDL_GetPerformanceCounter() - fps_window_start) /
                                  (double)SDL_GetPerformanceFrequency();
     if (fps_window_elapsed >= 1.0) {
@@ -10914,6 +10946,12 @@ int main(int argc, char **argv) {
 
   if (audio_dev) sc_audio_close(&audio);
   ScSram_Flush();
+  if(perf_on && perf_total_frames) fprintf(stderr,
+      "[perf total] display %llu guest %llu emu %.3f draw %.3f present %.3f ms/frame\n",
+      (unsigned long long)perf_total_frames,(unsigned long long)perf_total_guests,
+      perf_total[kPerfEmu]/perf_total_frames,perf_total[kPerfDraw]/perf_total_frames,
+      perf_total[kPerfPresent]/perf_total_frames);
+  ScGpuTerrainDestroy(gpu_terrain);
   SDL_DestroyTexture(texture);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);

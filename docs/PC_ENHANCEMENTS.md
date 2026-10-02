@@ -29,6 +29,14 @@ navigation arrows and mouse hit regions follow the resulting canvas dimensions.
 It also works when switching from the classic renderer. The aspect preference
 is saved in `sc-video.ini`; maximizing applies to the current window.
 
+**GPU TERRAIN** in F12 is an optional Windows SDL3/Direct3D 11 acceleration
+path, initially off and session-only. It moves extended terrain decoding and
+colour composition to the GPU, retaining CPU rendering for native pixels,
+HUD, cursor repair and power warnings. Unsupported backends or failures use
+the CPU renderer. Recorded X50 replays showed about 4% less frame work at
+21:9 and 24% at 32:9; gains vary by viewport and workload. No steady 60 FPS
+guarantee is made for heavy X50 simulation. See [GPU measurements and tests](GPU_PERFORMANCE.md).
+
 The multiplier applies when the native simulation visits a zone and does not
 advance a paused city. Expanded maps now account for their extra spatial work
 when advancing the guest clock: Big and Huge no longer take four or sixteen

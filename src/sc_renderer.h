@@ -5,6 +5,7 @@
 #include "sc_vehicles.h"
 #include "sc_world.h"
 #include "sc_population.h"
+#include "sc_terrain.h"
 #include <stdint.h>
 #include <stddef.h>
 typedef struct Ppu Ppu;
@@ -12,6 +13,8 @@ typedef struct ScRenderer {
     ScViewport view;
     ScViewport gameplay_view; /* configured HUD anchor; menus are centered */
     uint32_t *pixels;
+    ScTerrainFrame terrain;
+    bool defer_terrain;
     uint32_t *advisor_pixels;
     bool advisor_frame;
     size_t capacity;
@@ -54,6 +57,8 @@ typedef struct ScRenderer {
 void ScRendererInit(ScRenderer *r, const uint8_t *rom, size_t size, bool is_us);
 bool ScRendererResize(ScRenderer *r, ScViewport view);
 void ScRendererDestroy(ScRenderer *r);
+bool ScRendererDeferTerrain(ScRenderer *r,bool enabled);
+uint32_t ScRendererPixel(const ScRenderer *r,int x,int y);
 void ScRendererResetHistory(ScRenderer *r);
 /* Only an actual guest city-load entry may freeze the previous terrain. */
 void ScRendererBeginMapLoad(ScRenderer *r);

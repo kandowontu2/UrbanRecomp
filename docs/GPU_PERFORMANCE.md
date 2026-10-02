@@ -10,8 +10,10 @@ publishing requires the owner's approval.
 The actual SDL window selected the `direct3d11` renderer on this machine.
 Texture presentation, scaling, and the host's drawn construction previews
 already use that backend. The original PPU raster, adaptive tile decoding,
-colour composition, and native 65816 simulation execute on the CPU.
-Changing the presentation backend alone cannot move those CPU routines.
+colour composition, and native 65816 simulation normally execute on the CPU.
+The optional GPU terrain path below moves extended terrain decoding and colour
+composition onto that same Direct3D device. Native PPU and simulation work
+remain on the CPU.
 
 `SC_PERF=1` reports input, guest execution, audio, drawing, sleeping and
 presentation costs. `raster` and `power` are subsets of guest execution, so
@@ -67,7 +69,10 @@ compute with Vulkan, Metal, and Direct3D 12, separate from the existing Render
 API. It requires backend-compatible shaders; its transfer buffers and fences
 support asynchronous uploads/readback. A GPU compositor would therefore need
 a new backend and shader build path, rather than a switch on `SDL_CreateRenderer`.
-Batch work and retain resources across frames to avoid driver overhead.
+For the Windows prototype, SDL also documents access to its
+[Direct3D device](https://wiki.libsdl.org/SDL3/SDL_GetRendererProperties) and
+[wrapping a native texture](https://wiki.libsdl.org/SDL3/SDL_CreateTextureWithProperties).
+These let the implementation retain the existing window/presentation backend.
 
 The spatial smoothing fields are a possible later compute target. Their output
 is immediately read by the CPU simulation, so transfers and synchronization
@@ -76,6 +81,64 @@ zone decisions, PRNG, calendar, budgets, and the serial guest CPU are poorer
 first targets: preserving their ordering and exact state is essential, and
 small GPU jobs with immediate readback may cost more than they save.
 
-No new GPU simulation or compositor backend is enabled in this local build.
-The investigation identifies a rendering path that can avoid routine readback;
-the CPU optimizations above are the implemented performance changes.
+## Implemented Windows GPU terrain prototype
+
+**F12 → GPU TERRAIN** enables the optional path. It starts off, and is
+session-only. `SC_GPU_TERRAIN=1` enables it for testing; `0` keeps CPU rendering.
+It requires SDL3's Direct3D 11 renderer and feature level 11. Unsupported
+backends, shader/resource failures or device loss retain/revert to CPU output.
+The first activation compiles an embedded original HLSL shader using Windows'
+system `d3dcompiler_47.dll`; no downloaded compiler or external shader is needed.
+
+The compositor captures live base/roof plane pairs for each visible eight-pixel
+span, together with scanline palette, brightness, windows, fixed colour and
+subscreen data. A compute shader decodes the tiles and applies integer SNES
+colour arithmetic. Native core pixels, fresh native tile repairs, objects,
+power warnings, HUD, adviser pages and pointer repair retain their CPU output.
+Those pixels override deferred terrain. Menus and unsupported effects continue
+through the existing renderer. Later HUD/cursor writes also override earlier
+terrain records, preserving their normal ordering.
+
+Reusable dynamic buffers upload only the visible frame's data. The GPU result
+is wrapped in an SDL texture and presented directly; ordinary frames do not
+read it back. Compute temporarily unbinds and then restores SDL's graphics
+resource bindings, including across resize. CPU decoding of captured records
+remains available for fallback and framebuffer screenshots.
+
+Three alternating pairs replayed the same 240 guest/display frames at X50.
+Whole-run `SC_PERF` averages for emulation + draw + presentation were:
+
+| Canvas | CPU median | GPU median | Less frame work |
+|---|---:|---:|---:|
+| 21:9, 448x224 | 10.173 ms | 9.786 ms | 3.8% |
+| 32:9, 684x224 | 11.655 ms | 8.894 ms | 23.7% |
+
+These are CPU wall timings around frame stages, not GPU timestamp-query results.
+They include uploads and presentation but exclude pacing sleep and the one-time
+shader creation in input/setup. Host load affects measurements, and gains depend
+on how much extended terrain is visible. Native simulation spikes at X50 can
+still miss 60 FPS. Tab continues to use its adaptive spare-time budget.
+
+Validation compares actual GPU readback against captured CPU pixel resolution
+when `SC_GPU_VALIDATE=1`. This deliberately waits for the GPU and is disabled
+for normal play/benchmarks. The normal-city and far-Huge replays, including a
+mouse construction drag outside the window, matched the previous CPU build's
+complete saved state and actual SDL-rendered screenshot byte for byte.
+The F12 switch and six real window resizes also passed.
+
+`sc_terrain_test` compares 24 complete deferred/CPU frames over Huge coordinates,
+wide/tall views, live plane/palette changes, horizontal/vertical flips, window
+logic, colour add/subtract/half/clamping, fades and switching back to CPU.
+`UrbanRecompGpuTest` sends the same cases through the actual compute shader and
+validates every output pixel, then compares actual SDL presentation with both
+nearest and linear filtering. The GPU path preserves the launcher's filter
+preference. It is an optional desktop target, returning 77
+when the backend is unsupported:
+
+```
+cmake --build <build-directory> --target UrbanRecompGpuTest
+<build-directory>/UrbanRecompGpuTest.exe
+```
+
+All prototype builds remain local. No release or repository push is authorized
+by this performance work.
