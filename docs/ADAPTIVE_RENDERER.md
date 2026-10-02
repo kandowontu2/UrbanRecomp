@@ -38,7 +38,7 @@ Separate budget/statistics, fax, loan and menu screens use a centered view.
 
 | View size | Behavior |
 | --- | --- |
-| Fit to window | Add columns in a wide window or rows in a tall window |
+| Fit to window | Keep the captured tile size; add columns and rows as the window grows |
 | Fit height | Keep 224 rows; add columns when the window is wide enough |
 | Fit width | Keep 256 columns; add rows when the window is tall enough |
 | 4:3 | Original view, corrected pixel aspect |
@@ -51,9 +51,18 @@ Separate budget/statistics, fax, loan and menu screens use a centered view.
 Fit height/width add bars where filling the other axis would crop the original
 view. Fixed presets also use bars when the window has a different aspect.
 Logical pixels use a 7:6 pixel aspect for 4:3 SNES presentation, except 8:7.
-Canvas dimensions round outward to even pixels, so some ratios have a tiny
-rounding border. Each axis caps at 2048 logical pixels; extreme windows use
-bars after reaching that cap. Scaling preserves proportions.
+Fixed-aspect canvas dimensions round outward to even pixels. Fit rounds inward
+to keep whole even rows and columns inside the window at the captured scale.
+Both can have a tiny rounding border. Each axis caps at 2048 logical pixels;
+extreme windows use bars after reaching that cap. Scaling preserves proportions.
+
+F12 **FIT TO SCREEN** captures the current displayed tile size before maximizing
+the window. The larger canvas reveals additional land at that same scale;
+HUD, navigation arrows and mouse mapping follow the canvas. The paused picture
+also retains its scale until closing F12 allows the expanded scene to render.
+`FitScale` and `FitPixelAspect` in `sc-video.ini` retain this scale across launches.
+Older Fit preferences capture the initial window's scale on startup. Windows too
+small for the original UI reduce the scale to keep that UI visible.
 
 ## Build and run
 
@@ -141,6 +150,9 @@ scenario cards, flat-menu fills, fine/coarse scroll handoff, sprite crossings
 and priority, city-load holding, and staging-edge repairs that preserve HUD.
 Layout checks also cover independent panel placement, black lettering and
 sprite pixels, the old panel's subscreen window, fades and returning to play.
+Fit checks cover scale preservation across maximization and portrait resizing,
+corrected/square pixels, high DPI, repeated activation, canvas limits and saved
+scale. The child-window resize test exercises six sizes with a persisted scale.
 
 With Python and Pillow, the integration test runs normal inputs through boot,
 main menu, scenario selector, populated San Francisco, fax, advisor and a practice city. It checks every frame's CPU,

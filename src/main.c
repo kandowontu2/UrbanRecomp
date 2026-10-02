@@ -10073,6 +10073,16 @@ int main(int argc, char **argv) {
     }
     if(s_fit_screen_requested) {
       s_fit_screen_requested=false;
+      int before_w=0,before_h=0;
+      SDL_GetRendererOutputSize(renderer,&before_w,&before_h);
+      ScViewport before=ScVideoViewport(&s_custom_video,before_w,before_h);
+      if(s_custom_video.enabled) before=s_custom_renderer.view;
+      else { before.width=s_video_w;before.core_x=s_ws_extra; }
+      if(s_custom_video.enabled && s_custom_video.aspect==SC_FIT) {
+        before.pixel_scale=s_custom_video.fit_scale;
+        before.pixel_aspect=s_custom_video.fit_pixel_aspect;
+      }
+      ScVideoCaptureScale(&s_custom_video,before,before_w,before_h);
       if(!s_custom_video.enabled) {
         /* Switching from classic widescreen also restores native raster
          * coordinates; the adaptive compositor owns the expanded surface. */
@@ -10088,11 +10098,25 @@ int main(int argc, char **argv) {
     }
     int drawable_w = 0, drawable_h = 0;
     SDL_GetRendererOutputSize(renderer, &drawable_w, &drawable_h);
+    /* Older Fit preferences have no captured scale. Lock their initial view
+     * once, so subsequent resizes reveal land instead of magnifying it. */
+    if(s_custom_video.enabled && s_custom_video.aspect==SC_FIT &&
+       (s_custom_video.fit_scale<=0 || s_custom_video.fit_pixel_aspect<=0))
+      ScVideoCaptureScale(&s_custom_video,
+        ScVideoViewport(&s_custom_video,drawable_w,drawable_h),drawable_w,drawable_h);
     ScViewport viewport = ScVideoViewport(&s_custom_video, drawable_w, drawable_h);
     if (!s_custom_video.enabled) { viewport.width = s_video_w; viewport.core_x = s_ws_extra; }
     /* A paused frame is retained until simulation resumes, including while
      * resizing its window. Never clear the paused picture for a new canvas. */
-    if (s_menu_open && s_custom_video.enabled) viewport=s_custom_renderer.view;
+    if (s_menu_open && s_custom_video.enabled) {
+      viewport=s_custom_renderer.view;
+      /* Keep the frozen background at its old tile size until it can be
+       * redrawn at the larger canvas after the settings overlay closes. */
+      if(s_custom_video.aspect==SC_FIT) {
+        viewport.pixel_scale=s_custom_video.fit_scale;
+        viewport.pixel_aspect=s_custom_video.fit_pixel_aspect;
+      }
+    }
     if (s_custom_video.enabled &&
         (viewport.width != s_custom_renderer.view.width || viewport.height != s_custom_renderer.view.height)) {
       SDL_Texture *replacement = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,

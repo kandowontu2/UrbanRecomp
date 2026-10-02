@@ -4,6 +4,7 @@ import argparse
 import ctypes as c
 from ctypes import wintypes as w
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -24,6 +25,10 @@ def main():
     env={k:v for k,v in os.environ.items() if not k.startswith(('SC_','LNG_','SNESRECOMP_'))}
     env['SC_LIVE_CAPTURE']=str(root/'canvas')
     env['SC_SCRIPTED_INPUT']='1'
+    # A persisted Fit scale must survive startup and every drawable resize.
+    scale=2.5; pixel_aspect=7/6
+    config=root/'sc-video.ini'
+    config.write_text(f'Enabled=1\nAspect=Fit\nCentered=0\nFitScale={scale}\nFitPixelAspect={pixel_aspect:.17g}\n')
     user=c.WinDLL('user32',use_last_error=True); user.SetProcessDPIAware()
     callback=c.WINFUNCTYPE(w.BOOL,w.HWND,w.LPARAM)
     user.EnumWindows.argtypes=[callback,w.LPARAM]
@@ -38,7 +43,8 @@ def main():
     samples=[]; hwnd=None
     with (root/'game.log').open('wb') as log:
         p=subprocess.Popen([str(args.exe.resolve(strict=True)),str(args.rom.resolve(strict=True)),
-          '--load-state',str(args.state.resolve(strict=True)),'--widescreen','--aspect','Fit',
+          '--no-settings','--video-config',str(config),
+          '--load-state',str(args.state.resolve(strict=True)),
           '--window-size','800x600'],cwd=root,env=env,stdout=log,stderr=log)
         try:
             windows=[]
@@ -52,9 +58,11 @@ def main():
                 if p.poll() is not None or time.monotonic()>deadline: raise RuntimeError('No game window')
                 user.EnumWindows(visit,0); time.sleep(.1)
             hwnd=windows[0]; time.sleep(.5)
-            for index,(width,height,expected) in enumerate([
-                (1280,720,(342,224)),(1260,540,(448,224)),(1440,405,(684,224)),
-                (600,900,(256,448)),(900,900,(256,300)),(800,600,(256,224))]):
+            for index,(width,height) in enumerate([
+                (1280,720),(1260,540),(1440,405),
+                (600,900),(900,900),(800,600)]):
+                expected=(max(256,min(2048,math.floor(width/(scale*pixel_aspect)/2+1e-9)*2)),
+                          max(224,min(2048,math.floor(height/scale/2+1e-9)*2)))
                 owner=w.DWORD(); user.GetWindowThreadProcessId(hwnd,c.byref(owner))
                 assert owner.value==p.pid and p.poll() is None
                 client,outer=w.RECT(),w.RECT()

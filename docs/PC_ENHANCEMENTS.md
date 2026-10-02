@@ -23,11 +23,14 @@ those requirements are unmet. This is a multiplier of development attempts,
 not a promise of a particular population increase.
 
 **FIT TO SCREEN** in F12 maximizes the window and enables the adaptive renderer's
-Fit aspect. It expands the visible city canvas to match the drawable window,
-retaining the original pixel proportions. Population, money, demand, minimap,
-navigation arrows and mouse hit regions follow the resulting canvas dimensions.
+Fit aspect. It keeps the current on-screen tile size and adds visible map rows
+and columns as the window expands, retaining the original pixel proportions.
+Further window resizing also changes visible land at that captured scale.
+Population, money, demand, minimap, navigation arrows and mouse hit regions
+follow the resulting canvas dimensions.
 It also works when switching from the classic renderer. The aspect preference
-is saved in `sc-video.ini`; maximizing applies to the current window.
+and captured scale are saved in `sc-video.ini`; maximizing applies to the current
+window.
 
 **GPU TERRAIN** in F12 is an optional Windows SDL3/Direct3D 11 acceleration
 path, initially off and session-only. It moves extended terrain decoding and

@@ -35,7 +35,7 @@ static int option_get(void *ctx,const char *p,const char *f,int i,RecompLauncher
     memset(out,0,sizeof(*out)); out->type=RECOMP_MOD_OPTION_CHOICE; out->step=1;
     if (!i) {
         COPY(out->id,"aspect"); COPY(out->label,"View size");
-        COPY(out->description,"Fit adapts both axes. Fit height adds columns; Fit width adds rows. Full original view stays visible.");
+        COPY(out->description,"Fit keeps tile size and adapts both axes. Fit height adds columns; Fit width adds rows. Full original view stays visible.");
         COPY(out->value,ScAspectName(video->aspect)); COPY(out->default_value,"Fit");
         out->choice_count=SC_ASPECT_COUNT;
     } else {

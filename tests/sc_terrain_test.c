@@ -65,7 +65,7 @@ int main(void) {
     ScGpuTerrain *gpu=ScGpuTerrainCreate(renderer,false);
     if(!gpu) {fprintf(stderr,"SKIP: Direct3D 11 compute unavailable\n");return 77;}
 #endif
-    const ScViewport views[]={{448,224,0,0,1},{684,448,214,112,1},{256,448,0,112,1}};
+    const ScViewport views[]={{448,224,0,0,1,0},{684,448,214,112,1,0},{256,448,0,112,1,0}};
     uint32_t native[256];unsigned captures=0;
     for(unsigned v=0;v<3;++v) for(unsigned test=0;test<8;++test) {
         assert(ScRendererResize(cpu,views[v]) && ScRendererResize(deferred,views[v]));

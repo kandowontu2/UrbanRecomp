@@ -32,7 +32,7 @@ int main(void) {
         uint8_t *map=size?world->tiles:ram+0x10200;
         word(map,2*((cy+13)*width+cx+14),1);word(rom,0x14f2d+2,1);
         ScRendererInit(r,rom,0x80000,true);r->world=size?world:NULL;
-        ScViewport view=centered?(ScViewport){684,300,214,38,1}:(ScViewport){448,224,0,0,1};
+        ScViewport view=centered?(ScViewport){684,300,214,38,1,0}:(ScViewport){448,224,0,0,1,0};
         assert(ScRendererResize(r,view));assert(ScRendererDeferTerrain(r,deferred!=0));
         frame(r,p,ram,native);assert(!r->scroll_repair);
         /* A reversed fine step or Ctrl-size step starts checking interior

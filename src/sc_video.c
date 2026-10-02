@@ -26,7 +26,7 @@ bool ScParseAspect(const char *value, ScAspect *out) {
  * keeps its margins whatever the window's shape. Enabled=0 in sc-video.ini
  * (Mods: Adaptive Widescreen off) goes back to the classic renderer. */
 void ScVideoDefaults(ScVideoSettings *s) {
-    *s = (ScVideoSettings){true, SC_21_9, false};
+    *s = (ScVideoSettings){.enabled=true, .aspect=SC_21_9};
 }
 bool ScVideoLoad(ScVideoSettings *s, const char *path) {
     ScVideoDefaults(s);
@@ -42,6 +42,14 @@ bool ScVideoLoad(ScVideoSettings *s, const char *path) {
             if (strcmp(value, "0") && strcmp(value, "1")) { valid = false; continue; }
             if (!strcmp(key, "Enabled")) parsed.enabled = value[0] == '1';
             else parsed.centered = value[0] == '1';
+        } else if (!strcmp(key, "FitScale") || !strcmp(key, "FitPixelAspect")) {
+            char *end;
+            double number = strtod(value, &end);
+            if (*end || !isfinite(number) || number < 0 || number > 16384) {
+                valid = false; continue;
+            }
+            if (!strcmp(key, "FitScale")) parsed.fit_scale = number;
+            else parsed.fit_pixel_aspect = number;
         }
     }
     valid &= !ferror(f);
@@ -55,8 +63,10 @@ bool ScVideoSave(const ScVideoSettings *s, const char *path) {
     if (snprintf(temp, sizeof(temp), "%s.tmp", path) >= (int)sizeof(temp)) return false;
     FILE *f = fopen(temp, "w");
     if (!f) return false;
-    bool ok = fprintf(f, "[Widescreen]\nEnabled=%d\nAspect=%s\nCentered=%d\n",
-                      s->enabled, ScAspectName(s->aspect), s->centered) > 0;
+    bool ok = fprintf(f, "[Widescreen]\nEnabled=%d\nAspect=%s\nCentered=%d\n"
+                        "FitScale=%.17g\nFitPixelAspect=%.17g\n",
+                      s->enabled, ScAspectName(s->aspect), s->centered,
+                      s->fit_scale, s->fit_pixel_aspect) > 0;
     if (fclose(f)) ok = false;
     if (ok) {
 #ifdef _WIN32
@@ -75,9 +85,24 @@ static int extent(double value, int minimum) {
     int result = (int)ceil(value / 2 - 1e-9) * 2;
     return result < minimum ? minimum : result;
 }
+static int fit_extent(double value, int minimum) {
+    if (value > SC_MAX_CANVAS) return SC_MAX_CANVAS;
+    /* Whole even rows/columns fit inside the drawable at the captured scale. */
+    int result = (int)floor(value / 2 + 1e-9) * 2;
+    return result < minimum ? minimum : result;
+}
 ScViewport ScVideoViewport(const ScVideoSettings *s, int w, int h) {
-    ScViewport v = {256, 224, 0, 0, 7.0 / 6.0};
+    ScViewport v = {256, 224, 0, 0, 7.0 / 6.0, 0};
     if (!s->enabled) return v;
+    if (s->aspect == SC_FIT && s->fit_scale > 0 && s->fit_pixel_aspect > 0) {
+        v.pixel_aspect = s->fit_pixel_aspect;
+        v.pixel_scale = s->fit_scale;
+        v.width = fit_extent(w / (v.pixel_scale * v.pixel_aspect), 256);
+        v.height = fit_extent(h / v.pixel_scale, 224);
+        v.core_x = s->centered ? (v.width - 256) / 2 : 0;
+        v.core_y = s->centered ? (v.height - 224) / 2 : 0;
+        return v;
+    }
     double aspect = w > 0 && h > 0 ? (double)w / h : 4.0 / 3.0;
     switch (s->aspect) {
     case SC_4_3: aspect = 4.0/3.0; break;
@@ -98,12 +123,31 @@ ScViewport ScVideoViewport(const ScVideoSettings *s, int w, int h) {
 }
 ScVideoRect ScVideoDestination(ScViewport v, int w, int h) {
     if (w <= 0 || h <= 0) return (ScVideoRect){0,0,0,0};
+    if (v.pixel_scale > 0) {
+        double scale = fmin(v.pixel_scale, fmin(w / (v.width * v.pixel_aspect),
+                                               (double)h / v.height));
+        int dw = (int)floor(v.width * v.pixel_aspect * scale + .5);
+        int dh = (int)floor(v.height * scale + .5);
+        if (dw < 1) dw = 1;
+        if (dh < 1) dh = 1;
+        return (ScVideoRect){(w-dw)/2, (h-dh)/2, dw, dh};
+    }
     double aspect = v.width * v.pixel_aspect / v.height;
     int dw = w, dh = (int)floor(w / aspect + .5);
     if (dh > h) { dh = h; dw = (int)floor(h * aspect + .5); }
     if (dw < 1) dw = 1;
     if (dh < 1) dh = 1;
     return (ScVideoRect){(w-dw)/2, (h-dh)/2, dw, dh};
+}
+void ScVideoCaptureScale(ScVideoSettings *s, ScViewport v, int w, int h) {
+    ScVideoRect d = ScVideoDestination(v, w, h);
+    if (d.w <= 0 || d.h <= 0) return;
+    /* Reapplying Fit must not accumulate rounding or enlarge a frozen frame. */
+    s->fit_scale = v.pixel_scale > 0 &&
+                   v.pixel_scale <= w / (v.width * v.pixel_aspect) + 1e-9 &&
+                   v.pixel_scale <= (double)h / v.height + 1e-9 ?
+                   v.pixel_scale : (double)d.h / v.height;
+    s->fit_pixel_aspect = v.pixel_aspect;
 }
 bool ScVideoToGuest(ScViewport v, ScVideoRect d, double x, double y, int *gx, int *gy) {
     if (d.w <= 0 || d.h <= 0) return false;

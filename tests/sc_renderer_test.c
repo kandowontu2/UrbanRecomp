@@ -48,7 +48,7 @@ int main(void) {
     assert(ScRendererMapPixel(&r,p,ram,7,7)==0xff00ff00); /* base green */
     assert(ScRendererMapPixel(&r,p,ram,1,0)==0xff000000); /* transparent roof */
     ram[0x3e]=1;
-    ScVideoSettings settings={true,SC_FIT,true};
+    ScVideoSettings settings={.enabled=true,.aspect=SC_FIT,.centered=true};
     ScViewport v=ScVideoViewport(&settings,720,1280);
     assert(ScRendererResize(&r,v));
     uint32_t native[256];
@@ -62,7 +62,7 @@ int main(void) {
     assert(ScRendererResize(&r,v));
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(!memcmp(before,p,sizeof(*p)));
-    assert(!ScRendererResize(&r,(ScViewport){8192,224,0,0,1}));
+    assert(!ScRendererResize(&r,(ScViewport){8192,224,0,0,1,0}));
     /* A fax desk on BG3 uses a 16-column sheet, not the menu's guessed
      * eight-column repeat. Furniture in lower rows borrows the wood period. */
     memset(p,0,sizeof(*p)); memset(ram,0,0x20000);
@@ -76,7 +76,7 @@ int main(void) {
         p->vram[0x28*8+row]=0xff00;
     }
     ram[0x14]=15;
-    assert(ScRendererResize(&r,(ScViewport){512,224,0,0,1}));
+    assert(ScRendererResize(&r,(ScViewport){512,224,0,0,1,0}));
     ScRendererLine(&r,p,ram,0,native);
     assert(r.wood_layer==2 && r.wood_period==16);
     assert(r.view.core_x==128);
@@ -111,14 +111,14 @@ int main(void) {
     p->bgXsc[0]=0x31; p->brightnessMult[31]=255; p->cgram[1]=31;
     p->vram[0x3400]=2;
     for (int y=0;y<8;++y) p->vram[2*8+y]=0xff;
-    assert(ScRendererResize(&r,(ScViewport){800,224,0,0,1}));
+    assert(ScRendererResize(&r,(ScViewport){800,224,0,0,1,0}));
     ram[0x14]=11; ScRendererLine(&r,p,ram,0,native);
     assert(r.pixels[272+256]==0xffff0000);
     assert(r.pixels[272+480]==0xff000000); /* no repeat of cards beyond strip */
     /* Repeating title lights are OAM, not background tiles. Ignore the
      * parked copy at raw X=257 when finding the visible row's pitch. */
     memset(p,0,sizeof(*p)); p->inidisp=15; p->bgmode=1;
-    assert(ScRendererResize(&r,(ScViewport){512,224,0,0,1}));
+    assert(ScRendererResize(&r,(ScViewport){512,224,0,0,1,0}));
     p->screenEnabled[0]=16; p->brightnessMult[31]=255; p->cgram[129]=31;
     for (int i=0;i<4;++i) p->oam[i*2]=(180<<8)|(1+i*64);
     for (int y=0;y<8;++y) p->vram[y]=0xff;
@@ -260,7 +260,7 @@ int main(void) {
     for (int x=0;x<256;++x) native[x]=x==42 ? 0 : (x>=40 && x<48) ? 0x000000ff :
         x==64 ? 0 : (x>=16 && x<24) ? 0x007b0000 : 0x00007b00;
     ScRendererResetHistory(&r);
-    assert(ScRendererResize(&r,(ScViewport){684,448,0,0,1}));
+    assert(ScRendererResize(&r,(ScViewport){684,448,0,0,1,0}));
     memcpy(before,p,sizeof(*p));
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(r.advisor_frame && r.view.core_x==0 && r.view.core_y==0);
@@ -297,7 +297,7 @@ int main(void) {
     p->oam[38]=(22<<8)|147; p->oam[39]=0x3200;
     p->oam[80]=(46<<8)|190; p->oam[81]=0x3166;
     for (int x=0;x<256;++x) native[x]=0xff0000ff;
-    assert(ScRendererResize(&r,(ScViewport){448,224,0,0,1}));
+    assert(ScRendererResize(&r,(ScViewport){448,224,0,0,1,0}));
     ScRendererResetHistory(&r); memcpy(before,p,sizeof *p);
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(r.split_hud && r.pan_frame && !memcmp(before,p,sizeof *p));
@@ -324,7 +324,7 @@ int main(void) {
     assert(!ScRendererCityPoint(&r,ram,300,22,&wx,&wy)); /* header */
     for (int width=448;width<=684;width+=236) for (int centered=0;centered<2;++centered)
     for (int dpi=1;dpi<=3;++dpi) {
-        r.view=(ScViewport){width,300,centered?(width-256)/2:0,centered?38:0,1};
+        r.view=(ScViewport){width,300,centered?(width-256)/2:0,centered?38:0,1,0};
         ScVideoRect d={20,40,width*2,600};
         double x=(20+(width-10.5)*2)/dpi,y=(40+(280.5)*2)/dpi;
         assert(ScRendererWindowToGuest(&r,d,1000,500,1000*dpi,500*dpi,x,y,&gx,&gy,&navigation));
@@ -333,7 +333,7 @@ int main(void) {
         assert(wx==(160+gx)/8 && wy==(240+gy)/8);
         assert(!ScRendererWindowToGuest(&r,d,1000,500,1000*dpi,500*dpi,0,0,&gx,&gy,&navigation));
     }
-    r.view=(ScViewport){448,224,0,0,1};
+    r.view=(ScViewport){448,224,0,0,1,0};
     r.city_input=false;
     assert(!ScRendererWindowToGuest(&r,dest,1000,500,2000,1000,310,190,&gx,&gy,&navigation));
     r.city_input=true;
@@ -460,7 +460,7 @@ int main(void) {
     p->oam[53]=0x3174;
     p->oam[54]=(30<<8)|195; p->oam[55]=0x3174;
     ScPopulation pop={0}; pop.valid=true; pop.value=SC_POPULATION_MAX; r.population=&pop;
-    assert(ScRendererResize(&r,(ScViewport){448,224,0,0,1}));
+    assert(ScRendererResize(&r,(ScViewport){448,224,0,0,1,0}));
     memcpy(before,p,sizeof *p);
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(r.pixels[22*448+323]==0xffff0000);
@@ -489,7 +489,7 @@ int main(void) {
     }
     pop.live=false;
     pop.value=SC_POPULATION_MAX;
-    assert(ScRendererResize(&r,(ScViewport){256,224,0,0,1}));
+    assert(ScRendererResize(&r,(ScViewport){256,224,0,0,1,0}));
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(r.pixels[10*256+131]==0xffff0000 && r.pixels[17*256+131]==0xffff0000);
     assert(r.pixels[22*256+147]!=0xffff0000); /* no stale native counter */
@@ -520,7 +520,7 @@ int main(void) {
      * the authentic blinking animation; power clears it on the next frame. */
     p->cgram[65]=31;
     large=calloc(1,sizeof *large);assert(large);large->active=large->huge=true;r.world=large;
-    assert(ScRendererResize(&r,(ScViewport){448,224,0,0,1}));
+    assert(ScRendererResize(&r,(ScViewport){448,224,0,0,1,0}));
     memset(p->vram+0x4000,0,1024*sizeof(uint16_t));
     word(ram,0x1bd,420);word(ram,0x1bf,360);
     rom[0x184eb+0x13b]=1;word(rom,0x156a9+0x13b*2,0x10);
