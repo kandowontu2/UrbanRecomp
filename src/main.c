@@ -101,6 +101,7 @@ uint8_t    g_ram[0x20000];
 #include "sc_mapgen.h"
 #include "sc_decomp.h"
 #include "sc_development.h"
+#include "sc_ppu.h"
 #include "sc_population.h"
 #include "sc_mouse_ui.h"
 #include "sc_construction.h"
@@ -10530,6 +10531,12 @@ int main(int argc, char **argv) {
       s_gpu_terrain_enabled=false;ScRendererDeferTerrain(&s_custom_renderer,false);
     }
     int frames_this_iter = fast_forward ? 6 : (dragging ? s_drag_turbo : 1);
+    /* Fixed batches are an oracle for comparing identical guest frames with
+     * and without skipped pixels, independently of adaptive wall timings. */
+    static int test_tab_batch=-1;
+    if(test_tab_batch<0) {const char *e=getenv("SC_TAB_TEST_BATCH");
+      test_tab_batch=e?atoi(e):0;if(test_tab_batch<1 || test_tab_batch>6) test_tab_batch=0;}
+    if(fast_forward && test_tab_batch) frames_this_iter=test_tab_batch;
     const uint64_t batch_t0=SDL_GetPerformanceCounter();
     const double frame_budget_ms=kTargetFrameSeconds*1000.0-2.0;
 
@@ -10558,8 +10565,14 @@ int main(int argc, char **argv) {
          * evaluation, but omit the host's expanded image composition. */
         double spent_ms=(SDL_GetPerformanceCounter()-batch_t0)*s_perf_clock_ms;
         bool final_frame=ffi+1==frames_this_iter ||
-            (fast_forward && spent_ms+extra_frame_ms+full_frame_ms>frame_budget_ms);
+            (fast_forward && !test_tab_batch && spent_ms+extra_frame_ms+full_frame_ms>frame_budget_ms);
         s_skip_custom_frame=fast_forward && !final_frame;
+        /* Intermediate Tab frames keep sprite/beam/APU work, but their native
+         * background image is never presented. The final frame is always full. */
+        { static int skip_native=-1;
+          if(skip_native<0) {const char *e=getenv("SC_TAB_SKIP_PIXELS");skip_native=!e || *e!='0';}
+          ScPpuSkipPixels(s_skip_custom_frame && skip_native); }
+        ScPpuMeasurePixels(fast_forward?SDL_GetPerformanceCounter:NULL,s_perf_clock_ms);
         s_custom_frame_ms=0;
         uint64_t guest_t0=SDL_GetPerformanceCounter();
         if (mouse_target_valid && !s_fast_cursor_enabled) {
@@ -10582,7 +10595,10 @@ int main(int argc, char **argv) {
         if(fast_forward && !s_skip_custom_frame) {
           /* Refresh the skipped-frame estimate even at 1x. Otherwise an
            * expensive phase could leave Tab stuck at 1x after it finishes. */
-          double skipped_ms=guest_ms-s_custom_frame_ms;
+          double skipped_ms=guest_ms-s_custom_frame_ms-ScPpuPixelMilliseconds();
+          /* The override keeps the old full-raster estimate for the oracle. */
+          {const char *e=getenv("SC_TAB_SKIP_PIXELS");if(e && *e=='0') skipped_ms+=ScPpuPixelMilliseconds();}
+          if(skipped_ms<0) skipped_ms=0;
           extra_frame_ms=skipped_ms>extra_frame_ms?skipped_ms:extra_frame_ms*0.9+skipped_ms*0.1;
         }
         if(final_frame) {frames_this_iter=ffi+1;break;}
@@ -10598,6 +10614,8 @@ int main(int argc, char **argv) {
       }
     }
     s_skip_custom_frame=false;
+    ScPpuSkipPixels(false);
+    ScPpuMeasurePixels(NULL,0);
     if (guard_tripped) break;
     const uint64_t emu_t1 = perf_on ? SDL_GetPerformanceCounter() : 0;
     SC_PERF_ADD(kPerfEmu, frame_t0, emu_t1);

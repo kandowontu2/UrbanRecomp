@@ -142,3 +142,45 @@ cmake --build <build-directory> --target UrbanRecompGpuTest
 
 All prototype builds remain local. No release or repository push is authorized
 by this performance work.
+
+## Subsequent Tab rendering optimization
+
+Intermediate Tab frames now omit native background/pixel composition as well
+as expanded host composition. They retain the guest beam, IRQ/NMI, APU, full
+sprite/sliver evaluation, overflow flags, OAM history and brightness caching.
+The final frame always draws completely. Normal play uses the pinned runner's
+original scanline renderer. `src/sc_ppu.c` includes that translation unit and
+reuses its private sprite evaluator, without modifying the submodule.
+
+Tab's budget now measures only the native image work it can omit, in addition
+to host image work. The previous estimate kept charging native raster work to
+extra frames, hiding much of the improvement. Actual skipped guest frames still
+update the estimate immediately when a simulation phase becomes more expensive.
+
+Four alternating-order pairs, with fixed three-frame batches at X50/21:9,
+replayed exactly 240 guest frames and 80 displayed frames. Median emulation +
+draw + presentation work fell from **28.189 to 24.303 ms per display batch**,
+about **13.8% less**. A far-Huge GPU replay with an off-window construction drag
+fell from 33.869 to 25.657 ms (24.2%, one pair). Host load produced considerable
+timing variation; these are CPU wall measurements, excluding pacing sleep,
+and are not a steady-FPS guarantee.
+
+The separate adaptive held-Tab city replay needed 342 displayed frames for
+602 guest frames before this change and 210 for 603 afterwards (the stop
+condition permits a final batch to cross the target). The measured average
+boost was approximately **1.76x → 2.87x**. The later run's one-second display
+windows were 58.9, 59.1 and 59.6 FPS. This is one workload on this machine;
+heavy X50 simulation remains CPU work and can exceed the display budget.
+
+All fixed-batch runs matched complete saved states and actual SDL screenshots
+byte for byte. The PPU regression compares the pinned full renderer against
+skipping over 32 cases: both native renderers, sprite size/priority/interlace,
+overflow and unlimited sprites, widened OAM, live VRAM, mid-frame brightness
+and forced blank. It verifies an untouched skipped framebuffer and an identical
+next full frame. The four CTest tests and GPU differential tests passed.
+
+`tools/test_tab_rendering.py` accepts private `--exe`, `--rom`, `--state`,
+`--end-frame` inputs, with optional `--gpu` and `--mouse-drag`. Testing-only
+`SC_TAB_TEST_BATCH=1..6` fixes the batch count. `SC_TAB_SKIP_PIXELS=0` restores
+the full-raster reference and its budget estimate; neither override is used
+in ordinary play. No publishing is part of this local optimization.

@@ -118,7 +118,7 @@ set(SC_DEVICE_SOURCES
     ${SNESRECOMP_ROOT}/runner/src/snes/dsp1.c
     ${SNESRECOMP_ROOT}/runner/src/snes/dsp1_hle.c
     ${SNESRECOMP_ROOT}/runner/src/snes/joypad.c
-    ${SNESRECOMP_ROOT}/runner/src/snes/ppu.c
+    ${CMAKE_SOURCE_DIR}/src/sc_ppu.c
     ${SNESRECOMP_ROOT}/runner/src/snes/ppu_legacy.c
     ${SNESRECOMP_ROOT}/runner/src/snes/sa1.c
     ${SNESRECOMP_ROOT}/runner/src/snes/snes.c
@@ -556,6 +556,18 @@ add_executable(UrbanRecompFiberTest EXCLUDE_FROM_ALL
 target_include_directories(UrbanRecompFiberTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 add_executable(UrbanRecompPointerTest EXCLUDE_FROM_ALL tests/sc_pointer_test.c src/sc_video.c)
+add_executable(UrbanRecompPpuTest EXCLUDE_FROM_ALL tests/sc_ppu_test.c src/sc_ppu.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/ppu_legacy.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/ws_shadow.c)
+target_include_directories(UrbanRecompPpuTest PRIVATE ${CMAKE_SOURCE_DIR}/src
+    ${SNESRECOMP_ROOT}/runner/src)
+if(BUILD_TESTING)
+    set_target_properties(UrbanRecompPpuTest PROPERTIES EXCLUDE_FROM_ALL FALSE)
+    add_test(NAME simcity_skipped_ppu COMMAND UrbanRecompPpuTest)
+endif()
+if(NOT MSVC)
+    target_link_libraries(UrbanRecompPpuTest PRIVATE m)
+endif()
 target_include_directories(UrbanRecompPointerTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
 if(NOT MSVC)
     target_link_libraries(UrbanRecompPointerTest PRIVATE m)

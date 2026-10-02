@@ -351,8 +351,12 @@ average/maximum frame-stage times for performance diagnosis.
 Held **Tab** uses this port's fast-forward loop, independently of Mesen. It
 runs up to six guest frames per display update but reserves time for the final
 rendered frame, adapting the boost to the city workload. Intermediate frames
-retain input and native PPU/APU work while omitting the expanded image
-composition. The title shows the measured Tab multiplier. Only the latest
+retain input, native PPU/APU timing and sprite work while omitting the expanded image
+composition. It also omits native background/pixel composition on intermediate
+frames, while preserving scanline timing, full sprite evaluation, overflow flags
+and OAM history. Its budget measures the actual pixel work it can skip, so it
+can recover the boost after a costly simulation phase. The title shows the
+measured Tab multiplier. Only the latest
 batch audio is queued, avoiding accumulated playback behind the picture.
 `SC_FAST_FORWARD=1` records the same held-Tab path for dummy-SDL testing.
 
