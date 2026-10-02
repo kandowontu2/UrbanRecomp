@@ -76,6 +76,32 @@ int main(int argc,char **argv) {
             assert(!ScPowerRefreshStep(&power,ram,&world,rom,sizeof rom,frame,speeds[i],true));
         assert(ScPowerRefreshStep(&power,ram,&world,rom,sizeof rom,200/speeds[i],speeds[i],true));
         assert(ScWorldCell(&world,x+6,y+1)&0x8000);
+        /* The save codec can discard flags while native census counters are
+         * still zero. Rebuild from plant tiles before any decline attempt. */
+        for(unsigned cell=0;cell<ScWorldCells(&world);++cell) world.tiles[2*cell+1]&=127;
+        put(0xe0d,0);put(0xe0f,0);
+        assert(ScPowerRefreshRestore(&power,ram,&world,rom,sizeof rom,800));
+        assert(ScWorldCell(&world,x+1,y+1)&0x8000);
+        assert(ScWorldCell(&world,x+6,y+1)&0x8000);
+        build_world(5,x+15,y); /* disconnected zone stays genuinely unpowered */
+        assert(ScPowerRefreshRestore(&power,ram,&world,rom,sizeof rom,801));
+        assert(!(ScWorldCell(&world,x+16,y+1)&0x8000));
+        world.fields[5][0]=0x5a;ScWorldPutCell(&world,x+6,y+1,ScWorldCell(&world,x+6,y+1)&0x7fff);
+        assert(!ScPowerRefreshStep(&power,ram,&world,rom,sizeof rom,802,1,false));
+        assert(ScWorldCell(&world,x+6,y+1)&0x8000);
+        assert(world.fields[5][0]==0x5a);
     }
-    puts("PASS: native-relative speed ratios on every map size, fractional cadence, nuclear-first connection, and in-flight bitmap ownership");
+    memset(ram,0,sizeof ram);put(0xb9d,60000);build(14,40,40);build(5,45,40);build(5,60,40);
+    build(3,44,41);put(0xe0d,0);put(0xe0f,0);
+    assert(ScPowerRefreshRestore(&power,ram,NULL,rom,sizeof rom,0));
+    assert(word(0x10200+2*(41*120+46))&0x8000);
+    assert(!(word(0x10200+2*(41*120+61))&0x8000));
+    for(unsigned bits=0;bits<256;++bits) {
+        power.bitmap[0]=(uint8_t)bits;
+        for(unsigned cell=0;cell<8;++cell) put(0x10200+2*cell,0x6c00);
+        assert(!ScPowerRefreshStep(&power,ram,NULL,rom,sizeof rom,bits+1,1,false));
+        for(unsigned cell=0;cell<8;++cell)
+            assert(word(0x10200+2*cell)==(0x6c00|(bits&(128>>cell)?0x8000:0)));
+    }
+    puts("PASS: speed ratios on every map size, fractional cadence, nuclear-first connection, full-map reload recovery, disconnected zones and native bitmap ownership");
 }

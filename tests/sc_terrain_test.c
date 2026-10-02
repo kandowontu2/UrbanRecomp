@@ -35,10 +35,10 @@ static void presentation_test(SDL_Renderer *renderer,SDL_Texture *computed,const
 }
 #endif
 int main(void) {
-    ScRenderer *cpu=calloc(1,sizeof *cpu),*deferred=calloc(1,sizeof *deferred);
+    ScRenderer *cpu=calloc(1,sizeof *cpu),*deferred=calloc(1,sizeof *deferred),*optimized=calloc(1,sizeof *optimized);
     Ppu *p=calloc(1,sizeof *p);ScWorld *world=calloc(1,sizeof *world);
     uint8_t *rom=calloc(1,0x80000),*ram=calloc(1,0x20000);
-    assert(cpu && deferred && p && world && rom && ram);
+    assert(cpu && deferred && optimized && p && world && rom && ram);
     for(unsigned i=0;i<958;++i) {
         word(rom,0x156a9+2*i,(i%127)|((i%8)<<10)|((i%4)<<14));
         word(rom,0x14f2d+2*i,i%5?((i+17)%127)|(((i+3)%8)<<10)|(((i+1)%4)<<14):0x300);
@@ -52,7 +52,8 @@ int main(void) {
     world->active=world->huge=true;
     for(unsigned i=0;i<SC_WORLD_MAX_CELLS;++i) word(world->tiles,2*i,(i*19+71)%958);
     ScRendererInit(cpu,rom,0x80000,true);ScRendererInit(deferred,rom,0x80000,true);
-    cpu->world=deferred->world=world;
+    ScRendererInit(optimized,rom,0x80000,true);
+    cpu->world=deferred->world=optimized->world=world;
 #ifdef SC_TEST_GPU
     assert(snesrecomp_sdl_init(SDL_INIT_VIDEO));
     SDL_Window *window=snesrecomp_sdl_create_window("Terrain regression",64,64,SDL_WINDOW_HIDDEN);
@@ -71,8 +72,11 @@ int main(void) {
       world->giant=map!=0;
       word(ram,0x1bd,map?820:300);word(ram,0x1bf,map?730:330);
       ScRendererResetHistory(cpu);ScRendererResetHistory(deferred);
+      ScRendererResetHistory(optimized);
       for(unsigned v=0;v<3;++v) for(unsigned test=0;test<8;++test) {
+        cpu->reference_terrain=true;
         assert(ScRendererResize(cpu,views[v]) && ScRendererResize(deferred,views[v]));
+        assert(ScRendererResize(optimized,views[v]));
         assert(ScRendererDeferTerrain(deferred,true));
         p->screenEnabled[0]=2;p->screenEnabled[1]=test&1?4:2;
         p->screenWindowed[0]=test&2?2:0;p->screenWindowed[1]=test&4?2:0;
@@ -90,10 +94,12 @@ int main(void) {
             for(unsigned i=0;i<32;++i) p->brightnessMult[i]=((i<<3)|(i>>2))*(line%3+1)/3;
             p->inidisp=(test==7 && line>=100 && line<120)?0x8f:15;
             ScRendererLine(cpu,p,ram,line,native);ScRendererLine(deferred,p,ram,line,native);
+            ScRendererLine(optimized,p,ram,line,native);
         }
         for(int y=0;y<views[v].height;++y) for(int x=0;x<views[v].width;++x)
             assert(ScRendererPixel(deferred,x,y)==cpu->pixels[(size_t)y*views[v].width+x]);
         assert(deferred->terrain.deferred>0);++captures;
+        assert(!memcmp(cpu->pixels,optimized->pixels,(size_t)views[v].width*views[v].height*4));
 #ifdef SC_TEST_GPU
         SDL_Texture *computed=ScGpuTerrainDraw(gpu,deferred);assert(computed);
 #if SNESRECOMP_SDL3
@@ -109,6 +115,7 @@ int main(void) {
     ScGpuTerrainDestroy(gpu);SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();
 #endif
     ScRendererDestroy(cpu);ScRendererDestroy(deferred);
-    free(cpu);free(deferred);free(p);free(world);free(rom);free(ram);
+    ScRendererDestroy(optimized);
+    free(cpu);free(deferred);free(optimized);free(p);free(world);free(rom);free(ram);
     printf("PASS: %u CPU/deferred frames, Huge/Giant coordinates, wide/tall views, live planes/palettes, flips, windows, colour math, fades and fallback\n",captures);
 }

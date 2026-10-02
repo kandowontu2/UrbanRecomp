@@ -33,12 +33,12 @@ and captured scale are saved in `sc-video.ini`; maximizing applies to the curren
 window.
 
 **GPU TERRAIN** in F12 is an optional Windows SDL3/Direct3D 11 acceleration
-path, initially off and session-only. It moves extended terrain decoding and
+path, enabled automatically when supported and session-only. It moves extended terrain decoding and
 colour composition to the GPU, retaining CPU rendering for native pixels,
 HUD, cursor repair and power warnings. Unsupported backends or failures use
-the CPU renderer. Recorded X50 replays showed about 4% less frame work at
-21:9 and 24% at 32:9; gains vary by viewport and workload. No steady 60 FPS
-guarantee is made for heavy X50 simulation. See [GPU measurements and tests](GPU_PERFORMANCE.md).
+the CPU renderer. The 960x800 Fit investigation below reduces repeated tile
+lookups, spatial interpreter overhead and cached power work. Gains vary by
+viewport and workload; heavy X50 simulation can still miss 60 FPS. See [GPU measurements and tests](GPU_PERFORMANCE.md).
 
 The multiplier applies when the native simulation visits a zone and does not
 advance a paused city. Expanded maps now account for their extra spatial work
@@ -61,7 +61,7 @@ The previous build remained at population 0 after 6,000 frames. With the fix,
 the same city reached 2,380 after 460 frames (about 7.7 seconds), with developed
 residential buildings and the original 2,000-person adviser celebration.
 Its unpowered Commercial zones remained empty. Zone-only tests also cover
-growth and power gating on all sizes, including 960×800 coordinates beyond 255 and spatial indices beyond 65,535.
+growth and power gating on all sizes, including 960x800 coordinates beyond 255 and spatial indices beyond 65,535.
 
 Extra attempts run as host work without advancing the guest video/audio clock.
 Calendar, budgets and disasters are not fast-forwarded. Larger cities at X50
@@ -462,3 +462,35 @@ iteration. `SC_MOUSE_TOOL` selects the tool. The events use the same mapping,
 drag lifecycle, preview and commit path as live SDL input and can run with the
 dummy SDL video driver. Outside release, re-entry and right-click cancellation
 have been checked through this path.
+
+## 960x800 Fit performance and electricity on reload
+
+The city-load power fix now rebuilds the actual network before development
+resumes, on every map size and either save slot. It seeds a settled cache for
+Normal as well as accelerated development. It no longer temporarily powers
+only the original 12,000 cells. The original plant capacities, conductive
+rules, disconnected zones and native ownership of an in-flight bitmap remain.
+Exact tile-ID comparisons and power-flag publication process multiple cells
+per word, preserving every other tile/metadata bit.
+
+A private 960x800 save had one nuclear plant, 306 zone/plant owners and 209
+powered owners. Reload recovery and an independent fresh solve reproduced
+those 209 flags. Its connected network contained 2,780 conductive cells; the
+native flood stopped at 2,001 visits against capacity 2,000. The remaining
+warnings include genuine brownouts, requiring another connected plant.
+`SC_POWER_DIAG=1` reports plant counts, capacity and visited cells.
+
+Adaptive raster work now shares world-tile lookups and warning classification
+across each eight-pixel span. Plain margin colours are calculated once per
+palette index per row; GPU-deferred terrain avoids redundant CPU tile decoding.
+Live scanline palettes, flips, fades, windows, objects, power warnings and native
+staging repair retain their ordering. Held terrain also retains its saved map
+dimensions when a different city loads.
+
+Vacant 2x2 terrain accumulation and zero-land-value crime cells use equivalent
+C paths. Other spatial cells execute on a dedicated RAM/ROM bus in batches
+bounded by the next scanline, HDMA or programmed IRQ event. Calendar, budgets,
+demand, construction and zone decisions keep their existing paths and timing.
+The existing C smoothing and terrain kernels remain active inside a batch.
+Testing switches `SC_SPATIAL_KERNELS=0` and `SC_TERRAIN_SPANS=0` restore reference
+execution and raster paths. See GPU_PERFORMANCE.md for measurements.

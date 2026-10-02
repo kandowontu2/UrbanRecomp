@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED - 1.2.0 BETA 9
+URBAN RECOMP ENHANCED - 1.2.0 BETA 10
 ===================================
 
 Urban Recomp runs the Super Nintendo city builder SimCity (1991) natively on
@@ -13,8 +13,9 @@ Original project and credits: https://github.com/blackerking/UrbanRecomp
 F12 development speed: Normal, 2x, 5x, 10x and 50x, with population and power
 refresh scaled to the selected multiplier. Calendar and budgets keep their
 normal schedule. 64-bit calculated population up to 9,999,999,999; Normal
-120x100, Big 240x200 and Huge 480x400 maps. Use L in the main menu or NEW MAP
-SIZE in F12 to select the size before starting a city.
+120x100, 240x200, 480x400 and 960x800 maps. Select the size on the new
+in-game MAP SIZE screen before starting a city or Practice. It uses the
+original menu font. Map size is no longer an F12 setting.
 START NEW JOURNEY uses the original menu font and starts Normal, expanding
 to Big at 100,000 residents and Huge at 1,000,000. Dr. Wright celebrates each
 expansion. Buildings and city data are preserved; Journey progress is saved.
@@ -37,6 +38,17 @@ Existing stray tiles in previously affected saves require recovery from a
 clean map/backup; this update prevents new corruption without deleting cities.
 Beta 9 launches as a Windows desktop application without opening a console.
 The optional Start-UrbanRecomp.cmd launcher exits after starting the game.
+Beta 10 adds full 960x800 worlds and repairs expanded-city load geometry.
+F12 FIT TO SCREEN expands visible land at the current tile scale. Ctrl makes
+scrolling 3x faster. Held X/arrow panning repairs stale native tile staging.
+Tab avoids drawing intermediate frames while preserving guest simulation.
+GPU TERRAIN starts enabled on supported Windows Direct3D 11 renderers,
+with automatic CPU fallback and an F12 toggle. Span rendering, spatial C
+kernels and cached power work reduce frame costs on large Fit canvases.
+Paired 960x800/X50 tests showed about 44% less frame work; heavy phases can
+still miss 60 FPS. See GPU_PERFORMANCE.md for measurements and limitations.
+Reload rebuilds the real power network before development, across all map
+sizes. Disconnected zones and overloaded plants still show valid warnings.
 These features require the verified clean US ROM and the interpreter build.
 This enhanced build is a prerelease; hands-on gameplay testing is ongoing.
 
@@ -64,11 +76,12 @@ Start        Enter
 Select       B
 
 Tab          fast-forward (hold)
+Ctrl         3x scrolling (hold)
 + / -        zoom the map in the city view
 Shift+1..0   save state to slot 1-0, 1..0 load it
 F3           mouse moves the game cursor
 F9           fast cursor
-F12 / F10    settings menu: development speed, large maps, comfort options,
+F12 / F10    settings menu: development speed, fit to screen, GPU terrain,
              cheats, disaster triggers,
              save states -- the game pauses while it is open
 

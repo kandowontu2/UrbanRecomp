@@ -83,7 +83,7 @@ small GPU jobs with immediate readback may cost more than they save.
 
 ## Implemented Windows GPU terrain prototype
 
-**F12 → GPU TERRAIN** enables the optional path. It starts off, and is
+**F12 → GPU TERRAIN** enables the optional path. It is now enabled automatically when supported and is
 session-only. `SC_GPU_TERRAIN=1` enables it for testing; `0` keeps CPU rendering.
 It requires SDL3's Direct3D 11 renderer and feature level 11. Unsupported
 backends, shader/resource failures or device loss retain/revert to CPU output.
@@ -126,7 +126,7 @@ mouse construction drag outside the window, matched the previous CPU build's
 complete saved state and actual SDL-rendered screenshot byte for byte.
 The F12 switch and six real window resizes also passed.
 
-`sc_terrain_test` compares 24 complete deferred/CPU frames over Huge coordinates,
+`sc_terrain_test` compares 48 complete reference/span/deferred frames over Huge coordinates,
 wide/tall views, live plane/palette changes, horizontal/vertical flips, window
 logic, colour add/subtract/half/clamping, fades and switching back to CPU.
 `UrbanRecompGpuTest` sends the same cases through the actual compute shader and
@@ -205,3 +205,53 @@ Actual Direct3D replays of Huge panning, ultrawide Ctrl+Tab panning and portrait
 Normal-map X/arrow input preserved the pre-change complete saved state, with
 identical CPU/GPU presented screenshots. These are correctness checks, not
 performance measurements. Builds remain local and unpublished.
+
+## 960x800 Fit overhaul and load recovery (2026-10-02)
+
+The private saved city was replayed for 240 displayed/guest frames at X50 on
+Fit's 730x532 canvas in a 2560x1600 window, preserving the captured tile scale.
+The initial CPU/software replay cost 44.257 ms per frame in emulation, draw and
+presentation. After span rendering and spatial batching, a CPU/software replay
+cost 29.828 ms and a Direct3D GPU replay cost 21.467 ms. These initial samples
+exclude pacing and include the one-off screenshot cost.
+
+Final alternating pairs used the actual Direct3D 11 backend for both reference
+CPU terrain and the final automatically-enabled GPU path, with the vacant-cell
+kernels and word-wise power cache optimization included. Host load was higher
+throughout these final runs:
+
+| Pair | Reference CPU terrain | Final GPU/CPU kernels | Frame work reduction |
+|---|---:|---:|---:|
+| 1 | 87.426 ms | 50.533 ms | 42.2% |
+| 2 (reversed order) | 95.161 ms | 50.783 ms | 46.6% |
+
+The midpoint reduction is about 44.5%. These timings sum emulation, draw and
+presentation, not pacing or one-time setup. They show a substantial reduction
+in work under the same replay and backend, **not steady 60 FPS at X50**. Both
+reference and optimized timings vary with host load; heavy native simulation
+phases remain the largest spikes. GPU TERRAIN now defaults on with automatic
+CPU fallback; F12 or `SC_GPU_TERRAIN=0` can disable it.
+
+Both pairs produced byte-identical actual presented screenshots and identical
+CPU registers, WRAM, city tiles, simulation fields, population and development
+attempt counts. The only serialized difference was approximately 3e-11 of an
+APU catch-up cycle in the fractional double accumulator from batched additions;
+integer master clocks and executed APU state matched.
+
+Validation passed all five CTest checks, 48 reference/span/deferred/GPU frames,
+135 full spatial-cell comparisons and 1,536 vacant-terrain comparisons. The
+latter cover all terrain masks, word/byte entry modes, DP alignment, overflow,
+metadata, coordinate/index seams and small beam budgets. Whole-world native
+visits and save migration still pass for every map size. Power tests cover all
+four accelerated ratios, full-world reload recovery even with zero initial
+plant counters, disconnected zones, all 256 power-byte patterns and safe
+bitmap ownership during a native flood.
+
+An actual private reload rebuilt all 768,000 cells before development resumed.
+It retained 209 powered owners out of 306, matching the saved flags and a fresh
+native solve. The native capacity report showed one nuclear plant, capacity
+2,000 and 2,001 visits: its brownouts are real capacity exhaustion. The fix
+preserves those warnings while preventing the load codec from transiently
+removing valid power. User saves and preferences are not modified by testing.
+A Windows prerelease is packaged separately after owner approval, without ROMs,
+user saves, generated game code or preferences.

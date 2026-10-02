@@ -13,6 +13,10 @@ typedef struct {
 } ScPowerRefresh;
 void ScPowerRefreshReset(ScPowerRefresh *s);
 void ScPowerRefreshObserve(ScPowerRefresh *s, uint64_t frame, int game_speed);
+/* Rebuild the real network before a loaded city's first development pass.
+ * Seeds the settled cache for Normal as well as accelerated development. */
+bool ScPowerRefreshRestore(ScPowerRefresh *s,uint8_t *ram,ScWorld *world,
+    const uint8_t *rom,size_t size,uint64_t frame);
 /* Only power bits are published. The bitmap remains owned by the native
  * flood fill while bitmap_available is false. Returns true on a new solve. */
 bool ScPowerRefreshStep(ScPowerRefresh *s,uint8_t *ram,ScWorld *world,

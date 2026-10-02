@@ -2062,55 +2062,15 @@ static int s_bank_page_sel = 3;
 static unsigned long long s_tick_count, s_tick_frames_total, s_tick_ops_total;
 static unsigned long long s_tick_frames_max, s_tick_start_frame, s_tick_start_ops;
 
-/* Post-load power dropout fix.
- *
- * Stock-ROM bug. Found and fixed by **Truttle1** (https://www.youtube.com/@Truttle1),
- * whose `PowerBugPatch.bps` is what identified bit 15 as the power bit; the
- * analysis below is a re-derivation against our own ROM, and the patch itself
- * is not redistributed here. After loading a saved game the city reads as
- * unpowered for a couple of seconds, and because the decline logic runs during
- * that window the load actively costs population.
- *
- * Bit 15 ($8000) of each 16-bit map cell at $7F0200 is the **power** bit. The
- * tile index is the low 10 bits (see docs/REFERENCE_map_format.md), and the
- * upper bits are the simulation's. Corroboration from the ROM: `03:99a0`
- * writes a building into the map as `AND #$8000 ; ... ; ORA $00`, i.e. it
- * deliberately *preserves* bit 15 of whatever was in the cell -- exactly what
- * you do to a flag another subsystem owns.
- *
- * The fix is to mark every cell powered once, immediately after a load, and
- * let the game's own power scan clear whatever is genuinely unpowered on its
- * next pass. `03:c8dd` is the point to do it: `03:c8c8` has just run the map
- * unpacker (`JSR $d15f`) and `03:c8cb` the SRAM load (`JSR $c8e1`), so the map
- * is in place.
- *
- * Implemented host-side rather than by porting Truttle1's bytes. That patch
- * injects a routine into free ROM at `00:fb4c` and redirects `03:c8dd` to it;
- * reproducing its code here would be redistributing someone else's work, which
- * this repo does not do (same reason the Lua map viewer and the Sylt hack's
- * data are referenced but never vendored). Doing it from C
- * needs no free ROM space and avoids a quirk of that patch: because it
- * replaces `STZ $003a ; RTS` with a 4-byte `JSL`, its `RTL` lands on `03:c8e1`
- * and runs the SRAM loader a second time. That is harmless -- the loader is an
- * idempotent copy and does not touch $7F0200-$7F5FBF -- but it is not
- * something worth reproducing.
- *
- * One deliberate difference: Truttle1's patch skips the fix when `$0421`
- * is 1. `$0421` selects the save slot (`03:c8e6` uses it to pick base
- * `$700000` vs `$703ff0`), so that guard appears to exclude the second save
- * slot from the fix. This applies to both slots. If that turns out to matter,
- * this is the line to revisit. */
+/* Loading the stock save codec drops power flags. Rebuild the real network
+ * after SRAM and the expanded map are restored, before zones can decline.
+ * Truttle1's PowerBugPatch identified the original dropout; no patch bytes
+ * are redistributed. The host solve also respects plant capacity and every
+ * expanded-map cell instead of temporarily powering the stock 12,000 cells. */
 static bool s_power_fix = true;
 static uint32_t s_power_fix_hits;
-
-static void apply_power_fix(void) {
-  for (int i = 0; i < 12000; i++)
-    g_ram[0x10201 + i * 2] |= 0x80;   /* $7F0200 + i*2 + 1, bit 7 = cell bit 15 */
-  if (s_power_fix_hits++ < 8)
-    fprintf(stderr, "[powerfix] marked 12000 cells powered after load "
-            "(hit #%u, frame %llu)\n", s_power_fix_hits,
-            (unsigned long long)s_frames);
-}
+static void restore_loaded_power(void);
+static void apply_power_fix(void) { restore_loaded_power(); }
 
 /* Record one executed guest PC into the coverage bitmaps.
  *
@@ -4177,7 +4137,27 @@ static bool run_one_frame(void) {
     const uint32_t executed_pc=((uint32_t)cpu->k<<16)|cpu->pc;
     const bool interrupt_work=cpu->nmiWanted || (cpu->irqWanted && !cpu->i);
     ScWorldGuestBegin(&s_world_guest, &s_world, cpu, g_snes->cart->rom, g_snes->cart->romSize);
-    unsigned fast_cycles=s_rom_fnv==SC_ROM_FNV_US?ScWorldGuestFastStep(&s_world,cpu,g_ram,g_snes->cart->rom,g_snes->cart->romSize):0;
+    unsigned fast_cycles=0;
+    static int kernel_enabled=-1;
+    if(kernel_enabled<0) {const char *e=getenv("SC_SPATIAL_KERNELS");kernel_enabled=!e || *e!='0';}
+    if(kernel_enabled && s_rom_fnv==SC_ROM_FNV_US && s_world.active && !interrupt_work) {
+      /* Stop before scanout, HDMA, line wrap, or the programmable IRQ. No
+       * batched cell can delay an interrupt or render a row after its time. */
+      unsigned boundary=snes->hPos<1024?1024:1364;
+      if(snes->hIrqEnabled && (!snes->vIrqEnabled || snes->vPos==snes->vTimer+1)) {
+        unsigned irq=4*snes->hTimer;
+        if(irq>=snes->hPos && irq<boundary) boundary=irq;
+      }
+      if(snes->hPos && boundary>snes->hPos+2) {
+        unsigned budget=(boundary-snes->hPos-2)*(ScWorldCells(&s_world)/12000);
+        if(budget>s_map_cycle_remainder)
+          fast_cycles=ScWorldGuestKernelStep(&s_world,cpu,g_ram,g_snes->cart->rom,
+              g_snes->cart->romSize,(budget-s_map_cycle_remainder)/8);
+        if(fast_cycles) s_world_guest.mapped=false;
+      }
+    }
+    if(!fast_cycles && s_rom_fnv==SC_ROM_FNV_US)
+      fast_cycles=ScWorldGuestFastStep(&s_world,cpu,g_ram,g_snes->cart->rom,g_snes->cart->romSize);
     if(fast_cycles) ++s_perf_spatial_cells;
     int cyc = fast_cycles?fast_cycles:interp816_runOpcode(cpu);
     /* Extra development attempts are host work, like the native map
@@ -7215,6 +7195,14 @@ static void commit_mouse_construction(void) {
       (SDL_GetPerformanceCounter()-started)*1000.0/SDL_GetPerformanceFrequency());
   if (r != SC_BUILD_OK) g_ram[5] = 2; /* The game's normal reject sound. */
 }
+static void restore_loaded_power(void) {
+  bool ok=ScPowerRefreshRestore(&s_power_refresh,g_ram,&s_world,g_snes->cart->rom,
+      g_snes->cart->romSize,s_frames);
+  if(s_power_fix_hits++<8 || !ok)
+    fprintf(stderr,"[powerfix] rebuilt %u cells after load: %s (frame %llu)\n",
+        s_world.active?ScWorldCells(&s_world):12000,ok?"ready":"failed",
+        (unsigned long long)s_frames);
+}
 static void refresh_fast_power(bool bitmap_available) {
   uint64_t power_t0=s_perf_detail?SDL_GetPerformanceCounter():0;
   bool solved=ScPowerRefreshStep(&s_power_refresh,g_ram,&s_world,g_snes->cart->rom,
@@ -9883,7 +9871,7 @@ int main(int argc, char **argv) {
   bool quit = false;
   ScGpuTerrain *gpu_terrain=NULL;
   bool gpu_failed=false;
-  {const char *e=getenv("SC_GPU_TERRAIN");s_gpu_terrain_enabled=e && *e=='1';}
+  {const char *e=getenv("SC_GPU_TERRAIN");s_gpu_terrain_enabled=!e || *e!='0';}
   /* Live FPS counter in the window title, updated once/sec -- lets a user
    * on a slow host (e.g. a VM) tell at a glance whether the emulator itself
    * is keeping up with real time, independent of anything ROM-side. */

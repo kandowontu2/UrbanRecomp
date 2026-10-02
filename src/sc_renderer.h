@@ -15,6 +15,7 @@ typedef struct ScRenderer {
     uint32_t *pixels;
     ScTerrainFrame terrain;
     bool defer_terrain;
+    bool reference_terrain; /* exact per-pixel oracle for regression/profiling */
     uint32_t *advisor_pixels;
     bool advisor_frame;
     size_t capacity;

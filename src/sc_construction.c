@@ -3,6 +3,7 @@
 #include "sc_world_guest.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 typedef struct {
   uint8_t ram[0x20000];
@@ -198,6 +199,12 @@ bool ScConstructionPowerBitmap(const uint8_t *ram,const ScWorld *w,const uint8_t
     interp816_runOpcode(cpu);
   }
   bool ok=!b->fault && cpu->sp==0x1fff && cpu->dp==0x1e00;
+  if(ok && getenv("SC_POWER_DIAG")) {
+    unsigned capacity=word(b->ram,0x1df6)|((unsigned)word(b->ram,0x1df8)<<16);
+    unsigned used=word(b->ram,0x1dfa)|((unsigned)word(b->ram,0x1dfc)<<16);
+    fprintf(stderr,"[power network] coal %u nuclear %u capacity %u visited %u%s\n",
+        coal,nuclear,capacity,used,used>capacity?" exhausted":"");
+  }
   if (ok) {
     const uint8_t *power=b->world?b->world->fields[5]:b->ram+0x1a598;
     memcpy(bitmap,power,(size_t)width*height/8);

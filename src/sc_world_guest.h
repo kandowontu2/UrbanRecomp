@@ -26,3 +26,8 @@ unsigned ScWorldGuestMasterCycles(const ScWorld *world, uint32_t pc,
  * Zero means that the interpreter should execute the current opcode. */
 unsigned ScWorldGuestFastStep(ScWorld *world, Interp816 *cpu, uint8_t *ram,
                              const uint8_t *rom, size_t size);
+
+/* Batch a verified spatial cell on a RAM/ROM-only bus, before the next beam
+ * event. Native opcodes, state, and cycles are retained; zero falls back. */
+unsigned ScWorldGuestKernelStep(ScWorld *world, Interp816 *cpu, uint8_t *ram,
+    const uint8_t *rom, size_t size, unsigned max_cycles);

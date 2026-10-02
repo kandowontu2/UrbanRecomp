@@ -76,6 +76,7 @@ def main():
         (os.path.join(ROOT, "LICENSE"), "LICENSE.txt"),
         (os.path.join(ROOT, "THIRD_PARTY_NOTICES.md"), "THIRD_PARTY_NOTICES.md"),
         (os.path.join(ROOT, "docs", "PC_ENHANCEMENTS.md"), "PC_ENHANCEMENTS.md"),
+        (os.path.join(ROOT, "docs", "GPU_PERFORMANCE.md"), "GPU_PERFORMANCE.md"),
         (os.path.join(ROOT, "tools", "start_release.cmd"), "Start-UrbanRecomp.cmd"),
         (os.path.join(ROOT, "snesrecomp", "LICENSE"), "licenses/snesrecomp-LICENSE.txt"),
         (os.path.join(ROOT, "recomp-ui", "LICENSE"), "licenses/recomp-ui-LICENSE.txt"),

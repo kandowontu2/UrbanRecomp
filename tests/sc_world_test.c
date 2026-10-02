@@ -251,6 +251,89 @@ static void empty_cell_equivalence(void) {
       }
     printf("Empty spatial cell equivalence: %u cases\n",cases);
 }
+static void kernel_equivalence(void) {
+    const unsigned starts[]={0x9cdf,0x9c77,0x9eb0,0xa040,0xa0c6};
+    const unsigned ends[]={0x9dc9,0x9cb0,0x9f47,0xa09f,0xa125};
+    for(unsigned map=0;map<3;++map) for(unsigned k=0;k<5;++k)
+    for(unsigned point=0;point<3;++point) for(unsigned pattern=0;pattern<3;++pattern) {
+        ScWorldReset(&world);world.active=true;world.huge=map>0;world.giant=map==2;
+        unsigned width=ScWorldWidth(&world)/2,height=ScWorldHeight(&world)/2;
+        unsigned x=point==0?0:point==1?width/2:width-1,y=point==0?0:point==1?height/2:height-1;
+        for(unsigned f=0;f<17;++f) for(unsigned i=0;i<ScWorldFieldSizeWorld(&world,f);++i)
+            world.fields[f][i]=pattern==0?0:pattern==1?255:(i*197+71)&255;
+        for(unsigned i=0;i<ScWorldCells(&world);++i) {
+            unsigned tile=pattern==0?0:pattern==1?0x15:(i*31+57)%958;
+            world.tiles[2*i]=(uint8_t)tile;world.tiles[2*i+1]=(uint8_t)(tile>>8);
+        }
+        memset(ram,0x5a,sizeof ram);interp816_reset(cpu);
+        cpu->k=cpu->db=3;cpu->pc=starts[k];cpu->dp=0x1df6;cpu->sp=0x1ffc;
+        cpu->e=cpu->xf=cpu->mf=cpu->d=false;cpu->i=true;cpu->c=cpu->v=true;
+        put(cpu->dp+(k>=3?0:8),x);put(cpu->dp+(k>=3?2:10),y);
+        ScWorldGuestStep(&world,cpu,ram);
+        copy=world;Interp816 initial=*cpu;memcpy(bitmap_ram,ram,sizeof ram);
+        unsigned cycles=0,steps=0;
+        while(cpu->pc!=ends[k]) {
+            assert(++steps<5000);ScWorldGuestStep(&world,cpu,ram);
+            if(cpu->pc==ends[k]) break;
+            ScWorldGuestBegin(&guest,&world,cpu,rom,sizeof rom);cycles+=interp816_runOpcode(cpu);
+        }
+        Interp816 expected=*cpu;ScWorld *expected_world=malloc(sizeof world);assert(expected_world);
+        *expected_world=world;memcpy(stencil_expected_ram,ram,sizeof ram);
+        *cpu=initial;world=copy;memcpy(ram,bitmap_ram,sizeof ram);
+        unsigned fast=ScWorldGuestKernelStep(&world,cpu,ram,rom,sizeof rom,20000);
+        if(fast!=cycles || memcmp(&world,expected_world,sizeof world) || memcmp(ram,stencil_expected_ram,sizeof ram))
+            fprintf(stderr,"kernel map=%u entry=%x point=%u pattern=%u cycles=%u/%u pc=%x/%x\n",map,starts[k],point,pattern,fast,cycles,cpu->pc,expected.pc);
+        assert(fast==cycles && !memcmp(&world,expected_world,sizeof world) && !memcmp(ram,stencil_expected_ram,sizeof ram));
+        assert(!memcmp(&cpu->a,&expected.a,(char *)&cpu->cyclesUsed-(char *)&cpu->a+1));
+        free(expected_world);
+        *cpu=initial;world=copy;memcpy(ram,bitmap_ram,sizeof ram);cpu->nmiWanted=true;
+        assert(!ScWorldGuestKernelStep(&world,cpu,ram,rom,sizeof rom,20000));
+    }
+    puts("PASS: 135 spatial kernel cells match native registers, flags, cycles, stack, RAM and full fields");
+}
+static void empty_terrain_equivalence(void) {
+    ScWorld *expected_world=malloc(sizeof world);assert(expected_world);
+    unsigned cases=0;
+    for(unsigned map=0;map<3;++map) for(unsigned point=0;point<8;++point)
+      for(unsigned mask=0;mask<16;++mask) for(unsigned aligned=0;aligned<2;++aligned)
+      for(unsigned pattern=0;pattern<2;++pattern) {
+        ScWorldReset(&world);world.active=true;world.huge=map>0;world.giant=map==2;
+        unsigned width=ScWorldWidth(&world)/2,height=ScWorldHeight(&world)/2;
+        unsigned x=point==0?0:point==7?width-1:(point*67)%width;
+        unsigned y=point==0?0:point==7?height-1:(point*73)%height;
+        unsigned at=2*y*ScWorldWidth(&world)+2*x;
+        const unsigned cells[]={at,at+1,at+ScWorldWidth(&world),at+ScWorldWidth(&world)+1};
+        for(unsigned n=0;n<4;++n) {
+            unsigned tile=(mask&(1<<n))?(n*11+mask)%39+1:0;
+            world.tiles[2*cells[n]]=(uint8_t)tile;world.tiles[2*cells[n]+1]=pattern?0x80:0x40;
+        }
+        unsigned coarse=(y/2)*(width/2)+x/2;
+        world.fields[15][coarse]=pattern?250:113;
+        memset(ram,0x5a,sizeof ram);interp816_reset(cpu);
+        cpu->k=cpu->db=3;cpu->pc=0x9cdf;cpu->dp=aligned?0x1e00:0x1df6;cpu->sp=0x1ffc;
+        cpu->e=cpu->xf=cpu->d=false;cpu->mf=pattern!=0;cpu->i=cpu->c=cpu->v=true;
+        cpu->a=0x1234;cpu->x=0x5555;cpu->y=0x7777;
+        put(cpu->dp+8,x);put(cpu->dp+10,y);ScWorldGuestStep(&world,cpu,ram);
+        copy=world;Interp816 initial=*cpu;memcpy(bitmap_ram,ram,sizeof ram);
+        unsigned cycles=0;
+        while(cpu->pc!=0x9dc9) {
+            ScWorldGuestStep(&world,cpu,ram);if(cpu->pc==0x9dc9) break;
+            ScWorldGuestBegin(&guest,&world,cpu,rom,sizeof rom);cycles+=interp816_runOpcode(cpu);
+        }
+        Interp816 expected=*cpu;*expected_world=world;memcpy(stencil_expected_ram,ram,sizeof ram);
+        *cpu=initial;world=copy;memcpy(ram,bitmap_ram,sizeof ram);
+        unsigned fast=ScWorldGuestKernelStep(&world,cpu,ram,rom,sizeof rom,20000);
+        assert(fast==cycles && !memcmp(&world,expected_world,sizeof world) && !memcmp(ram,stencil_expected_ram,sizeof ram));
+        assert(!memcmp(&cpu->a,&expected.a,(char *)&cpu->cyclesUsed-(char *)&cpu->a+1));
+        /* A small beam/IRQ budget must fall back to interruptible opcodes. */
+        *cpu=initial;world=copy;memcpy(ram,bitmap_ram,sizeof ram);
+        fast=ScWorldGuestKernelStep(&world,cpu,ram,rom,sizeof rom,100);
+        assert(fast<=100 && cpu->pc!=0x9dc9);
+        ++cases;
+      }
+    free(expected_world);
+    printf("PASS: %u vacant terrain groups, byte/word entry modes, flags, overflow, power metadata, seams and beam budgets\n",cases);
+}
 static void terrain_field_equivalence(void) {
     for(unsigned tile=0;tile<0x28;++tile) for(unsigned pattern=0;pattern<4;++pattern)
       for(unsigned aligned=0;aligned<2;++aligned) {
@@ -497,6 +580,8 @@ int main(int argc,char **argv) {
     stencil_equivalence();
     empty_cell_equivalence();
     terrain_field_equivalence();
+    kernel_equivalence();
+    empty_terrain_equivalence();
     building_repair_bounds();
     building_update_bounds();
     /* 960x800: exercise every cell through the original spatial routines,

@@ -633,3 +633,104 @@ bool ScWorldGuestWrite(ScWorldGuest *g,uint32_t a,uint8_t v) {
     if (g->data) g->data[a-g->address]=v;
     return true;
 }
+
+typedef struct {
+    ScWorld *world; Interp816 *cpu; uint8_t *ram; const uint8_t *rom;
+    ScWorldGuest guest;
+} KernelBus;
+static uint8_t kernel_read(void *context,uint32_t a) {
+    KernelBus *b=context;uint8_t value;
+    if(ScWorldGuestRead(&b->guest,a,&value)) return value;
+    unsigned bank=a>>16,p=a&65535;
+    if(bank==0x7e || bank==0x7f) return b->ram[a-0x7e0000];
+    if(p<0x8000) return b->ram[p];
+    return b->rom[((bank&15)*32768)+p-0x8000];
+}
+static void kernel_write(void *context,uint32_t a,uint8_t value) {
+    KernelBus *b=context;
+    if(ScWorldGuestWrite(&b->guest,a,value)) return;
+    unsigned bank=a>>16,p=a&65535;
+    if(bank==0x7e || bank==0x7f) b->ram[a-0x7e0000]=value;
+    else if(p<0x8000) b->ram[p]=value;
+}
+/* A vacant 2x2 group takes the same path through the native pollution/land
+ * routine. Preserve its scratch words, temporary stack bytes and byte ADC
+ * overflow, including the density scratch accumulator's intentional wrap. */
+static unsigned empty_terrain_cell(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycles) {
+    if(c->pc!=0x9cdf) return 0;
+    unsigned x=word(r,c->dp+8),y=word(r,c->dp+10),width=ScWorldWidth(w);
+    if(x>=width/2 || y>=ScWorldHeight(w)/2) return 0;
+    unsigned offset=2*y*width+2*x,count=0;
+    const unsigned cells[]={offset,offset+1,offset+width,offset+width+1};
+    for(unsigned n=0;n<4;++n) {
+        unsigned tile=word(w->tiles,2*cells[n])&1023;
+        if(tile>=0x28) return 0;
+        count+=tile!=0;
+    }
+    unsigned dp=(c->dp&255)!=0,cycles=273+16*dp+count*(18+2*dp);
+    if(cycles+12>=max_cycles) return 0;
+    if(w->huge) coord_set(w,r,x*2,y*2);
+    unsigned index=y*(width/2)+x,coarse=(y/2)*(width/4)+x/2,sum=count*15;
+    unsigned old=w->fields[15][coarse],value=old+sum;
+    w->map_anchor=2*offset;w->field_anchor[0]=index;w->field_anchor[1]=coarse;
+    w->fields[15][coarse]=(uint8_t)value;
+    w->fields[13][index]=w->fields[0][index]=0;
+    put(r,0xb3f,x);put(r,0xb3d,y);
+    put(r,c->dp+0x22,sum);put(r,c->dp+0x0e,0);put(r,c->dp+0x10,0);
+    put(r,(uint16_t)(c->sp-1),index);
+    c->a=(uint16_t)index&0xff00;c->x=(uint16_t)index;
+    c->v=((old^value)&(sum^value)&128)!=0;c->c=c->n=false;c->z=true;c->mf=true;
+    c->pc=0x9dc9;c->cyclesUsed=5;
+    return cycles;
+}
+static unsigned vacant_crime_cell(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycles) {
+    if(c->pc!=0x9eb0) return 0;
+    unsigned x=word(r,c->dp+8),y=word(r,c->dp+10),width=ScWorldWidth(w)/2;
+    if(x>=width || y>=ScWorldHeight(w)/2) return 0;
+    unsigned index=y*width+x,cycles=42+2*((c->dp&255)!=0);
+    if(w->fields[0][index] || cycles+12>=max_cycles) return 0;
+    if(w->huge) coord_set(w,r,x*2,y*2);
+    w->field_anchor[0]=index;w->fields[1][index]=0;
+    put(r,0xb3f,x);put(r,0xb3d,y);put(r,(uint16_t)(c->sp-1),0x9eb9);
+    c->a=(uint16_t)index&0xff00;c->x=(uint16_t)index;
+    c->c=c->n=false;c->z=true;c->mf=true;c->pc=0x9f47;c->cyclesUsed=5;
+    return cycles;
+}
+unsigned ScWorldGuestKernelStep(ScWorld *w,Interp816 *c,uint8_t *r,
+    const uint8_t *rom,size_t size,unsigned max_cycles) {
+    if(!w || !w->active || !rom || size!=0x80000 || c->k!=3 || c->db!=3 ||
+        c->e || c->d || c->xf || c->nmiWanted || (c->irqWanted && !c->i) || max_cycles<32) return 0;
+    unsigned empty=empty_terrain_cell(w,c,r,max_cycles);
+    if(!empty) empty=vacant_crime_cell(w,c,r,max_cycles);
+    if(empty) return empty;
+    unsigned end;
+    switch(c->pc) {
+    case 0x9cdf:end=0x9dc9;break;
+    case 0x9c77:end=0x9cb0;break;
+    case 0x9eb0:end=0x9f47;break;
+    case 0xa040:end=0xa09f;break;
+    case 0xa0c6:end=0xa125;break;
+    default:return 0;
+    }
+    KernelBus b={w,c,r,rom,{0}};
+    void *saved_mem=c->mem;
+    Interp816ReadHandler saved_read=c->read;Interp816WriteHandler saved_write=c->write;
+    Interp816ReadWordHandler saved_read_word=c->read_word;
+    Interp816WriteWordHandler saved_write_word=c->write_word;
+    c->mem=&b;c->read=kernel_read;c->write=kernel_write;c->read_word=NULL;c->write_word=NULL;
+    unsigned cycles=0;
+    while(c->pc!=end && cycles+12<max_cycles) {
+        ScWorldGuestStep(w,c,r);
+        if(c->pc==end) break;
+        if(((c->pc==0xa04a || c->pc==0xa0d0) && max_cycles-cycles>160) ||
+            (c->pc==0x9dca && max_cycles-cycles>64)) {
+            unsigned fast=ScWorldGuestFastStep(w,c,r,rom,size);
+            if(fast) {cycles+=fast;continue;}
+        }
+        ScWorldGuestBegin(&b.guest,w,c,rom,size);
+        cycles+=interp816_runOpcode(c);
+    }
+    c->mem=saved_mem;c->read=saved_read;c->write=saved_write;
+    c->read_word=saved_read_word;c->write_word=saved_write_word;
+    return cycles;
+}

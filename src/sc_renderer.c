@@ -578,6 +578,7 @@ static bool edge_has_overlay(const Ppu *p,int y,int left) {
 }
 void ScRendererInit(ScRenderer *r,const uint8_t *rom,size_t size,bool is_us) {
     memset(r,0,sizeof(*r)); r->rom=rom; r->rom_size=size; r->rom_is_us=is_us; r->wood_layer=-1;
+    const char *spans=getenv("SC_TERRAIN_SPANS");r->reference_terrain=spans && *spans=='0';
 }
 bool ScRendererResize(ScRenderer *r,ScViewport v) {
     if (v.width<256 || v.height<224 || v.width>SC_MAX_CANVAS || v.height>SC_MAX_CANVAS ||
@@ -622,8 +623,9 @@ uint32_t ScRendererPixel(const ScRenderer *r,int x,int y) {
 static uint32_t terrain_planes(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
                               int x,int y,bool roof,unsigned *word) {
     *word=0;
-    bool large=r->world && r->world->active;
-    unsigned width=large?ScWorldWidth(r->world):120,height=large?ScWorldHeight(r->world):100;
+    bool large=r->map_hold?r->held_large:r->world && r->world->active;
+    unsigned width=large?(r->map_hold?(r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120;
+    unsigned height=large?(r->map_hold?(r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
     if(x<0 || y<0 || (unsigned)x>=width*8 || (unsigned)y>=height*8) return 0;
     const uint8_t *map=r->map_hold?r->held_map:large?r->world->tiles:ram+MAP;
     unsigned cell=u16(map,2*((y/8)*width+x/8))&1023;
@@ -705,20 +707,78 @@ static void render_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
     if (!city && (r->selector_count || r->sign_count)) {
         host_sprites_row(r,p,y,marks); r->selector_row=marks;
     }
+    int cached_tile=INT32_MIN;
+    unsigned base_pixels[8],roof_pixels[8],warning_pixels[8];
+    uint32_t margin_colors[2][128];
+    bool margin_valid[2][128]={{false}};
     for (int x=0;x<r->view.width;++x) {
         int local=x-r->view.core_x;
         if (!r->advisor_frame && y>=0 && y<224 && local>=0 && local<256 &&
             !((local<8 && (r->repaired_edges[y]&1)) ||
               (local>=248 && (r->repaired_edges[y]&2)))) continue;
         if (!city) { out[x]=scenery(r,p,ram,local,y); continue; }
-        unsigned warning=power_warning_pixel(r,p,ram,local,y,sx,sy);
+        unsigned warning,ci=0,over=0;
+        if(!r->reference_terrain && !r->advisor_frame) {
+            int mx=sx+local,my=sy+y+1,tile=mx&~7;
+            if(tile!=cached_tile) {
+                cached_tile=tile;
+                bool warn=!r->map_hold && !(u16(ram,0x1d7) && y<46) &&
+                    power_warning_cell(r,ram,tile,my);
+                bool need_pixels=!deferred || warn;
+                if(!need_pixels) {
+                    int left=local-((unsigned)mx&7)+r->view.core_x;
+                    for(int b=0;b<8;++b) if(left+b>=0 && left+b<r->view.width && objects[left+b]) need_pixels=true;
+                }
+                unsigned base_word=0,roof_word=0,base_bits=0,roof_bits=0;
+                /* A zero CHR word can be a real tile; use the captured planes
+                 * to decode transparencies and both flips without another map lookup. */
+                if(need_pixels) {
+                    base_bits=terrain_planes(r,p,ram,tile,my,false,&base_word);
+                    roof_bits=terrain_planes(r,p,ram,tile+8,my+8,true,&roof_word);
+                }
+                for(unsigned b=0;b<8;++b) {
+                    unsigned bit=base_word&0x4000?b:7-b;
+                    unsigned rb=roof_word&0x4000?b:7-b;
+                    unsigned v=((base_bits>>bit)&1)|(((base_bits>>(bit+8))&1)<<1)|
+                        (((base_bits>>(bit+16))&1)<<2)|(((base_bits>>(bit+24))&1)<<3);
+                    unsigned roof=((roof_bits>>rb)&1)|(((roof_bits>>(rb+8))&1)<<1)|
+                        (((roof_bits>>(rb+16))&1)<<2)|(((roof_bits>>(rb+24))&1)<<3);
+                    base_pixels[b]=v?v+((base_word>>10)&7)*16:0;
+                    roof_pixels[b]=roof?roof+((roof_word>>10)&7)*16:0;
+                    warning_pixels[b]=warn?tile_pixel(p,0x1376,PPU_bgTileAdr(p,0),tile+b,my,4,0):0;
+                }
+            }
+            unsigned b=(unsigned)mx&7;
+            ci=base_pixels[b];over=roof_pixels[b];warning=warning_pixels[b];
+            /* HUD clipping can start inside a world tile. */
+            if(u16(ram,0x1d7) && (y<46 || (local<56 && y<224))) warning=0;
+        } else warning=power_warning_pixel(r,p,ram,local,y,sx,sy);
         if(deferred && !objects[x] && !warning) {
             out[x]=SC_TERRAIN_PIXEL;++r->terrain.deferred;continue;
         }
-        unsigned ci=cell_pixel(r,p,ram,sx+local,sy+y+1,false);
-        unsigned over=cell_pixel(r,p,ram,sx+local+8,sy+y+9,true);
+        if(r->reference_terrain || r->advisor_frame) {
+            ci=cell_pixel(r,p,ram,sx+local,sy+y+1,false);
+            over=cell_pixel(r,p,ram,sx+local+8,sy+y+9,true);
+        }
         if (over) ci=over;
         int edge=local<0 ? 0 : local>255 ? 255 : local;
+        if(!r->reference_terrain && !r->advisor_frame && !warning && !objects[x] && (local<0 || local>255)) {
+            unsigned side=local>255;
+            if(!margin_valid[side][ci]) {
+                unsigned samples[2]={0,0};int layers[2]={5,5};
+                for(unsigned sub=0;sub<2;++sub) {
+                    if((p->screenEnabled[sub]&2) && (!(p->screenWindowed[sub]&2) || !window_contains(p,1,edge))) {
+                        samples[sub]=ci;layers[sub]=ci?1:5;
+                    } else if(sub && (p->screenEnabled[1]&4)) {
+                        int yy=y<0?0:y>223?223:y;
+                        samples[sub]=bg_pixel(p,2,edge,yy+1);layers[sub]=samples[sub]?2:5;
+                    }
+                }
+                margin_colors[side][ci]=composite_color(p,samples[0],layers[0],samples[1],layers[1],edge);
+                margin_valid[side][ci]=true;
+            }
+            out[x]=margin_colors[side][ci];continue;
+        }
         if (r->advisor_frame) {
             /* Advice uses an opaque BG3/OBJ page on MAIN and the dimmed
              * BG1 HUD / BG2 city on SUB. Rebuild only that background here;
@@ -923,6 +983,8 @@ static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
     uint32_t *out=r->pixels+(size_t)(y+r->view.core_y)*r->view.width+r->view.core_x;
     int staged_cell=-1;bool cache_bad=false;
     bool cache_live=r->scroll_repair && !u16(ram,0xd7) && !u16(ram,0x379) && !ram[0x391];
+    int check_cell=INT32_MIN,check_bg=INT32_MIN;
+    bool clear_warning=false,warning_cell=false,edited=false;
     for (int x=0;x<256;++x) {
         bool land=!u16(ram,0x1d7) || (y>=46 && x>=56);
         if(cache_live && land) {
@@ -932,10 +994,15 @@ static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
             }
             if(cache_bad) ++r->staged_mismatches;
         } else cache_bad=false;
-        bool clear_warning=stale_power_warning(r,p,ram,x,y,sx,sy);
-        bool warning_cell=power_warning_cell(r,ram,sx+x,sy+y+1) &&
-            !(u16(ram,0x1d7) && (y<46 || (x<56 && y<224)));
-        if (!cache_bad && !clear_warning && !warning_cell && !changed_cell(r,sx+x,sy+y+1) && !changed_cell(r,sx+x+8,sy+y+9)) continue;
+        int cell=(sx+x)&~7,bg=(x+p->hScroll[0])&~7;
+        if(r->reference_terrain || cell!=check_cell || bg!=check_bg || x==56) {
+            check_cell=cell;check_bg=bg;
+            clear_warning=stale_power_warning(r,p,ram,x,y,sx,sy);
+            warning_cell=power_warning_cell(r,ram,sx+x,sy+y+1) &&
+                !(u16(ram,0x1d7) && (y<46 || (x<56 && y<224)));
+            edited=changed_cell(r,sx+x,sy+y+1) || changed_cell(r,sx+x+8,sy+y+9);
+        }
+        if (!cache_bad && !clear_warning && !warning_cell && !edited) continue;
         unsigned warning=power_warning_pixel(r,p,ram,x,y,sx,sy);
         unsigned ci=cell_pixel(r,p,ram,sx+x,sy+y+1,false);
         unsigned over=cell_pixel(r,p,ram,sx+x+8,sy+y+9,true);
