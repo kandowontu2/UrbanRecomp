@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED - 1.2.0 BETA 7
+URBAN RECOMP ENHANCED - 1.2.0 BETA 8
 ===================================
 
 Urban Recomp runs the Super Nintendo city builder SimCity (1991) natively on
@@ -29,6 +29,12 @@ animated lightning warnings throughout the expanded view. Power and population
 refresh rates no longer inherit an extra map-area delay.
 Tab fast-forward now adapts its boost to the frame-time budget, up to 6x,
 and the title shows the measured multiplier. It is independent of Mesen.
+Beta 8 fixes displaced building fragments on Big/Huge maps during repair,
+house growth/removal and destruction. Mouse clicks now activate both save
+slots, Save? confirmation buttons, gift selections and widescreen gift
+placement. END works on the difficulty and confirmation screens.
+Existing stray tiles in previously affected saves require recovery from a
+clean map/backup; this update prevents new corruption without deleting cities.
 These features require the verified clean US ROM and the interpreter build.
 This enhanced build is a prerelease; hands-on gameplay testing is ongoing.
 

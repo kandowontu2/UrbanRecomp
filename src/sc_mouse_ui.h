@@ -7,6 +7,15 @@
  * A handled screen rejects clicks in gaps. Selection changes only when the
  * pointer moves or is pressed, allowing an idle mouse and pad to coexist. */
 typedef struct { bool handled, hit; } ScMouseUiResult;
+typedef enum { SC_MOUSE_DIALOG_NONE, SC_MOUSE_DIALOG_SLOTS,
+               SC_MOUSE_DIALOG_SAVE_CONFIRM, SC_MOUSE_DIALOG_GIFTS } ScMouseDialog;
+/* These modal loops retain their own selection instead of hit-testing the
+ * native pointer. Observe entry/exit, including the repeating wait after a
+ * state load; the caller's return address distinguishes slots from Yes/No. */
+void ScMouseUiObserve(ScMouseDialog *dialog, const uint8_t *ram,
+                      unsigned bank, unsigned pc, unsigned sp);
+ScMouseUiResult ScMouseUiDialogPoint(ScMouseDialog dialog, uint8_t *ram,
+                                    int x, int y, bool select);
 ScMouseUiResult ScMouseUiPoint(uint8_t *ram, int x, int y,
                               bool select, bool ninth_scenario);
 bool ScMouseUiScenarioScroll(uint8_t *ram, int direction, bool ninth_scenario);

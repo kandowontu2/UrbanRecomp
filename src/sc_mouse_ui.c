@@ -9,6 +9,39 @@ static void put(uint8_t *r, unsigned a, unsigned v) {
 static bool box(int x, int y, int bx, int by, int w, int h) {
   return x >= bx && x < bx + w && y >= by && y < by + h;
 }
+void ScMouseUiObserve(ScMouseDialog *dialog, const uint8_t *r,
+                      unsigned bank, unsigned pc, unsigned sp) {
+  if(bank==0 && pc==0xd19e) {
+    switch(word(r,(sp+1)&65535)) {
+    case 0xc8fc: case 0xc99d: case 0xca4b: *dialog=SC_MOUSE_DIALOG_SLOTS; break;
+    case 0xc963: case 0xca11: *dialog=SC_MOUSE_DIALOG_SAVE_CONFIRM; break;
+    default: *dialog=SC_MOUSE_DIALOG_NONE; break;
+    }
+  }
+  if(bank==0 && (pc==0xd1fc || pc==0xd20a)) *dialog=SC_MOUSE_DIALOG_NONE;
+  if(bank==1 && pc==0xcc1a) *dialog=SC_MOUSE_DIALOG_GIFTS;
+  if(bank==1 && pc==0xcc3a) *dialog=SC_MOUSE_DIALOG_NONE;
+}
+ScMouseUiResult ScMouseUiDialogPoint(ScMouseDialog dialog, uint8_t *r,
+                                    int x, int y, bool select) {
+  ScMouseUiResult result={dialog!=SC_MOUSE_DIALOG_NONE,false};
+  int choice=-1;
+  if(dialog==SC_MOUSE_DIALOG_GIFTS) {
+    /* 01:cca0's four icon positions, 2 by 2. Empty inventory slots cannot
+     * become a selected/confirmed gift. */
+    for(int i=0;i<4;++i)
+      if(r[0x3f5+i] && box(x,y,64+(i&1)*40,128+(i/2)*32,24,24)) choice=i;
+    if(choice>=0 && select) put(r,0x3f3,choice);
+  } else if(dialog==SC_MOUSE_DIALOG_SLOTS || dialog==SC_MOUSE_DIALOG_SAVE_CONFIRM) {
+    /* The slot buttons and Save? Yes/No use the same native button layout. */
+    if(box(x,y,164,128,24,24)) choice=0;
+    if(box(x,y,84,128,24,24)) choice=1;
+    if(box(x,y,124,128,24,24)) choice=2;
+    if(choice>=0 && select) put(r,0x421,choice);
+  }
+  result.hit=choice>=0;
+  return result;
+}
 bool ScMouseUiScenarioScroll(uint8_t *r, int direction, bool ninth) {
   if (word(r, 0x14) != 11) return false;
   int maxcol = (word(r, 0x42) & 0x8000) ? (ninth ? 4 : 3) : 2;
@@ -96,6 +129,7 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
     break;
   }
   case 9: /* Difficulty tiles: 05:9b4a, 9b5c and 9b6e. */
+    result.hit=box(x,y,208,160,24,16); /* Keyboard END confirms the selection. */
     for (int i = 0; i < 3; ++i) {
       if (!box(x, y, 72 + i * 40, 64, 32, 16)) continue;
       result.hit = true;
@@ -103,6 +137,7 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
     }
     break;
   case 22: /* Difficulty confirmation: 05:9b80 and 9b8a, on BG's second page. */
+    result.hit=box(x,y,208,160,24,16);
     for (int i = 0; i < 2; ++i) {
       if (!box(x, y, 96 + i * 40, 72, 32, 8)) continue;
       result.hit = true;

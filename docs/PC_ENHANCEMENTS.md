@@ -335,6 +335,36 @@ bulldozed terrain, unchanged unedited native pixels, low/high sprite priority,
 opaque HUD preservation, immutable PPU state, 5,000-cell edits without a
 load hold, and actual load holds releasing after the fade.
 
+## Beta 8 map updates and mouse menus
+
+The original bank-03 building footprint tables contain 240-byte row offsets.
+The expanded map bridge now translates the offsets at their verified repair,
+residential house growth/removal and destruction consumers, including the
+corresponding destruction origin offsets. Previously, these updates could
+write fragments 120 tiles apart into unrelated land on Big and Huge maps.
+The original CPU still performs the updates; Normal map behavior is unchanged.
+ROM-backed regressions check every map cell around 3x3, 4x4 and 6x6 repairs,
+house growth/removal and destruction at the far borders of both map sizes.
+
+Native save-slot/Save? and gift-selection loops maintain their own selection
+values. Their live input-loop contexts now route pointer hits to those values,
+reject gaps and empty gifts, and stop gift-menu clicks from becoming land
+construction. Both save slots were clicked through the windowed mouse path and
+verified to write SRAM and its population/world sidecars. Gift selection and
+a gift placement beyond the original 256-pixel viewport on Huge were also
+verified. ROM-backed tests cover all fourteen gifts, their native costs,
+consumption, locality and landfill's water requirement. Private construction
+now restores the live world's coordinate references as well as its map anchors.
+
+The keyboard END button also confirms the selected difficulty and Yes/No on
+the startup confirmation page. Recorded mouse clicks on END advanced through
+both pages into a playable city.
+
+The fixes prevent additional displaced tiles. Existing fragments already saved
+by an earlier build are retained unless recovered from a known clean copy;
+there is no automatic deletion of player buildings. Private test saves and
+ROM-derived data are excluded from releases.
+
 ## Mouse reference and remaining verification
 
 The mouse target is the behavior described in

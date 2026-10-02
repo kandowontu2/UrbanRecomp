@@ -145,6 +145,7 @@ ScBuildResult ScConstructionCommitWorld(uint8_t *ram,ScWorld *w,const uint8_t *r
     if (b->world) {
       b->world->map_anchor=w->map_anchor;
       memcpy(b->world->bank_anchor,w->bank_anchor,sizeof w->bank_anchor);
+      memcpy(b->world->coord,w->coord,sizeof w->coord);
       memcpy(w,b->world,sizeof *w);
     }
   }

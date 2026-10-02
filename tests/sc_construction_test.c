@@ -122,6 +122,12 @@ int main(int argc,char **argv) {
     assert(!ScWorldCell(&world,204,124));
     if(tool>=5 && tool<=9) for(int y=380;y<383;++y) for(int x=460;x<463;++x)
       assert((ScWorldCell(&world,x,y)&1023)>=0x80);
+    for(int y=0;y<400;++y) for(int x=0;x<480;++x)
+      if(x<458 || x>468 || y<378 || y>388) {
+        unsigned unexpected=ScWorldCell(&world,x,y);
+        if(unexpected) fprintf(stderr,"huge unexpected tool %u at %d,%d: %x\n",tool,x,y,unexpected);
+        assert(!unexpected);
+      }
     if(tool==14) {
       assert(ScConstructionPlanWorld(&plan,&world,3,464,381,470,381));
       assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
@@ -147,5 +153,26 @@ int main(int argc,char **argv) {
   assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));powered=0;
   for(int y=300;y<325;++y) for(int x=300;x<400;++x) powered+=(ScWorldCell(&world,x,y)&0x8000)!=0;
   assert(powered==2000);
-  puts("PASS: actual ROM costs, road joins, obstacles, zone spacing, atomic budget rejection, rail, power, parks and bulldozing");
+  for(unsigned huge=0;huge<2;++huge) for(unsigned gift=1;gift<=14;++gift) {
+    reset(100000);ScWorldReset(&world);world.active=true;world.huge=huge;
+    ram[0x3f5]=gift;put(0x3f3,0);
+    int x=huge?460:200,y=huge?380:180;
+    world.coord[1][0]=40;world.coord[1][1]=50;world.coord[2][0]=30;world.coord[2][1]=60;
+    world_before=world;
+    assert(ScConstructionPlanWorld(&plan,&world,15,x,y,x,y));
+    ScBuildResult result=ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost);
+    fprintf(stderr,"gift %u huge %u result %d cost %u inventory %u tile %x\n",gift,huge,result,cost,ram[0x3f5],ScWorldCell(&world,x,y));
+    assert(result==SC_BUILD_OK);
+    if(gift==6) { /* Landfill requires water within the footprint. */
+      assert(!cost && ram[0x3f5]==6);
+      for(int dy=0;dy<3;++dy) for(int dx=0;dx<3;++dx) ScWorldPutCell(&world,x+dx,y+dy,1);
+      assert(ScConstructionPlanWorld(&plan,&world,15,x,y,x,y));
+      assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
+    }
+    assert(cost==100 && !ram[0x3f5]);
+    assert(!memcmp(world.coord,world_before.coord,sizeof world.coord));
+    for(int yy=0;yy<ScWorldHeight(&world);++yy) for(int xx=0;xx<ScWorldWidth(&world);++xx)
+      if(xx<x || xx>=x+3 || yy<y || yy>=y+3) assert(!ScWorldCell(&world,xx,yy));
+  }
+  puts("PASS: native construction costs, locality, rollback, power, gifts and preserved simulation coordinates");
 }

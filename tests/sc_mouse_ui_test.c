@@ -37,9 +37,12 @@ int main(void) {
   assert(point(150,180) && word(0x4c)==4); /* SPACE */
   assert(!point(48,180) && !point(232,160));
   put(0x14,9); assert(point(160,70) && word(0xb57)==2);
+  assert(point(220,168) && word(0xb57)==2); /* END keeps the selected difficulty. */
   assert(!point(110,70));
   put(0x14,22); assert(point(140,75) && word(0x36)==1);
   assert(point(100,75) && word(0x36)==0); assert(!point(100,80));
+  assert(point(220,168) && word(0x36)==0);
+  put(0x36,1); assert(point(220,168) && word(0x36)==1); /* END also confirms No. */
   put(0x14,11); put(0x42,0); put(0x16,0);
   assert(point(100,130) && word(0x52)==1 && word(0x54)==1 && word(0x40)==4);
   assert(!point(82,80));
@@ -62,5 +65,30 @@ int main(void) {
   r[0x391]=0; assert(!ScMouseUiPoint(r,84,140,true,true).handled);
   r[0x391]=0xff; put(0x039b,1);
   assert(!ScMouseUiPoint(r,84,140,true,true).handled); /* queued message */
+  ScMouseDialog dialog=SC_MOUSE_DIALOG_NONE;
+  put(0x1ffe,0xc8fc); ScMouseUiObserve(&dialog,r,0,0xd19e,0x1ffd);
+  assert(dialog==SC_MOUSE_DIALOG_SLOTS);
+  assert(ScMouseUiDialogPoint(dialog,r,96,140,true).hit && word(0x421)==1);
+  assert(ScMouseUiDialogPoint(dialog,r,136,140,true).hit && word(0x421)==2);
+  assert(!ScMouseUiDialogPoint(dialog,r,116,140,true).hit);
+  assert(ScMouseUiDialogPoint(dialog,r,176,140,true).hit && word(0x421)==0);
+  ScMouseUiObserve(&dialog,r,0,0xd1fc,0x1ffd); assert(dialog==SC_MOUSE_DIALOG_NONE);
+  put(0x1ffe,0xc963); ScMouseUiObserve(&dialog,r,0,0xd19e,0x1ffd);
+  assert(dialog==SC_MOUSE_DIALOG_SAVE_CONFIRM);
+  assert(ScMouseUiDialogPoint(dialog,r,96,140,true).hit && word(0x421)==1);
+  assert(ScMouseUiDialogPoint(dialog,r,136,140,true).hit && word(0x421)==2);
+  ScMouseUiObserve(&dialog,r,0,0xd20a,0x1ffd); assert(dialog==SC_MOUSE_DIALOG_NONE);
+  put(0x1ffe,0x1234); ScMouseUiObserve(&dialog,r,0,0xd19e,0x1ffd);
+  assert(dialog==SC_MOUSE_DIALOG_NONE);
+  ScMouseUiObserve(&dialog,r,1,0xcc1a,0);
+  r[0x3f5]=1; r[0x3f6]=0; r[0x3f7]=4; r[0x3f8]=6;
+  assert(ScMouseUiDialogPoint(dialog,r,80,150,true).hit && word(0x3f3)==0);
+  assert(!ScMouseUiDialogPoint(dialog,r,120,150,true).hit); /* Empty gift. */
+  assert(ScMouseUiDialogPoint(dialog,r,76,170,true).hit && word(0x3f3)==2);
+  assert(ScMouseUiDialogPoint(dialog,r,116,170,true).hit && word(0x3f3)==3);
+  assert(!ScMouseUiDialogPoint(dialog,r,100,170,true).hit);
+  memcpy(before,r,sizeof r); ScMouseUiDialogPoint(dialog,r,80,150,false);
+  assert(!memcmp(before,r,sizeof r));
+  ScMouseUiObserve(&dialog,r,1,0xcc3a,0); assert(dialog==SC_MOUSE_DIALOG_NONE);
   puts("PASS: menu hit regions, gaps, pad coexistence, saved-slot and scenario gates, name keys and map controls");
 }

@@ -2481,6 +2481,7 @@ static bool s_fast_ticks = true;
 
 /* RCI development attempts per normal simulation visit; city time is unchanged. */
 static int s_development_speed = 1;
+static ScMouseDialog s_mouse_dialog;
 static const int kDevelopmentSpeeds[] = {1, 2, 5, 10, 50};
 static const char *const kDevelopmentSpeedNames[] = {"NORMAL", "X2", "X5", "X10", "X50"};
 static ScDevelopment s_development;
@@ -3571,6 +3572,9 @@ static bool run_one_frame(void) {
    * them a proportional instruction allowance. Normal retains the old bar. */
   while (s_frames < target && guard-- > 0) {
     if (cpu->k == 0x00 && cpu->pc == 0x80b2) s_nmi_serviced++;
+    if(s_rom_is_us && ((cpu->k==0 && (cpu->pc==0xd19e || cpu->pc==0xd1fc || cpu->pc==0xd20a)) ||
+                      (cpu->k==1 && (cpu->pc==0xcc1a || cpu->pc==0xcc3a))))
+      ScMouseUiObserve(&s_mouse_dialog,g_ram,cpu->k,cpu->pc,cpu->sp);
     /* SC_BANK_PROFILE=1: opcodes executed per bank, and how many frames the
      * simulation tick spans. Answers "is the simulation worth replacing with
      * native code" with a number instead of an impression -- the map
@@ -6544,6 +6548,7 @@ static bool load_state(const char *path) {
   fs.f = f;
   fs.ok = true;
   ScSram_Hold();   /* the saved cities on disk stay the player's */
+  s_mouse_dialog=SC_MOUSE_DIALOG_NONE;
   snes_saveload(g_snes, &fs.base);
   interp816_saveload(g_cpu, &fs.base);
   fs.base.func(&fs.base, &s_frames, sizeof(s_frames));
@@ -6887,6 +6892,11 @@ static void apply_frame_input(uint64_t frame) {
  * guest input surface can be offset inside the wider canvas, and menus
  * use a different anchor from the city HUD. */
 static bool s_mouse_enabled = true;
+static ScMouseUiResult mouse_ui_point(uint8_t *ram,int x,int y,bool select,bool ninth) {
+  if(s_mouse_dialog!=SC_MOUSE_DIALOG_NONE)
+    return ScMouseUiDialogPoint(s_mouse_dialog,ram,x,y,select);
+  return ScMouseUiPoint(ram,x,y,select,ninth);
+}
 
 /* Fast D-pad cursor (opt-in, F9): rather than reverse-engineer and patch
  * the ROM's own throttled cursor cadence (see docs/INVESTIGATION_
@@ -10107,7 +10117,7 @@ int main(int argc, char **argv) {
               mx,my,&mouse_target_x,&mouse_target_y,&mouse_navigation_hit) :
           ScVideoWindowToGuest(pointer_view,s_destination,ww,wh,drawable_w,drawable_h,
               mx,my,&mouse_target_x,&mouse_target_y));
-      mouse_city_hit=inside && !mouse_navigation_hit && s_custom_video.enabled &&
+      mouse_city_hit=inside && !mouse_navigation_hit && s_mouse_dialog==SC_MOUSE_DIALOG_NONE && s_custom_video.enabled &&
           ScRendererCityPoint(&s_custom_renderer,g_ram,mouse_target_x,mouse_target_y,
               &mouse_city_x,&mouse_city_y);
       static bool panning;
@@ -10152,7 +10162,7 @@ int main(int argc, char **argv) {
            * full world coordinate, never this safe native cursor proxy. */
           g_ram[0x01eb] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_x<0?0:mouse_target_x>255?255:mouse_target_x);
           g_ram[0x01ed] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_y<0?0:mouse_target_y>223?223:mouse_target_y);
-          if (mouse_city_hit && !right && ram_w(0x020d)<=14) {
+          if (mouse_city_hit && !right && ram_w(0x020d)<=15) {
             s_custom_renderer.pointer_active=true;
             s_custom_renderer.pointer_x=mouse_target_x;
             s_custom_renderer.pointer_y=mouse_target_y;
@@ -10167,7 +10177,7 @@ int main(int argc, char **argv) {
           if (dy > 0) s_mouse_dir |= kPad_Down;
           s_mouse_dir_frames = s_mouse_dir ? 1 : 0;
           if (s_rom_is_us) {
-            ScMouseUiResult ui = ScMouseUiPoint(g_ram, mouse_target_x, mouse_target_y,
+            ScMouseUiResult ui = mouse_ui_point(g_ram, mouse_target_x, mouse_target_y,
                 false, s_ninth_scenario);
             mouse_ui_select = dx || dy || (mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT));
             mouse_ui_handled = ui.handled; mouse_ui_hit = ui.hit;
@@ -10294,7 +10304,7 @@ int main(int argc, char **argv) {
       s_mouse_dir_frames = 0;
       mouse_edge_input = 0;
     } else if (!mouse_world_hit && mouse_ui_handled && mouse_ui_select) {
-      ScMouseUiPoint(g_ram, mouse_target_x, mouse_target_y, true, s_ninth_scenario);
+      mouse_ui_point(g_ram, mouse_target_x, mouse_target_y, true, s_ninth_scenario);
       if (g_ram[0x14] == 5 && g_ram[0x0b2d] == 1 && g_ram[0x0b31])
         s_map_mouse_refresh_pending = true;
       if (g_ram[0x14] == 5 && g_ram[0x0b2d] == 1 && g_ram[0x0b31] &&
@@ -10316,8 +10326,9 @@ int main(int argc, char **argv) {
       const bool on_land = s_custom_video.enabled ? mouse_city_hit :
           hud_hidden || (mouse_target_x >= 56 && mouse_target_y >= 48);
       const bool supported = s_mouse_enabled && s_rom_is_us && !sc_fiber_active() &&
+          s_mouse_dialog==SC_MOUSE_DIALOG_NONE &&
           mouse_target_valid && !mouse_navigation_hit && host_map_screen_live() && !ram_w(0xd7) && on_land &&
-          ram_w(0x020d) <= 14 && !s_menu_open && !scripted_input;
+          ram_w(0x020d) <= 15 && !s_menu_open && !scripted_input;
       if (!host_map_screen_live()) s_build_pending = false;
       if (mouse_raw_left && !previous_left && supported && !s_build_pending && !right) {
         s_build_tool = ram_w(0x020d);
@@ -10395,7 +10406,7 @@ int main(int argc, char **argv) {
       }
       if ((mb & SDL_BUTTON(SDL_BUTTON_LEFT)) &&
           (!mouse_ui_handled || mouse_ui_hit) &&
-          !(s_custom_video.enabled && mouse_city_hit && ram_w(0x020d)>14) &&
+          !(s_custom_video.enabled && mouse_city_hit && ram_w(0x020d)>15) &&
           !s_build_active && !s_build_pending && !s_build_cancelled) input |= kPad_B;
       /* Right button drives the map pan directly (see the pan block in the
        * mouse handler) rather than feeding A, so it does not also trigger the

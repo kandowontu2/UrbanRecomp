@@ -491,6 +491,26 @@ void ScWorldGuestBegin(ScWorldGuest *g,ScWorld *w,const Interp816 *c,
     unsigned op=rom[p],base=word(rom,(unsigned)p+1),index=0,bank=c->db;
     uint32_t pc=((uint32_t)c->k<<16)|c->pc;
     unsigned dim=(op==0xa9 || op==0xc9 || op==0xe0 || op==0xc0)?dimension(w,pc):0;
+    if(op==0xe9 && !c->mf) {
+        if(pc==0x03a8c6) dim=4*ScWorldWidth(w)+4;
+        if(pc==0x03a8f0 || pc==0x03a90b) dim=2*ScWorldWidth(w)+2;
+    }
+    /* Native footprint tables encode row offsets with the stock 240-byte
+     * pitch. Translate only their verified consumers, before ADC/LDA; this
+     * preserves CPU flags and the repair table's -1 terminator. */
+    bool footprint=c->k==3 && (pc==0x0396b4 || pc==0x03970e ||
+        pc==0x03a8d3 || pc==0x03a8fd || pc==0x03a918 ||
+        pc==0x03aebb || pc==0x03aee3 || pc==0x03af0b);
+    if(footprint && !c->mf && (op==0x79 || op==0xb9)) {
+        size_t at=(size_t)(c->db&0x7f)*32768+((base+c->y)&32767);
+        if(at+1<size) {
+            unsigned value=word(rom,(unsigned)at);
+            if(value!=65535) value=(value/240)*(2*ScWorldWidth(w))+value%240;
+            g->bytes=2;g->immediate[0]=(uint8_t)value;g->immediate[1]=(uint8_t)(value>>8);
+            g->data=g->immediate;g->mapped=true;
+            g->address=((uint32_t)c->db<<16)|((base+c->y)&65535);return;
+        }
+    }
     if (dim) {
         bool index_width=op==0xe0 || op==0xc0;
         g->bytes=(index_width?c->xf:c->mf)?1:2;

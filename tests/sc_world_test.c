@@ -112,6 +112,68 @@ static void terrain_bounds(void) {
         assert(valid || (ram[0x13d]|ram[0x13e]<<8)==0x300);
     }
 }
+static void building_repair_bounds(void) {
+    const unsigned sizes[]={3,4,6},owners[]={0x144,0x27c,0x2a5};
+    for(unsigned huge=0;huge<2;++huge) for(unsigned kind=0;kind<3;++kind) {
+        ScWorldReset(&world);world.active=true;world.huge=huge;memset(ram,0,sizeof ram);
+        unsigned n=sizes[kind],shift=n==6?2:1;
+        unsigned cx=ScWorldWidth(&world)-n+shift,cy=ScWorldHeight(&world)-n+shift;
+        unsigned offset=2*(cy*ScWorldWidth(&world)+cx),owner=owners[kind];
+        ScWorldPutCell(&world,cx,cy,owner);world.map_anchor=offset;
+        world.coord[2][0]=cx;world.coord[2][1]=cy;
+        put(0x1e00,offset+2);put(0xb87,owner);ram[0xb85]=(uint8_t)cx;ram[0xb86]=(uint8_t)cy;
+        routine(0xaea1,0,n);
+        for(unsigned y=0;y<ScWorldHeight(&world);++y) for(unsigned x=0;x<ScWorldWidth(&world);++x) {
+            unsigned expected=x>=cx-shift && x<cx-shift+n && y>=cy-shift && y<cy-shift+n
+                ?owner-(shift*n+shift)+(y-(cy-shift))*n+x-(cx-shift):0;
+            unsigned actual=ScWorldCell(&world,x,y)&1023;
+            if(actual!=expected) fprintf(stderr,"repair size=%u huge=%u at %u,%u expected=%x actual=%x\n",n,huge,x,y,expected,actual);
+            assert(actual==expected);
+        }
+    }
+}
+static void building_update_bounds(void) {
+    const unsigned sizes[]={3,4,6},owners[]={0x144,0x27c,0x2a5};
+    for(unsigned huge=0;huge<2;++huge) {
+      for(unsigned conversion=0;conversion<2;++conversion) {
+        ScWorldReset(&world);world.active=true;world.huge=huge;memset(ram,0,sizeof ram);
+        unsigned x=ScWorldWidth(&world)-2,y=ScWorldHeight(&world)-2;
+        for(unsigned dy=0;dy<3;++dy) for(unsigned dx=0;dx<3;++dx)
+          ScWorldPutCell(&world,x-1+dx,y-1+dy,conversion?0x80+3*dy+dx:0x89);
+        world.coord[2][0]=x;world.coord[2][1]=y;ram[0xb85]=x;ram[0xb86]=y;put(0x1e06,0x89);
+        for(unsigned attempt=0;attempt<(conversion?1:9);++attempt) {
+          world.coord[2][0]=x;world.coord[2][1]=y;
+          routine(conversion?0x969e:0x96f8,0,0);
+        }
+        for(unsigned yy=0;yy<ScWorldHeight(&world);++yy) for(unsigned xx=0;xx<ScWorldWidth(&world);++xx) {
+          unsigned tile=ScWorldCell(&world,xx,yy)&1023;
+          if(xx<x-1 || xx>x+1 || yy<y-1 || yy>y+1) assert(!tile);
+          else if(!conversion) {
+            unsigned expected=0x80+3*(yy-y+1)+xx-x+1;
+            if(tile!=expected) fprintf(stderr,"house revert huge=%u x=%u y=%u expected=%x tile=%x anchor=%u\n",huge,xx,yy,expected,tile,world.map_anchor);
+            assert(tile==expected);
+          }
+          else assert((xx==x && yy==y)?tile==0x84:tile>=0x89 && tile<0x8c);
+        }
+      }
+      for(unsigned kind=0;kind<3;++kind) {
+        ScWorldReset(&world);world.active=true;world.huge=huge;memset(ram,0,sizeof ram);
+        unsigned n=sizes[kind],shift=n==6?2:1;
+        unsigned x=ScWorldWidth(&world)-n,y=ScWorldHeight(&world)-n,cx=x+shift,cy=y+shift;
+        unsigned first=owners[kind]-shift*n-shift;
+        for(unsigned dy=0;dy<n;++dy) for(unsigned dx=0;dx<n;++dx)
+          ScWorldPutCell(&world,x+dx,y+dy,first+dy*n+dx);
+        copy=world;world.coord[2][0]=cx;world.coord[2][1]=cy;ram[0xb85]=cx;ram[0xb86]=cy;
+        routine(0xa89f,0,0);unsigned changed=0;
+        for(unsigned yy=0;yy<ScWorldHeight(&world);++yy) for(unsigned xx=0;xx<ScWorldWidth(&world);++xx) {
+          unsigned before=ScWorldCell(&copy,xx,yy),after=ScWorldCell(&world,xx,yy);
+          if(xx<x || xx>=x+n || yy<y || yy>=y+n) assert(after==before);
+          else changed+=after!=before;
+        }
+        assert(changed);
+      }
+    }
+}
 static void stencil_equivalence(void) {
     for(unsigned huge=0;huge<2;++huge) for(unsigned kernel=0;kernel<2;++kernel)
       for(unsigned pattern=0;pattern<3;++pattern) for(unsigned point=0;point<9;++point)
@@ -435,6 +497,8 @@ int main(int argc,char **argv) {
     stencil_equivalence();
     empty_cell_equivalence();
     terrain_field_equivalence();
+    building_repair_bounds();
+    building_update_bounds();
     interp816_free(cpu); free(data);
     puts("PASS: 48,000/192,000 native visits, full-world census and fields, power, byte seams, full city center, legacy migration and portable saves");
 }
