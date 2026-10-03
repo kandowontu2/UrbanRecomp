@@ -2,6 +2,7 @@
 #include <limits.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static unsigned word(const uint8_t *r, unsigned p) { return r[p] | ((unsigned)r[p+1]<<8); }
 static uint32_t dword(const uint8_t *r, unsigned p) { return word(r,p) | ((uint32_t)word(r,p+2)<<16); }
@@ -48,6 +49,108 @@ bool ScPopulationRefreshLive(ScPopulation *s,const uint8_t *ram,const ScWorld *w
     s->live=true;
     return true;
 }
+
+struct ScPopulationCensus {
+    const ScWorld *world;
+    const uint8_t *rom;
+    uint64_t epoch, evaluated;
+    unsigned width, height;
+    bool ready;
+    uint16_t ids[SC_WORLD_MAX_CELLS];
+    uint64_t revisions[SC_WORLD_TILE_CHUNKS];
+    uint32_t capacity[SC_WORLD_TILE_CHUNKS][3];
+    uint64_t total[3];
+    bool dirty[SC_WORLD_TILE_CHUNKS];
+};
+ScPopulationCensus *ScPopulationCensusCreate(void) {return calloc(1,sizeof(ScPopulationCensus));}
+void ScPopulationCensusDestroy(ScPopulationCensus *c) {free(c);}
+uint64_t ScPopulationCensusEvaluatedCells(const ScPopulationCensus *c) {return c?c->evaluated:0;}
+
+static void census_dirty_range(ScPopulationCensus *c,int first,int end,unsigned cells) {
+    if(first<0) first=0;
+    if(end>(int)cells) end=(int)cells;
+    if(first>=end) return;
+    const unsigned span=SC_WORLD_TILE_CHUNK_BYTES/2;
+    for(unsigned chunk=(unsigned)first/span;chunk<=(unsigned)(end-1)/span;++chunk) c->dirty[chunk]=true;
+}
+static void census_capacity(const uint8_t *map,int width,int height,const uint8_t *rom,
+                            int x,int y,uint32_t capacity[3]) {
+    unsigned tile=map_cell(map,width,height,x,y);
+    if(tile>=958 || !(rom[0x184eb+tile]&1)) return;
+    if((tile>=0x80 && tile<0x129) || (tile>=0x376 && tile<0x39a)) {
+        unsigned n=0;
+        if(tile>=0x376) n=48;
+        else if(tile==0x84) {
+            for(int dy=-1;dy<=1;++dy) for(int dx=-1;dx<=1;++dx) {
+                if(!dx && !dy) continue;
+                unsigned house=map_cell(map,width,height,x+dx,y+dy);
+                n+=house>=0x89 && house<0x95;
+            }
+        } else if(tile>=0x99) n=(2+(tile-0x99)%36/9)*8;
+        capacity[0]+=n;
+    } else if((tile>=0x137 && tile<0x1f4) || tile>=0x39a) {
+        capacity[1]+=tile>=0x39a?6:tile>=0x144?1+(tile-0x144)%45/9:0;
+    } else if(tile>=0x1f4 && tile<0x249) {
+        capacity[2]+=tile>=0x201?1+(tile-0x201)%36/9:0;
+    }
+}
+bool ScPopulationRefreshCached(ScPopulationCensus *c,ScPopulation *s,const uint8_t *ram,
+    const ScWorld *w,const uint8_t *rom,size_t size) {
+    if(!s || !ram || !rom || size!=0x80000) return false;
+    if(c) c->evaluated=0;
+    if(!c || !w || !w->active) {
+        if(c) c->ready=false;
+        return ScPopulationRefreshLive(s,ram,w,rom,size);
+    }
+    unsigned width=ScWorldWidth(w),height=ScWorldHeight(w),cells=width*height;
+    const unsigned span=SC_WORLD_TILE_CHUNK_BYTES/2,chunks=(cells+span-1)/span;
+    const uint64_t *revisions=ScWorldTileRevisions(w);
+    uint64_t epoch=ScWorldStateEpoch();
+    bool full=!c->ready || c->world!=w || c->rom!=rom || c->epoch!=epoch ||
+        c->width!=width || c->height!=height;
+    if(full) {
+        c->world=w;c->rom=rom;c->epoch=epoch;c->width=width;c->height=height;
+        memset(c->capacity,0,sizeof c->capacity);memset(c->total,0,sizeof c->total);
+        memset(c->dirty,1,chunks*sizeof *c->dirty);
+    }
+    for(unsigned chunk=0;chunk<chunks;++chunk) {
+        if(!full && c->revisions[chunk]==revisions[chunk]) continue;
+        unsigned first=chunk*span,end=first+span;if(end>cells) end=cells;
+        bool changed=false;
+        for(unsigned i=first;i<end;++i) {
+            unsigned tile=word(w->tiles,2*i)&1023;
+            if(full || c->ids[i]!=tile) {c->ids[i]=(uint16_t)tile;changed=true;}
+        }
+        c->revisions[chunk]=revisions[chunk];
+        if(changed && !full) {
+            /* A house can affect a free-zone center across a chunk or row
+             * boundary, even when that center's own tile did not change. */
+            census_dirty_range(c,(int)first-1,(int)end+1,cells);
+            census_dirty_range(c,(int)first-(int)width-1,(int)end-(int)width+1,cells);
+            census_dirty_range(c,(int)first+(int)width-1,(int)end+(int)width+1,cells);
+        }
+    }
+    for(unsigned chunk=0;chunk<chunks;++chunk) {
+        if(!c->dirty[chunk]) continue;
+        uint32_t capacity[3]={0};
+        unsigned first=chunk*span,end=first+span;if(end>cells) end=cells;
+        unsigned x=first%width,y=first/width;
+        for(unsigned i=first;i<end;++i) {
+            census_capacity(w->tiles,(int)width,(int)height,rom,(int)x,(int)y,capacity);
+            if(++x==width) {x=0;++y;}
+        }
+        for(unsigned kind=0;kind<3;++kind) {
+            c->total[kind]-=c->capacity[chunk][kind];
+            c->total[kind]+=capacity[kind];c->capacity[chunk][kind]=capacity[kind];
+        }
+        c->evaluated+=end-first;c->dirty[chunk]=false;
+    }
+    c->ready=true;
+    if(!s->valid) ScPopulationImport(s,ram);
+    s->value=cap((c->total[0]+(c->total[1]+c->total[2])*8)*20);
+    s->change=(int64_t)s->value-(int64_t)s->previous;s->live=true;
+    return true;
+}
 unsigned ScPopulationClass(uint64_t v) {
     const unsigned limits[]={2000,10000,50000,100000,500000};
     unsigned n=0; while (n<5 && v>=limits[n]) ++n; return n;
@@ -78,7 +181,7 @@ void ScPopulationReport(const ScPopulation *s, uint8_t *r, bool change) {
     bool small=value>=-999999 && value<=999999;
     if (small && !s->live) return;
     char digits[32]; snprintf(digits,sizeof digits,"%lld",(long long)value);
-    unsigned columns=change?11:small?6:10, end=change?0x19c:small?0x11c:0x13c;
+    unsigned columns=change?14:small?6:13, end=change?0x19c:small?0x11c:0x13c;
     unsigned start=end+1-columns, count=(unsigned)strlen(digits);
     /* The population row has a label immediately before its six digits.
      * Place the expanded value on the spare row below, instead of erasing

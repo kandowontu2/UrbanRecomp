@@ -1,10 +1,21 @@
 #include "sc_renderer.h"
+#include "sc_native_ppu.h"
 #include "snes/ppu.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
 enum { MAP = 0x10200, TILES = 0x156a9, OVERLAYS = TILES - 0x77c, CELL_TYPES = 0x77c/2 };
+#define MEASURE_BEGIN(r) ((r)->measure_clock ? (r)->measure_clock() : 0)
+#define MEASURE_END(r,stage,start) do { if((r)->measure_clock) \
+    (r)->measure_ticks[stage]+=(r)->measure_clock()-(start); } while(0)
+static bool changed_cell(const ScRenderer *r,int x,int y);
+static bool gpu_native_repair(const ScRenderer *r,const Ppu *p) {
+    static int reference=-1;
+    if(reference<0) {const char *e=getenv("SC_GPU_REPAIR_REFERENCE");reference=e && *e=='1';}
+    return !reference && !r->reference_terrain && r->native_line && r->defer_terrain &&
+        !r->advisor_frame && !r->map_hold && (p->screenEnabled[0]&2) && !PPU_forcedBlank(p);
+}
 static unsigned u16(const uint8_t *data, size_t offset) {
     return data[offset] | ((unsigned)data[offset+1] << 8);
 }
@@ -145,7 +156,7 @@ static void find_lights(ScRenderer *r,const Ppu *p) {
 static unsigned cell_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
                            int x,int y,bool overlay) {
     bool large=r->map_hold?r->held_large:r->world && r->world->active;
-    unsigned width=large?(r->map_hold?(r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120,height=large?(r->map_hold?(r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
+    unsigned width=large?(r->map_hold?(r->held_colossal?1920:r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120,height=large?(r->map_hold?(r->held_colossal?1600:r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
     if (!r->rom || x<0 || y<0 || (unsigned)x>=width*8 || (unsigned)y>=height*8) return 0;
     unsigned offset_cell=((y/8)*width+x/8)*2;
     const uint8_t *map=large?r->world->tiles:ram+MAP;
@@ -213,22 +224,39 @@ static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     bool large=r->world && r->world->active;
     const uint8_t *map=large?r->world->tiles:ram+MAP;
     unsigned bytes=large?ScWorldCells(r->world)*2:24000;
+    static int reference=-1;
+    if(reference<0) {const char *e=getenv("SC_MAP_TRACK_REFERENCE");reference=e && *e=='1';}
+    const uint64_t *revisions=large && !reference && !r->reference_terrain?
+        ScWorldTileRevisions(r->world):NULL;
+    bool full=!r->map_valid || r->map_bytes!=bytes;
+    bool held=r->map_hold;
+    unsigned width=large?ScWorldWidth(r->world):120;
     bool black=PPU_forcedBlank(p) || !PPU_brightness(p);
     if (r->map_valid) {
-        for (unsigned i=0;i<bytes;i+=2) {
+        /* A revision covers 256 cells. Native and host writers invalidate
+         * only changed regions; this avoids a multi-megabyte compare and
+         * two whole-map copies on every quiet frame. Keep a full scan oracle. */
+        for(unsigned chunk=0;chunk<(bytes+SC_WORLD_TILE_CHUNK_BYTES-1)/SC_WORLD_TILE_CHUNK_BYTES;++chunk) {
+          if(!full && revisions && r->map_revisions[chunk]==revisions[chunk]) continue;
+          unsigned begin=chunk*SC_WORLD_TILE_CHUNK_BYTES,end=begin+SC_WORLD_TILE_CHUNK_BYTES;
+          if(end>bytes) end=bytes;
+          for (unsigned i=begin;i<end;i+=2) {
             unsigned raw=u16(map,i),delta=raw^u16(r->previous_map,i),tile=raw&1023;
             /* A flood changes power bits on ordinary terrain too. Only a
              * building owner has a warning to redraw for that change. */
             bool changed=(delta&1023)!=0 || ((delta&0x8000) &&
                 r->rom && tile<CELL_TYPES && (r->rom[0x184eb+tile]&1));
             if (changed && !r->map_hold) {
-                unsigned width=large?ScWorldWidth(r->world):120;
                 r->changed_cells[i/2]=1;
                 /* The power glyph belongs to the southeast footprint cell,
                  * even when only its owner's power bit changed. */
                 if ((i/2)%width<width-1 && i/2+width+1<bytes/2)
                     r->changed_cells[i/2+width+1]=1;
             }
+          }
+          memcpy(r->previous_map+begin,map+begin,end-begin);
+          if(!held) memcpy(r->held_map+begin,map+begin,end-begin);
+          if(revisions) r->map_revisions[chunk]=revisions[chunk];
         }
         if (r->map_hold) {
             if (black) r->map_dark=true;
@@ -238,15 +266,19 @@ static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
             }
         }
     }
-    memcpy(r->previous_map,map,bytes);
+    if(full) {
+        memcpy(r->previous_map,map,bytes);
+        if(revisions) memcpy(r->map_revisions,revisions,
+            ((bytes+SC_WORLD_TILE_CHUNK_BYTES-1)/SC_WORLD_TILE_CHUNK_BYTES)*sizeof *revisions);
+    }
     if (!r->map_hold) {
-        memcpy(r->held_map,map,bytes);
+        if(full || held) memcpy(r->held_map,map,bytes);
         memcpy(r->held_ppu,p,sizeof *p);
         r->held_x=r->scroll_x+r->scroll_adjust_x;
         r->held_y=r->scroll_y+r->scroll_adjust_y;
-        r->held_large=large; r->held_huge=large && r->world->huge;r->held_giant=large && r->world->giant;
+        r->held_large=large; r->held_huge=large && r->world->huge;r->held_giant=large && r->world->giant;r->held_colossal=large && r->world->colossal;
     }
-    r->map_valid=true;
+    r->map_bytes=bytes;r->map_valid=true;
 }
 static void object_row(const ScRenderer *r,const Ppu *p,int y,uint16_t *pixels) {
     memset(pixels,0,(size_t)r->view.width*sizeof(*pixels));
@@ -272,8 +304,8 @@ static void object_row(const ScRenderer *r,const Ppu *p,int y,uint16_t *pixels) 
     int first=PPU_objPriority(p) ? (p->oamaddl&0xfe)/2 : 0;
     for (int rank=127;rank>=0;--rank) {
         int slot=(first+rank)&127;
-        if (r->city_input && (r->pointer_active || r->split_hud) && slot<4) continue; /* composed once at the host endpoint */
-        if (r->pan_frame && slot>=39 && slot<=52 && slot!=50) continue;
+        if (r->city_input && (r->pointer_active || r->pointer_hidden || r->split_hud) && slot<4) continue; /* composed once at the host endpoint */
+        if (r->pan_frame && slot>=39 && slot<=52) continue;
         if (!r->object_grace[slot]) continue; /* parked HUD/cursor copies */
         /* Row 0 is on line Y, as the PPU draws it (it evaluates a line's
          * sprites one line early). y+1 put every margin sprite a row above
@@ -332,11 +364,9 @@ static unsigned bg_sample(const Ppu *p,int layer,int x,int y,bool *priority) {
 /* BG1 caches the lightning glyph independently of the power bitmap. A
  * building centre owns the glyph in its 3x3 footprint. Plants supply their
  * own power (the native 03:b0f8 helper also treats them as powered). */
-static bool stale_power_warning(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
-                                int x,int y,int sx,int sy) {
-    if (bg_word(p,0,x,y+1)!=0x1376 || !r->rom) return false;
-    if (u16(ram,0x1d7) && (y<46 || (x<56 && y<224))) return false;
-    int wx=(sx+x)/8,wy=(sy+y+1)/8;
+static bool powered_owner_near(const ScRenderer *r,const uint8_t *ram,int px,int py) {
+    if(!r->rom) return false;
+    int wx=px/8,wy=py/8;
     int width=r->world && r->world->active?ScWorldWidth(r->world):120;
     int height=r->world && r->world->active?ScWorldHeight(r->world):100;
     for (int dy=-1;dy<=1;++dy) for (int dx=-1;dx<=1;++dx) {
@@ -349,6 +379,12 @@ static bool stale_power_warning(const ScRenderer *r,const Ppu *p,const uint8_t *
             return (raw&0x8000)!=0 || tile==0x27c || tile==0x28c;
     }
     return false;
+}
+static bool stale_power_warning(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
+                                int x,int y,int sx,int sy) {
+    if (bg_word(p,0,x,y+1)!=0x1376 || !r->rom) return false;
+    if (u16(ram,0x1d7) && (y<46 || (x<56 && y<224))) return false;
+    return powered_owner_near(r,ram,sx+x,sy+y+1);
 }
 /* The native cache adds $1376 one cell southeast of a building centre.
  * Newly placed zones and the expanded viewport cannot wait for that cache's
@@ -391,6 +427,10 @@ static void find_wood(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     r->wood_layer=-1;
     if (ram[0x14]==1 || PPU_mode(p)>1) return;
     for (int layer=0;layer<(PPU_mode(p)==0 ? 4 : 3);++layer) {
+        /* BG2 is the city tile cache in Mode 1. Dense building footprints
+         * can match the desk's sequential tile IDs and row repetition;
+         * that resemblance must never turn gameplay into menu scenery. */
+        if(layer==1 && PPU_mode(p)==1 && ram[0x14]==0 && u16(ram,0x3e)) continue;
         if (!((p->screenEnabled[0]|p->screenEnabled[1])&(1<<layer))) continue;
         unsigned base=PPU_bgTilemapAdr(p,layer);
         if (base+1024>0x8000) continue;
@@ -596,6 +636,7 @@ bool ScRendererResize(ScRenderer *r,ScViewport v) {
         r->pixels=pixels; r->capacity=count;
     }
     r->view=r->gameplay_view=v;
+    memset(r->city_cache,0,sizeof r->city_cache);r->city_cache_next=0;
     memset(r->pixels,0,count*sizeof(*r->pixels));
     return true;
 }
@@ -609,6 +650,8 @@ bool ScRendererDeferTerrain(ScRenderer *r,bool enabled) {
         for(int y=0;y<r->view.height;++y) for(int x=0;x<r->view.width;++x) {
             size_t at=(size_t)y*r->view.width+x;
             if(r->pixels[at]==SC_TERRAIN_PIXEL) r->pixels[at]=ScTerrainPixel(&r->terrain,x,y);
+            else if(r->pixels[at]==SC_NATIVE_PIXEL) r->pixels[at]=ScNativePixel(&r->terrain,x,y);
+            else if(SC_IS_RELOCATED_NATIVE(r->pixels[at])) r->pixels[at]=ScRelocatedNativePixel(&r->terrain,r->pixels[at]);
         }
         r->terrain.deferred=0;
     }
@@ -616,16 +659,32 @@ bool ScRendererDeferTerrain(ScRenderer *r,bool enabled) {
 }
 uint32_t ScRendererPixel(const ScRenderer *r,int x,int y) {
     uint32_t pixel=r->pixels[(size_t)y*r->view.width+x];
-    return pixel==SC_TERRAIN_PIXEL?ScTerrainPixel(&r->terrain,x,y):pixel;
+    return pixel==SC_TERRAIN_PIXEL?ScTerrainPixel(&r->terrain,x,y):
+           pixel==SC_NATIVE_PIXEL?ScNativePixel(&r->terrain,x,y):
+           SC_IS_RELOCATED_NATIVE(pixel)?ScRelocatedNativePixel(&r->terrain,pixel):pixel;
 }
-/* Capture the exact live row's two plane pairs; no end-of-frame VRAM or
- * whole-map snapshot can replace data that changes between scanlines. */
+bool ScRendererDeferNativeLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line) {
+    static int reference=-1;
+    if(reference<0) {const char *e=getenv("SC_NATIVE_PPU_REFERENCE");reference=e && *e=='1';}
+    r->native_line=false;
+    if(reference || !r->defer_terrain || !r->terrain.native || !p || !ram ||
+       line<0 || line>=224 || !ScNativePpuSupported(p)) return false;
+    if(line==0) find_wood(r,p,ram);
+    if(!city_live(r,p,ram) || r->map_hold) return false;
+    static int advisor_reference=-1;
+    if(advisor_reference<0) {const char *e=getenv("SC_ADVISOR_PANEL_REFERENCE");advisor_reference=e && *e=='1';}
+    bool advisor=(p->screenEnabled[0]&31)==20 && (p->screenEnabled[1]&31)==3 && !(PPU_mathEnabled(p)&20);
+    if(advisor?advisor_reference:u16(ram,0xd7) || u16(ram,0x379) || ram[0x391] || ram[0xe3]) return false;
+    r->native_line=true;return true;
+}
+/* Reference capture extracts the exact live row's two plane pairs. The Vulkan
+ * path below instead names an immutable VRAM version for that scanline. */
 static uint32_t terrain_planes(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
                               int x,int y,bool roof,unsigned *word) {
     *word=0;
     bool large=r->map_hold?r->held_large:r->world && r->world->active;
-    unsigned width=large?(r->map_hold?(r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120;
-    unsigned height=large?(r->map_hold?(r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
+    unsigned width=large?(r->map_hold?(r->held_colossal?1920:r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120;
+    unsigned height=large?(r->map_hold?(r->held_colossal?1600:r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
     if(x<0 || y<0 || (unsigned)x>=width*8 || (unsigned)y>=height*8) return 0;
     const uint8_t *map=r->map_hold?r->held_map:large?r->world->tiles:ram+MAP;
     unsigned cell=u16(map,2*((y/8)*width+x/8))&1023;
@@ -633,42 +692,275 @@ static uint32_t terrain_planes(const ScRenderer *r,const Ppu *p,const uint8_t *r
     size_t at=(roof?OVERLAYS:TILES)+2*cell;
     if(at+1>=r->rom_size) return 0;
     *word=u16(r->rom,at);
-    if(roof && (*word&1023)==0x300) {*word=0;return 0;}
+    if(roof && (*word&1023)==0x300) return 0;
     unsigned row=*word&0x8000?7-(y&7):y&7;
     unsigned base=(PPU_bgTileAdr(p,1)+(*word&1023)*16+row)&0x7fff;
     return p->vram[base]|(uint32_t)p->vram[(base+8)&0x7fff]<<16;
+}
+/* Capture VRAM only when it changes, rather than extracting two CHR pairs for
+ * every viewport tile on every scanline. The shader resolves raw city cells.
+ * Tests/foreign PPUs without a write revision use an exact live comparison. */
+static bool terrain_resources(ScRenderer *r,const Ppu *p,unsigned *snapshot) {
+    ScTerrainFrame *f=&r->terrain;
+    if(!r->rom || r->rom_size<0x184eb+CELL_TYPES) return false;
+    uint64_t revision=r->vram_revision && !r->map_hold?r->vram_revision(p):0;
+    if(f->snapshots) {
+        unsigned at=2048+(f->snapshots-1)*16384;
+        bool same=r->vram_revision && !r->map_hold && r->captured_vram_source==p?
+            revision==r->captured_vram_revision:!memcmp(f->resources+at,p->vram,65536);
+        static int validate=-1;
+        if(validate<0) {const char *e=getenv("SC_VRAM_REVISION_VALIDATE");validate=e && *e=='1';}
+        if(validate && same && memcmp(f->resources+at,p->vram,65536)) {
+            fprintf(stderr,"[terrain capture] stale VRAM revision\n");abort();
+        }
+        if(same) {*snapshot=at;return true;}
+    }
+    unsigned required=2048+(f->snapshots+1)*16384;
+    if(required>f->resource_capacity) {
+        unsigned versions=f->resource_capacity>2048?(f->resource_capacity-2048)/16384:1;
+        unsigned capacity=2048+versions*2*16384;
+        uint32_t *resources=realloc(f->resources,(size_t)capacity*sizeof *resources);
+        if(!resources) return false;
+        memset(resources+f->resource_capacity,0,(capacity-f->resource_capacity)*sizeof *resources);
+        f->resources=resources;f->resource_capacity=capacity;
+    }
+    if(!f->snapshots) for(unsigned i=0;i<1024;++i) {
+        f->resources[i]=i<CELL_TYPES?u16(r->rom,TILES+2*i)|(u16(r->rom,OVERLAYS+2*i)<<16):0x23000000;
+        f->resources[1024+i]=i<CELL_TYPES?r->rom[0x184eb+i]:0;
+    }
+    *snapshot=2048+f->snapshots*16384;
+    memcpy(f->resources+*snapshot,p->vram,65536);++f->snapshots;
+    r->captured_vram_revision=revision;r->captured_vram_source=p;return true;
+}
+static uint32_t terrain_cell(const uint8_t *map,unsigned width,unsigned height,int x,int y) {
+    if(x<0 || y<0 || (unsigned)x>=width*8 || (unsigned)y>=height*8) return UINT32_MAX;
+    unsigned raw=u16(map,2*((y/8)*width+x/8));
+    return (raw&1023)<CELL_TYPES?raw:UINT32_MAX;
+}
+/* Capture a contiguous city row once, rather than resolving three city cells
+ * for every eight-pixel span of every scanline. Exact byte comparisons retain
+ * earlier versions when simulation/construction changes the map mid-frame.
+ * Padding includes both neighbour columns, and owner rows exclude the final
+ * map row/column just as power_warning_cell's original bounds do. */
+static bool terrain_city_row(ScRenderer *r,const uint8_t *map,unsigned width,unsigned height,
+                             int first,int y,bool owner,unsigned *offset) {
+    ScTerrainFrame *f=&r->terrain;unsigned count=f->stride+2;
+    int begin=first<0?-first:0,end=(int)width-(owner?1:0)-first;
+    if(begin>(int)count) begin=count;
+    if(end>(int)count) end=count;
+    if(end<begin || y<0 || (unsigned)y>=height-(owner?1:0)) end=begin;
+    const uint8_t *live=end>begin?map+2*((size_t)y*width+first+begin):NULL;
+    for(unsigned i=0;i<6;++i) {
+        const ScCityRowCache *cache=r->city_cache+i;
+        if(cache->map==map && cache->width==width && cache->height==height &&
+           cache->first==first && cache->y==y && cache->count==count && cache->owner==owner &&
+           (!live || !memcmp((const uint8_t *)f->city+cache->offset*2+begin*2,live,(end-begin)*2))) {
+            *offset=cache->offset;return true;
+        }
+    }
+    unsigned words=(count+1)/2,required=f->city_words+words;
+    if(required>f->city_capacity) {
+        unsigned capacity=f->city_capacity?f->city_capacity*2:4096;
+        if(capacity<required) capacity=required;
+        uint32_t *city=realloc(f->city,(size_t)capacity*sizeof *city);
+        if(!city) return false;
+        f->city=city;f->city_capacity=capacity;
+    }
+    *offset=f->city_words*2;uint32_t *captured=f->city+f->city_words;
+    memset(captured,255,words*sizeof *captured);
+    /* City and VRAM snapshot protocols both use little-endian packed words. */
+    if(live) memcpy((uint8_t *)captured+begin*2,live,(end-begin)*2);
+    f->city_words=required;
+    r->city_cache[r->city_cache_next++%6]=(ScCityRowCache){map,first,y,width,height,count,*offset,owner};
+    return true;
+}
+/* Keep immutable OAM/vehicle records, rather than drawing their pixels into a
+ * full-width CPU overlay. Spatial buckets bound shader work to sprites that
+ * can cover this 32px span; no pixel scans the complete 128-slot OAM table. */
+static bool terrain_objects(ScRenderer *r,const Ppu *p,int y) {
+    ScTerrainFrame *f=&r->terrain;ScTerrainRow *row=f->rows+y+r->view.core_y;
+    uint32_t records[147][6];unsigned count=0,buckets=(f->width+31)/32;
+    unsigned sizes[128]={0}; /* maximum canvas width 4096 / bucket width 32 */
+    bool core=y>=0 && y<224;
+    int first=PPU_objPriority(p)?(p->oamaddl&0xfe)/2:0;
+    for(int k=-r->vehicle_count;k<128;++k) {
+        int left,size,dy,clip=0;unsigned attr;
+        if(k<0) {
+            const ScVehicleSprite *v=&r->vehicles[k+r->vehicle_count];
+            left=v->x+r->view.core_x;clip=r->view.core_x+256;
+            size=sprite_sizes[PPU_objSize(p)][v->large?1:0];dy=y-v->y;
+            attr=p->oam[v->slot*2+1];
+        } else {
+            int slot=(first+127-k)&127,index=slot*2;
+            if((r->city_input && (r->pointer_active || r->pointer_hidden || r->split_hud) && slot<4) ||
+               (r->pan_frame && slot>=39 && slot<=52) || !r->object_grace[slot]) continue;
+            left=r->object_x[slot]+r->view.core_x;
+            size=sprite_sizes[PPU_objSize(p)][(p->highOam[index/8]>>(index%8+1))&1];
+            dy=(y-r->object_y[slot])&255;attr=p->oam[index+1];
+        }
+        if(dy<0 || dy>=size) continue;
+        int begin=left>clip?left:clip,end=left+size;
+        if(begin<0) begin=0;
+        if(end>(int)f->width) end=f->width;
+        if(begin>=end || (core && begin>=r->view.core_x && end<=r->view.core_x+256)) continue;
+        uint32_t *record=records[count++];
+        record[0]=(uint32_t)left;record[1]=size;record[2]=dy;record[3]=attr;
+        record[4]=attr&0x100?PPU_objTileAdr2(p):PPU_objTileAdr1(p);record[5]=(uint32_t)clip;
+        for(unsigned b=(unsigned)begin/32;b<=(unsigned)(end-1)/32;++b) ++sizes[b];
+    }
+    row->reserved=UINT32_MAX;
+    if(count) {
+        unsigned words=1+buckets*2;
+        for(unsigned b=0;b<buckets;++b) words+=sizes[b]*6;
+        unsigned required=f->city_words+words;
+        if(required>f->city_capacity) {
+            unsigned capacity=f->city_capacity?f->city_capacity*2:4096;
+            if(capacity<required) capacity=required;
+            uint32_t *city=realloc(f->city,(size_t)capacity*sizeof *city);
+            if(!city) return false;
+            f->city=city;f->city_capacity=capacity;
+        }
+        unsigned header=f->city_words,cursor=header+1+buckets*2;
+        f->city[header]=buckets;row->reserved=header;
+        for(unsigned b=0;b<buckets;++b) {
+            f->city[header+1+b*2]=cursor;f->city[header+2+b*2]=sizes[b];
+            for(unsigned i=0;i<count;++i) {
+                const uint32_t *record=records[i];int left=(int32_t)record[0],clip=(int32_t)record[5];
+                int begin=left>clip?left:clip,end=left+(int)record[1];
+                if(end<=(int)(b*32) || begin>=(int)(b*32+32)) continue;
+                memcpy(f->city+cursor,record,6*sizeof *record);cursor+=6;
+            }
+        }
+        f->city_words=required;
+    }
+    row->math|=SC_ROW_GPU_OBJECTS|(core?SC_ROW_OBJECT_CORE:0);
+    return true;
 }
 static void terrain_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y,int sx,int sy) {
     ScTerrainFrame *f=&r->terrain;unsigned ay=y+r->view.core_y;
     int start=sx-r->view.core_x;unsigned phase=(unsigned)start&7;
     ScTerrainRow *row=f->rows+ay;
+    memset(f->overlays+(size_t)ay*f->width,0,f->width*sizeof *f->overlays);
     row->phase=phase;row->core_x=r->view.core_x;row->main=p->screenEnabled[0];row->sub=p->screenEnabled[1];
     row->window_main=p->screenWindowed[0];row->window_sub=p->screenWindowed[1];
     row->windows=p->windowsel;row->logic=p->wbgobjlog;
     row->bounds=p->window1left|(uint32_t)p->window1right<<8|(uint32_t)p->window2left<<16|(uint32_t)p->window2right<<24;
     row->math=p->cgadsub;row->control=p->cgwsel;row->fixed=p->fixedColor;
+    bool repair=y>=0 && y<224 && gpu_native_repair(r,p);
+    bool hud=u16(ram,0x1d7)!=0;
+    bool staging=repair && r->scroll_repair && !u16(ram,0xd7) && !u16(ram,0x379) && !ram[0x391];
+    if(repair) row->math|=SC_ROW_NATIVE_REPAIR|(staging?SC_ROW_STAGING_CHECK:0)|
+        (hud?SC_ROW_CITY_HUD:0)|(hud && y<46?SC_ROW_HUD_TOP:0);
+    bool large=r->map_hold?r->held_large:r->world && r->world->active;
+    unsigned width=large?(r->map_hold?(r->held_colossal?1920:r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120;
+    unsigned height=large?(r->map_hold?(r->held_colossal?1600:r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
+    const uint8_t *map=r->map_hold?r->held_map:large?r->world->tiles:ram+MAP;
+    static int capture_reference=-1;
+    if(capture_reference<0) {const char *e=getenv("SC_TERRAIN_CAPTURE_REFERENCE");capture_reference=e && *e=='1';}
+    bool raw=!capture_reference && !r->reference_terrain && terrain_resources(r,p,&row->chr_snapshot);
+    if(raw) {
+        row->math|=SC_ROW_RAW_TERRAIN;row->chr_base=PPU_bgTileAdr(p,1);
+        row->warning_base=PPU_bgTileAdr(p,0);row->world_y=(unsigned)(sy+y+1)&7;
+    }
+    static int spans_reference=-1;
+    if(spans_reference<0) {const char *e=getenv("SC_CITY_SPANS_REFERENCE");spans_reference=e && *e=='1';}
+    int first=(start-(int)phase)/8-1,wy=sy+y+1;
+    /* Negative pixel coordinates must floor, rather than truncate toward 0. */
+    int city_y=wy>=0?wy/8:-1-((-1-wy)/8);
+    bool spans=raw && !spans_reference &&
+        terrain_city_row(r,map,width,height,first,city_y,false,&row->city_base) &&
+        terrain_city_row(r,map,width,height,first,city_y+1,false,&row->city_roof) &&
+        terrain_city_row(r,map,width,height,first,r->map_hold?-1:city_y-1,true,&row->city_owner);
+    unsigned first_tile=0,last_tile=f->stride;
+    if(spans) {
+        row->math|=SC_ROW_CITY_SPANS;
+        memset(f->tiles+(size_t)ay*f->stride,0,f->stride*sizeof *f->tiles);
+        /* Only the original 256px cache needs host repair metadata. */
+        if(!repair) last_tile=0;
+        else {
+            first_tile=((unsigned)r->view.core_x+phase)/8;
+            last_tile=((unsigned)r->view.core_x+phase+263)/8;
+            if(last_tile>f->stride) last_tile=f->stride;
+        }
+    }
     for(unsigned i=0;i<32;++i) row->brightness[i]=p->brightnessMult[i];
     for(unsigned i=0;i<256;++i) f->palette[(size_t)ay*256+i]=p->cgram[i];
     if(p->screenEnabled[1]&4) {
         int yy=y<0?0:y>223?223:y;
-        for(int x=0;x<256;++x) {
-            if(y>=0 && y<224 && x>=8 && x<248) continue;
-            row->sub_bg[x]=bg_pixel(p,2,x,yy+1);
+        static int sub_bg_reference=-1;
+        if(sub_bg_reference<0) {const char *e=getenv("SC_GPU_SUB_BG_REFERENCE");sub_bg_reference=e && *e=='1';}
+        if(raw && !sub_bg_reference && ScNativePpuSupported(p)) {
+            row->math|=SC_ROW_GPU_SUB_BG;
+            row->sub_bg[0]=p->hScroll[2];row->sub_bg[1]=(yy+1+p->vScroll[2])&1023;
+            row->sub_bg[2]=PPU_bgTilemapAdr(p,2);row->sub_bg[3]=PPU_bgTileAdr(p,2);
+            row->sub_bg[4]=(PPU_bgTilemapWider(p,2)?1u:0)|(PPU_bgTilemapHigher(p,2)?2u:0);
+        } else for(int x=0;x<256;++x) {
+                if(y>=0 && y<224 && x>=8 && x<248) continue;
+                row->sub_bg[x]=bg_pixel(p,2,x,yy+1);
         }
     }
-    for(unsigned i=0;i<f->stride;++i) {
+    for(unsigned i=first_tile;i<last_tile;++i) {
         int wx=start-(int)phase+(int)i*8,wy=sy+y+1;unsigned base,roof;
         ScTerrainTile *t=f->tiles+(size_t)ay*f->stride+i;
+        bool warning=false;
+        if(raw) {
+            if(spans) *t=ScTerrainRawTile(f,ay,i);
+            else {
+            t->base=terrain_cell(map,width,height,wx,wy);
+            t->roof=terrain_cell(map,width,height,wx+8,wy+8);
+            t->reserved=!r->map_hold && wx>=8 && wy>=8 &&
+                (unsigned)wx<width*8 && (unsigned)wy<height*8?
+                terrain_cell(map,width,height,wx-8,wy-8):UINT32_MAX;
+            }
+            t->attributes=t->expected=t->staged=0;
+            /* Repair validation covers just the original 256px cache. The
+             * extended canvas's lookups/planes/warnings run entirely on GPU. */
+            int left=(int)i*8-(int)phase-r->view.core_x;
+            if(!repair || left>=256 || left+8<=0) continue;
+            base=t->base==UINT32_MAX?0:f->resources[t->base&1023]&65535;
+            roof=t->roof==UINT32_MAX?0:f->resources[t->roof&1023]>>16;
+            unsigned owner=t->reserved,id=owner&1023;
+            warning=owner!=UINT32_MAX && !(owner&0x8000) &&
+                (f->resources[1024+id]&1) && id!=0x27c && id!=0x28c;
+        } else {
         t->base=terrain_planes(r,p,ram,wx,wy,false,&base);
         t->roof=terrain_planes(r,p,ram,wx+8,wy+8,true,&roof);
         t->attributes=((base>>10)&7)*16|(((roof>>10)&7)*16)<<8|
-            (base&0x4000?1u<<16:0)|(roof&0x4000?1u<<17:0);t->reserved=0;
+            (base&0x4000?1u<<16:0)|(roof&0x4000?1u<<17:0);t->reserved=0;t->expected=t->staged=0;
+        warning=!r->map_hold && power_warning_cell(r,ram,wx,wy);
+        if(warning) {
+            unsigned at=(PPU_bgTileAdr(p,0)+0x376*16+(wy&7))&0x7fff;
+            t->reserved=p->vram[at]|(uint32_t)p->vram[(at+8)&0x7fff]<<16;
+        }
+        }
+        int left=(int)i*8-(int)phase-r->view.core_x,right=left+8;
+        if(!repair || left>=256 || right<=0) continue;
+        int point=left<0?0:left,limit=right>256?256:right;
+        unsigned roof_expected=0x2300;
+        bool valid=raw?t->base!=UINT32_MAX:wx>=0 && wy>=0 && (unsigned)wx<width*8 && (unsigned)wy<height*8 &&
+            (u16(map,2*((wy/8)*width+wx/8))&1023)<CELL_TYPES;
+        if(wx+8>=0 && wy+8>=0 && (unsigned)(wx+8)<width*8 && (unsigned)(wy+8)<height*8 &&
+           (u16(map,2*(((wy+8)/8)*width+(wx+8)/8))&1023)<CELL_TYPES) roof_expected=roof;
+        t->expected=base|(roof_expected<<16);
+        t->attributes|=(valid?SC_TILE_VALID:0)|(warning?SC_TILE_POWER_WARNING:0);
+        if(changed_cell(r,wx,wy) || changed_cell(r,wx+8,wy+8)) t->attributes|=SC_TILE_EDITED;
+        bool may_clear=bg_word(p,0,point,y+1)==0x1376 || bg_word(p,0,limit-1,y+1)==0x1376;
+        if(may_clear && powered_owner_near(r,ram,wx,wy)) t->attributes|=SC_TILE_CLEAR_WARNING;
+        int land=point;
+        if(hud && land<56) land=56;
+        if(staging && (!hud || y>=46) && land<limit) {
+            unsigned staged_base=bg_word(p,1,land,y+1),staged_roof=bg_word(p,0,land,y+1);
+            t->staged=staged_base|(staged_roof<<16);
+            bool bad=!valid || staged_base!=base || ((p->screenEnabled[0]&1) &&
+                staged_roof!=roof_expected && !(staged_roof==0x1376 && warning));
+            if(bad) r->staged_mismatches+=limit-land;
+        }
     }
 }
 void ScRendererResetHistory(ScRenderer *r) {
     r->scroll_repair=false;r->staged_mismatches=0;
     r->scroll_valid=r->objects_valid=r->map_valid=r->map_hold=r->title_live=false;
-    r->city_input=r->pointer_active=false;
+    r->city_input=r->pointer_active=r->pointer_hud=r->pointer_hidden=false;
     memset(r->changed_cells,0,sizeof r->changed_cells);
 }
 void ScRendererBeginMapLoad(ScRenderer *r) {
@@ -700,9 +992,48 @@ static void render_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
         p=r->held_ppu;
     }
     uint16_t objects[SC_MAX_CANVAS], marks[SC_MAX_CANVAS];
-    if (city) object_row(r,p,y,objects);
-    bool deferred=city && r->defer_terrain && !r->advisor_frame && !PPU_forcedBlank(p);
+    uint64_t measured;
+    static int advisor_reference=-1;
+    if(advisor_reference<0) {const char *e=getenv("SC_ADVISOR_GPU_REFERENCE");advisor_reference=e && *e=='1';}
+    bool advisor_gpu=r->advisor_frame && !advisor_reference && ScNativePpuSupported(p);
+    bool deferred=city && r->defer_terrain && (!r->advisor_frame || advisor_gpu) && !PPU_forcedBlank(p);
+    measured=MEASURE_BEGIN(r);
     if(deferred) terrain_row(r,p,ram,y,sx,sy);
+    MEASURE_END(r,SC_RENDER_TERRAIN,measured);
+    if(deferred && advisor_gpu) {
+        unsigned ay=y+r->view.core_y;
+        if(y>=0 && y<224) {
+            unsigned policy=r->terrain.rows[ay].math&~255u;
+            ScNativePpuCapture(&r->terrain,p,ay,y+1);
+            r->terrain.rows[ay].math|=policy;
+        }
+        r->terrain.rows[ay].math|=SC_ROW_ADVISOR_BACKGROUND|(y>=0 && y<224?SC_ROW_ADVISOR_CORE:0);
+        for(int x=0;x<r->view.width;++x) out[x]=SC_TERRAIN_PIXEL;
+        r->terrain.deferred+=r->view.width;
+        return;
+    }
+    static int object_reference=-1;
+    if(object_reference<0) {const char *e=getenv("SC_GPU_OBJECT_REFERENCE");object_reference=e && *e=='1';}
+    measured=MEASURE_BEGIN(r);
+    bool gpu_objects=deferred && !object_reference && ScNativePpuSupported(p) &&
+        (y<0 || y>=224 || r->native_line) &&
+        (r->terrain.rows[y+r->view.core_y].math&SC_ROW_RAW_TERRAIN) && terrain_objects(r,p,y);
+    if(city && !gpu_objects) object_row(r,p,y,objects);
+    MEASURE_END(r,SC_RENDER_OBJECTS,measured);
+    if(deferred) {
+        ScTerrainOverlay *overlays=r->terrain.overlays+(size_t)(y+r->view.core_y)*r->view.width;
+        bool hud=u16(ram,0x1d7)!=0;
+        if(gpu_objects && hud && y<224) r->terrain.rows[y+r->view.core_y].math|=
+            SC_ROW_CITY_HUD|(y<46?SC_ROW_HUD_TOP:0);
+        for(int x=0;x<r->view.width;++x) {
+            int local=x-r->view.core_x;
+            if(y>=0 && y<224 && local>=0 && local<256 &&
+               !((local<8 && (r->repaired_edges[y]&1)) || (local>=248 && (r->repaired_edges[y]&2)))) continue;
+            if(!gpu_objects) overlays[x].object=objects[x]|(hud && (y<46 || (local<56 && y<224))?UINT32_C(0x80000000):0);
+            out[x]=SC_TERRAIN_PIXEL;++r->terrain.deferred;
+        }
+        return;
+    }
     r->selector_row=NULL;
     if (!city && (r->selector_count || r->sign_count)) {
         host_sprites_row(r,p,y,marks); r->selector_row=marks;
@@ -850,6 +1181,12 @@ static void fill_flat_margins(ScRenderer *r) {
             r->pixels[(size_t)y*r->view.width+x]=colors[best];
 }
 static void capture_advisor_row(ScRenderer *r,const Ppu *p,int y,const uint32_t *native) {
+    if(r->native_line) {
+        unsigned ay=y+r->view.core_y;
+        unsigned policy=r->terrain.rows[ay].math&~255u;
+        ScNativePpuCapture(&r->terrain,p,ay,y+1);
+        r->terrain.rows[ay].math|=policy;
+    }
     bool page_pixels[256]; int first=256,last=-1;
     for (int x=0;x<256;++x) {
         page_pixels[x]=(p->screenEnabled[0]&4) &&
@@ -868,7 +1205,9 @@ static void capture_advisor_row(ScRenderer *r,const Ppu *p,int y,const uint32_t 
         bool obj=(p->screenEnabled[0]&16) &&
             (!(p->screenWindowed[0]&16) || !window_contains(p,4,x)) &&
             (p->objBuffer.data[x+kPpuExtraLeftRight]&255);
-        r->advisor_pixels[y*256+x]=(page || obj) ? native[x]|0xff000000 : 0;
+        r->advisor_pixels[y*256+x]=(page || obj) ?
+            r->native_line ? SC_RELOCATED_NATIVE_PIXEL|((unsigned)(y+r->view.core_y)<<8)|x :
+            native[x]|0xff000000 : 0;
     }
 }
 static void place_advisor(ScRenderer *r) {
@@ -887,9 +1226,11 @@ static int right_shift(const ScRenderer *r) {
 }
 static void arrow_shift(const ScRenderer *r,int slot,int *dx,int *dy) {
     *dx=*dy=0;
-    if (r->view.width<=256) return;
-    if (slot==49) *dx=right_shift(r);
-    else {
+    if(slot==49 || slot==50) {
+        if(slot==49) *dx=right_shift(r);
+        *dy=(r->view.height-r->view.core_y-224)/2;
+    } else {
+        if(r->view.width>256)
         *dx=(r->view.width+r->view.core_x+(r->split_hud?56:0))/2-r->view.core_x-142;
         if (slot==52) *dy=r->view.height-r->view.core_y-224;
     }
@@ -902,15 +1243,23 @@ bool ScRendererWindowToGuest(const ScRenderer *r,ScVideoRect d,
     if (px<d.x || px>=d.x+d.w || py<d.y || py>=d.y+d.h) return false;
     int cx=(int)((px-d.x)*r->view.width/d.w)-r->view.core_x;
     int cy=(int)((py-d.y)*r->view.height/d.h)-r->view.core_y;
+    /* Adviser pixels move independently of the anchored city/HUD. Hit-test
+     * the same centered native panel that place_advisor draws. */
+    if (r->advisor_frame) {
+        cx+=r->view.core_x-(r->view.width-256)/2;
+        cy+=r->view.core_y-(r->view.height-224)/2;
+        if (!in_rect(cx,cy,0,0,256,224)) return false;
+        *gx=cx; *gy=cy; return true;
+    }
     int dx=right_shift(r);
     if (r->split_hud && in_rect(cx,cy,144+dx,0,112,46)) cx-=dx;
     else if (r->pan_frame && in_rect(cx,cy,190+dx,46,48,48)) {
         cx-=dx;
         if (navigation) *navigation=true;
     }
-    else if (r->pan_frame && r->view.width>256) {
-        const int slots[]={49,51,52},xs[]={214,134,134},ys[]={118,62,174};
-        for (int i=0;i<3;++i) {
+    else if (r->pan_frame) {
+        const int slots[]={49,50,51,52},xs[]={214,70,134,134},ys[]={118,118,62,174};
+        for (int i=0;i<4;++i) {
             int ax,ay; arrow_shift(r,slots[i],&ax,&ay);
             if (in_rect(cx,cy,xs[i]+ax,ys[i]+ay,16,16)) {
                 cx-=ax; cy-=ay;
@@ -978,6 +1327,7 @@ static bool staged_city_matches(const ScRenderer *r,const Ppu *p,const uint8_t *
 static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
     if (!city_live(r,p,ram) || r->advisor_frame || r->map_hold ||
         !(p->screenEnabled[0]&2)) return;
+    if(gpu_native_repair(r,p)) return;
     int sx=r->scroll_x+r->scroll_adjust_x+scroll_delta(p->hScroll[1],r->scroll_h);
     int sy=r->scroll_y+r->scroll_adjust_y+scroll_delta(p->vScroll[1],r->scroll_v);
     uint32_t *out=r->pixels+(size_t)(y+r->view.core_y)*r->view.width+r->view.core_x;
@@ -1003,6 +1353,24 @@ static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
             edited=changed_cell(r,sx+x,sy+y+1) || changed_cell(r,sx+x+8,sy+y+9);
         }
         if (!cache_bad && !clear_warning && !warning_cell && !edited) continue;
+        if(r->defer_terrain && !PPU_forcedBlank(p)) {
+            unsigned background=UINT32_C(0x80000000);
+            if(r->native_line) background|=SC_OVERLAY_NATIVE_BG|
+                (clear_warning || cache_bad?SC_OVERLAY_SKIP_BG1:0);
+            else for(unsigned layer=0;layer<=2;layer+=2) {
+                if(layer==0 && (clear_warning || cache_bad)) continue;
+                if(!((p->screenEnabled[0]|p->screenEnabled[1])&(1<<layer))) continue;
+                bool high=false;unsigned pixel=bg_sample(p,layer,x,y+1,&high);
+                unsigned rank=layer==0?(high?12:8):(high?(PPU_bg3priority(p)?15:3):1);
+                background|=(pixel|(rank<<8))<<(layer?16:0);
+            }
+            unsigned obj=p->objBuffer.data[x+kPpuExtraLeftRight];
+            unsigned object=(obj&255)|((obj>>12)<<8);
+            if(u16(ram,0x1d7) && (y<46 || (x<56 && y<224))) object|=UINT32_C(0x80000000);
+            size_t at=(size_t)(y+r->view.core_y)*r->view.width+r->view.core_x+x;
+            r->terrain.overlays[at]=(ScTerrainOverlay){background,object};
+            out[x]=SC_TERRAIN_PIXEL;++r->terrain.deferred;continue;
+        }
         unsigned warning=power_warning_pixel(r,p,ram,x,y,sx,sy);
         unsigned ci=cell_pixel(r,p,ram,sx+x,sy+y+1,false);
         unsigned over=cell_pixel(r,p,ram,sx+x+8,sy+y+9,true);
@@ -1049,7 +1417,7 @@ static uint32_t without_pointer(const ScRenderer *r,const Ppu *p,const uint8_t *
     int first=PPU_objPriority(p)?(p->oamaddl&0xfe)/2:0;
     for (int i=0;i<128;++i) {
         int slot=(first+i)&127;
-        if (slot<4 || (r->pan_frame && slot>=39 && slot<=52 && slot!=50)) continue;
+        if (slot<4 || (r->pan_frame && slot>=39 && slot<=52)) continue;
         int ox=sprite_x(p,slot); if (ox>=256) ox-=512;
         obj=sprite_pixel(p,slot,x-ox,(y-(p->oam[slot*2]>>8))&255);
         if (obj) { attr=p->oam[slot*2+1]; break; }
@@ -1083,13 +1451,14 @@ static uint32_t without_pointer(const ScRenderer *r,const Ppu *p,const uint8_t *
 static void city_pointer(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     if (!r->city_input || r->advisor_frame || r->map_hold) return;
     int wx=0,wy=0;
-    bool land=r->pointer_active && ScRendererCityPoint(r,ram,r->pointer_x,r->pointer_y,&wx,&wy);
-    if (!land && !r->split_hud) return;
+    bool hud=r->pointer_active && r->pointer_hud;
+    bool land=r->pointer_active && !hud && ScRendererCityPoint(r,ram,r->pointer_x,r->pointer_y,&wx,&wy);
+    if (!land && !hud && !r->split_hud && !r->pointer_hidden) return;
     /* Move the entire UI cursor as one group, including rows below the HUD.
      * The ROM's hand is a 16px sprite; construction corners are 8px sprites. */
     int shift=r->split_hud && sprite_x(p,0)>=144 && sprite_x(p,0)<256 &&
         (p->oam[0]>>8)<46?right_shift(r):0;
-    if (land || shift) for (int slot=0;slot<4;++slot) {
+    if (land || shift || hud || r->pointer_hidden) for (int slot=0;slot<4;++slot) {
         int ox=sprite_x(p,slot); if (ox>=256) ox-=512;
         for (int y=0;y<224;++y) {
             if (r->split_hud && y<46) continue; /* header already rebuilt */
@@ -1102,8 +1471,9 @@ static void city_pointer(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
             }
         }
     }
+    if(r->pointer_hidden) return;
     ScSelSprite sprites[8]; int count=0;
-    if (land) {
+    if (land && !r->clipboard_cursor) {
         /* OAM can still contain the HUD hand or parked corners on the first
          * land frame. Get the selected tool's authentic outline from ROM. */
         unsigned tool=u16(ram,0x20d);
@@ -1112,7 +1482,7 @@ static void city_pointer(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
         unsigned record=rom_read(r,0x018000+tool);
         count=ScSelector_Record(record,wx*8-r->scroll_x-r->scroll_adjust_x,
             wy*8-r->scroll_y-r->scroll_adjust_y,sprites,8,rom_read,r);
-    } else for (int slot=0;slot<4;++slot) {
+    } else if(!land && !hud) for (int slot=0;slot<4;++slot) {
         int ox=sprite_x(p,slot);
         if (ox>=256) ox-=512;
         int index=slot*2;
@@ -1124,14 +1494,15 @@ static void city_pointer(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
         ScSelSprite *s=&sprites[slot];
         int size=sprite_sizes[PPU_objSize(p)][s->large?1:0];
         /* Parked native pieces must stay outside the native rectangle. */
-        if (!land && (s->x-shift+size<=0 || s->x-shift>=256)) continue;
+        if (!land && !hud && (s->x-shift+size<=0 || s->x-shift>=256)) continue;
         for (int y=0;y<size;++y) for (int x=0;x<size;++x) {
             unsigned ci=sprite_word_pixel(p,s->tile|(s->attr<<8),size,x,y);
-            int ax=r->view.core_x+s->x+x,ay=r->view.core_y+(land?s->y+y:(s->y+y)&255);
+            int ax=r->view.core_x+s->x+x,ay=r->view.core_y+((land || hud)?s->y+y:(s->y+y)&255);
             if (ci && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
                 r->pixels[(size_t)ay*r->view.width+ax]=composite_color(p,ci,ci<192?6:4,0,5,s->x+x);
         }
     }
+    ScRendererHudPointer(r,p);
 }
 static uint32_t hud_ground(const Ppu *p) {
     if (PPU_forcedBlank(p)) return 0xff000000;
@@ -1167,6 +1538,70 @@ void ScRendererPopulationRow(const ScRenderer *r,const Ppu *p,ScViewport v,
             unsigned ci=sprite_word_pixel(p,attr,8,x,y-top);
             if (ci && left+x>=0 && left+x<v.width)
                 out[left+x]=composite_color(p,ci,ci<192?6:4,0,5,203);
+        }
+    }
+}
+void ScRendererClipboardFont(ScRenderer *r,const uint8_t *font,size_t size) {
+    r->clipboard_font_valid=font && size>=sizeof r->clipboard_font;
+    if(r->clipboard_font_valid) memcpy(r->clipboard_font,font,sizeof r->clipboard_font);
+}
+ScVideoRect ScRendererClipboardButton(ScViewport v,unsigned button) {
+    return (ScVideoRect){v.core_x+(button?152:112),v.core_y,button?44:36,10};
+}
+static void clipboard_text(const ScRenderer *r,const Ppu *p,ScViewport v,
+    const char *s,int left,int top,int y,uint32_t *out,uint32_t color) {
+    (void)p;
+    if(y<top || y>=top+8) return;
+    for(;*s;++s,left+=8) {
+        const uint8_t *glyph=r->clipboard_font[(unsigned char)*s&127];
+        unsigned row=y-top;
+        for(int x=0;x<8;++x) {
+            unsigned ci=((glyph[row*2]>>(7-x))&1)|(((glyph[row*2+1]>>(7-x))&1)<<1);
+            if(!ci && left+x>=0 && left+x<v.width) out[left+x]=color;
+        }
+    }
+}
+void ScRendererHudPointer(ScRenderer *r,const Ppu *p) {
+    if(r->pointer_hidden || !r->pointer_active || !r->pointer_hud || !r->city_input || r->advisor_frame || r->map_hold) return;
+    /* 01:c641 emits the original 16px HUD hand using tile $31ec. Follow the
+     * live mouse even when development has delayed the guest's OAM emitter. */
+    for(int y=0;y<16;++y) for(int x=0;x<16;++x) {
+        unsigned ci=sprite_word_pixel(p,0x31ec,16,x,y);
+        int ax=r->view.core_x+r->pointer_x+x,ay=r->view.core_y+r->pointer_y+y;
+        if(ci && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
+            r->pixels[(size_t)ay*r->view.width+ax]=composite_color(p,ci,ci<192?6:4,0,5,r->pointer_x+x);
+    }
+}
+void ScRendererClipboardRow(const ScRenderer *r,const Ppu *p,ScViewport v,
+    unsigned tool,bool available,uint64_t price,int y,uint32_t *out) {
+    if(!r->clipboard_font_valid || PPU_forcedBlank(p)) return;
+    uint32_t ink=0xff000000|(uint32_t)p->brightnessMult[31]<<16|
+        (uint32_t)p->brightnessMult[27]<<8|p->brightnessMult[20];
+    for(unsigned b=0;b<2;++b) {
+        ScVideoRect rect=ScRendererClipboardButton(v,b);
+        if(y<rect.y || y>=rect.y+rect.h) continue;
+        bool selected=tool==b+1,enabled=!b || available;
+        for(int x=rect.x;x<rect.x+rect.w && x<v.width;++x) if(x>=0)
+            out[x]=(y==rect.y || y==rect.y+rect.h-1 || x==rect.x || x==rect.x+rect.w-1)?
+                selected?ink:hud_ground(p):hud_ground(p);
+        clipboard_text(r,p,v,b?"PASTE":"COPY",rect.x+2,rect.y+1,y,out,
+            enabled?ink:0xff000000|(uint32_t)p->brightnessMult[12]*0x010101);
+    }
+    if(!tool || y<v.core_y+176 || y>=v.core_y+224) return;
+    char digits[24];snprintf(digits,sizeof digits,"%llu",(unsigned long long)price);
+    int count=(int)strlen(digits),right=v.core_x+56;
+    if(tool==2 && right<v.core_x+20+count*8) right=v.core_x+20+count*8;
+    for(int x=v.core_x+8;x<right && x<v.width;++x) if(x>=0) out[x]=hud_ground(p);
+    clipboard_text(r,p,v,tool==1?"COPY":"PASTE",v.core_x+12,v.core_y+180,y,out,ink);
+    clipboard_text(r,p,v,tool==1?"DRAG":"TOTAL",v.core_x+12,v.core_y+192,y,out,ink);
+    if(tool==1 || y<v.core_y+204 || y>=v.core_y+212) return;
+    clipboard_text(r,p,v,"$",v.core_x+12,v.core_y+204,y,out,ink);
+    for(int g=0;g<count;++g) {
+        unsigned attr=(p->oam[53]&0xff00)|rom_read((void *)r,0x0085e1+digits[g]-'0');
+        for(int x=0;x<8;++x) {
+            unsigned ci=sprite_word_pixel(p,attr,8,x,y-v.core_y-204);
+            int target=v.core_x+20+g*8+x;
+            if(ci && target>=0 && target<v.width) out[target]=composite_color(p,ci,ci<192?6:4,0,5,203);
         }
     }
 }
@@ -1217,10 +1652,9 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
     }
     if (!r->pan_frame) return;
     for (int slot=39;slot<=52;++slot) {
-        if (slot==50) continue; /* left arrow stays beside the toolbar */
         int ox=sprite_x(p,slot); if (ox>=256) ox-=512;
-        int row=(y-(p->oam[slot*2]>>8))&255;
-        if (row>=64) continue;
+        int row=y-(p->oam[slot*2]>>8);
+        if (row<0 || row>=64) continue;
         for (int x=0;x<64;++x) if (sprite_pixel(p,slot,x,row)) {
             int source=ox+x,target=core+source;
             if (target>=0 && target<r->view.width)
@@ -1229,10 +1663,14 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
     }
     /* Earlier OAM slots win. The mini frame and arrows are opaque UI sprites. */
     for (int slot=52;slot>=40;--slot) {
-        if (slot==50) continue;
         int dx=0,dy=0;
         if (slot<=48) dx=shift; else arrow_shift(r,slot,&dx,&dy);
-        int row=(y-dy-(p->oam[slot*2]>>8))&255;
+        int oy=p->oam[slot*2]>>8;
+        /* Y=240/high X parks a direction at the map boundary. Enlarging the
+         * canvas must not make those hidden native sprites visible again. */
+        if(slot>=49 && (oy>=224 || sprite_x(p,slot)>=256)) continue;
+        int row=y-dy-oy;
+        if(row<0) continue;
         if (row>=64) continue;
         int ox=sprite_x(p,slot);
         for (int x=0;x<64;++x) {
@@ -1254,7 +1692,8 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
     if (!r->pixels || !p || !ram || !native || line<0 || line>=224) return;
     if (line==0) {
         r->staged_mismatches=0;
-        r->terrain.deferred=0;
+        r->terrain.deferred=0;r->terrain.snapshots=0;
+        r->terrain.city_words=0;memset(r->city_cache,0,sizeof r->city_cache);r->city_cache_next=0;
         r->city_frame=false;
         if (ram[0x14]==1) r->title_live=true;
         else if (ram[0x14]!=2 || PPU_forcedBlank(p) || !PPU_brightness(p)) r->title_live=false;
@@ -1291,9 +1730,11 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
                     ram[0x42]|((unsigned)ram[0x43]<<8),r->sylt,rom_read,r);
         }
         r->sign_count=ScTitleSign_Sprites(r->sign,SC_SIGN_MAX_SPRITES,rom_read,r);
+        uint64_t measured=MEASURE_BEGIN(r);
         track_scroll(r,p,ram);
         track_objects(r,p,ram);
         track_map_swap(r,p,ram);
+        MEASURE_END(r,SC_RENDER_TRACK,measured);
     }
     /* The 32-column guest tilemap stages incoming tiles in CRT overscan.
      * Reconstruct only those edge bands, and never cover UI or native OBJ. */
@@ -1302,24 +1743,46 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         if (!edge_has_overlay(p,line,0)) r->repaired_edges[line]|=1;
         if (!edge_has_overlay(p,line,248)) r->repaired_edges[line]|=2;
     }
+    uint64_t measured=MEASURE_BEGIN(r);
     if (line==0) for (int y=-r->view.core_y;y<0;++y) render_row(r,p,ram,y);
     render_row(r,p,ram,line);
+    MEASURE_END(r,SC_RENDER_ROWS,measured);
+    measured=MEASURE_BEGIN(r);
     int first=(r->repaired_edges[line]&1) ? 8 : 0;
     int end=(r->repaired_edges[line]&2) ? 248 : 256;
     if (r->advisor_frame) capture_advisor_row(r,p,line,native);
-    else memcpy(r->pixels+(size_t)(line+r->view.core_y)*r->view.width+r->view.core_x+first,
-                native+first,(size_t)(end-first)*sizeof(*native));
+    else if(r->native_line) {
+        unsigned policy=r->terrain.rows[line+r->view.core_y].math&~255u;
+        ScNativePpuCapture(&r->terrain,p,line+r->view.core_y,line+1);
+        r->terrain.rows[line+r->view.core_y].math|=policy;
+        uint32_t *out=r->pixels+(size_t)(line+r->view.core_y)*r->view.width+r->view.core_x;
+        for(int x=first;x<end;++x) out[x]=SC_NATIVE_PIXEL;
+        r->terrain.deferred+=end-first;
+    } else memcpy(r->pixels+(size_t)(line+r->view.core_y)*r->view.width+r->view.core_x+first,
+                  native+first,(size_t)(end-first)*sizeof(*native));
+    MEASURE_END(r,SC_RENDER_NATIVE,measured);
+    measured=MEASURE_BEGIN(r);
     fresh_city_row(r,p,ram,line);
+    MEASURE_END(r,SC_RENDER_REPAIR,measured);
+    measured=MEASURE_BEGIN(r);
     if (r->split_hud || r->pan_frame) city_hud_row(r,p,ram,line);
     if (city_live(r,p,ram) && !r->advisor_frame && u16(ram,0x1d7) &&
         (p->screenEnabled[0]&3)==3 && !u16(ram,0x379))
         ScRendererPopulationRow(r,p,r->view,r->split_hud,line,
             r->pixels+(size_t)(line+r->view.core_y)*r->view.width);
+    MEASURE_END(r,SC_RENDER_HUD,measured);
     if (line==223) {
-        for (int y=224;y<r->view.height-r->view.core_y;++y) render_row(r,p,ram,y);
+        measured=MEASURE_BEGIN(r);
+        for (int y=224;y<r->view.height-r->view.core_y;++y) {
+            render_row(r,p,ram,y);
+            if(r->pan_frame) city_hud_row(r,p,ram,y);
+        }
         fill_flat_margins(r);
         if (r->advisor_frame) place_advisor(r);
+        MEASURE_END(r,SC_RENDER_ROWS,measured);
+        measured=MEASURE_BEGIN(r);
         city_pointer(r,p,ram);
+        MEASURE_END(r,SC_RENDER_POINTER,measured);
         if(!r->staged_mismatches && !u16(ram,0xd7) && !u16(ram,0x379) && !ram[0x391]) r->scroll_repair=false;
     }
 }

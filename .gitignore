@@ -130,3 +130,7 @@ labels_*.png
 
 # Release packages (tools/package_release.py)
 /dist/
+
+# User-provided restored soundtrack, imported locally and never committed.
+/music/restored/
+*.pcm

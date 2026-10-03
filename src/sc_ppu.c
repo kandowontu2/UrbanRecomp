@@ -3,13 +3,24 @@
  * OAM history; neither guest flags nor the next displayed frame may change. */
 #include "sc_ppu.h"
 #define ppu_runLine ScPpuReferenceLine
+#define ppu_write ScPpuReferenceWrite
 #include "snes/ppu.c"
 #undef ppu_runLine
+#undef ppu_write
+
+static uint64_t sc_vram_revision;
+uint64_t ScPpuVramRevision(const Ppu *ppu) {(void)ppu;return sc_vram_revision;}
+void ScPpuVramChanged(void) {++sc_vram_revision;}
+void ppu_write(Ppu *ppu,uint8_t adr,uint8_t value) {
+    ScPpuReferenceWrite(ppu,adr,value);
+    if(adr==0x18 || adr==0x19) ++sc_vram_revision;
+}
 
 static bool sc_skip_pixels;
 static uint64_t (*sc_pixel_counter)(void);
 static double sc_pixel_ms,sc_tick_ms;
 void ScPpuSkipPixels(bool skip) { sc_skip_pixels=skip; }
+bool ScPpuPixelsSkipped(void) { return sc_skip_pixels; }
 void ScPpuMeasurePixels(uint64_t (*counter)(void),double milliseconds_per_tick) {
     sc_pixel_counter=counter;sc_tick_ms=milliseconds_per_tick;sc_pixel_ms=0;
 }

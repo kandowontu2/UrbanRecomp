@@ -59,6 +59,18 @@ int main(int argc,char **argv) {
   reset(1000); assert(build(4,45,45,46,46)==40);
   assert(build(0,45,45,46,46)==4);
   for (int y=45;y<47;++y) for(int x=45;x<47;++x) assert(tile(x,y)<0x30);
+  for(unsigned tool=13;tool<=14;++tool) {
+    reset(100000);
+    unsigned unit=build(tool,44,44,44,44);
+    reset(100000);
+    assert(build(tool,44,44,48,48)==4*unit && plan.count==4);
+    for(int y=44;y<=48;y+=4) for(int x=44;x<=48;x+=4)
+      assert(tile(x+1,y+1)==(tool==13?0x27c:0x28c));
+    reset(4*unit-1);memcpy(before,ram,sizeof ram);
+    assert(ScConstructionPlan(&plan,tool,48,48,44,44) && plan.count==4);
+    assert(ScConstructionCommit(ram,rom,sizeof rom,&plan,&cost)==SC_BUILD_FUNDS);
+    assert(cost==4*unit && !memcmp(ram,before,sizeof ram));
+  }
   /* Exercise the original placement code beyond both old map boundaries and
    * the native 16-bit tile-index limit, including atomic world rollback. */
   for (unsigned tool=0;tool<=14;++tool) {
@@ -163,6 +175,29 @@ int main(int argc,char **argv) {
       assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));
       assert(ScWorldCell(&world,941,781)&0x8000);
       assert(ScWorldCell(&world,950,781)&0x8000);
+    }
+  }
+  for(unsigned tool=0;tool<=14;++tool) {
+    reset(100000);ScWorldReset(&world);world.active=world.huge=world.giant=world.colossal=true;
+    if(!tool) ScWorldPutCell(&world,1880,1580,0x30);
+    assert(ScConstructionPlanWorld(&plan,&world,tool,1880,1580,1880,1580));
+    assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK && cost);
+    if(ScWorldCell(&world,88,44)) fprintf(stderr,"1920x1600 alias tool %u tile %x\n",tool,ScWorldCell(&world,88,44));
+    assert(!ScWorldCell(&world,88,44));
+    if(tool>=5 && tool<=9) for(int y=1580;y<1583;++y) for(int x=1880;x<1883;++x)
+      assert((ScWorldCell(&world,x,y)&1023)>=0x80);
+    for(int y=0;y<1600;++y) for(int x=0;x<1920;++x)
+      if(x<1878 || x>1888 || y<1578 || y>1588) {
+        unsigned unexpected=ScWorldCell(&world,x,y);
+        if(unexpected) fprintf(stderr,"1920x1600 unexpected tool %u at %d,%d: %x\n",tool,x,y,unexpected);
+        assert(!unexpected);
+      }
+    if(tool==14) {
+      assert(ScConstructionPlanWorld(&plan,&world,3,1884,1581,1890,1581));
+      assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
+      assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));
+      assert(ScWorldCell(&world,1881,1581)&0x8000);
+      assert(ScWorldCell(&world,1890,1581)&0x8000);
     }
   }
   /* A continuous power line crosses both byte-coordinate seams. It must

@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include "sc_world.h"
 
-#define SC_POPULATION_MAX UINT64_C(9999999999)
+#define SC_POPULATION_MAX UINT64_C(9999999999999)
 enum { SC_POPULATION_HISTORY = 1200 };
 typedef struct ScPopulation {
     uint64_t value, previous, capacity[3]; /* residential, commercial, industrial */
@@ -22,6 +22,15 @@ void ScPopulationMirror(const ScPopulation *s, uint8_t *ram);
  * calendar/history and guest RAM intact. No multiplier is applied to people. */
 bool ScPopulationRefreshLive(ScPopulation *s, const uint8_t *ram, const ScWorld *world,
                              const uint8_t *rom, size_t size);
+/* Host-only derived census, independent of population/save state. Tile ID
+ * edits also invalidate neighboring free-zone house counts. Metadata-only
+ * edits do not change population. Normal maps retain the full census. */
+typedef struct ScPopulationCensus ScPopulationCensus;
+ScPopulationCensus *ScPopulationCensusCreate(void);
+void ScPopulationCensusDestroy(ScPopulationCensus *census);
+bool ScPopulationRefreshCached(ScPopulationCensus *census, ScPopulation *s,
+    const uint8_t *ram, const ScWorld *world, const uint8_t *rom, size_t size);
+uint64_t ScPopulationCensusEvaluatedCells(const ScPopulationCensus *census);
 /* Before the verified US bank-03 opcode. The returned PC remains unchanged
  * on the stock path when its arithmetic can represent the correct result. */
 uint16_t ScPopulationStep(ScPopulation *s, uint8_t *ram, uint16_t pc, uint16_t dp);

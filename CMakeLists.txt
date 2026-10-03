@@ -3,14 +3,9 @@ project(UrbanRecomp VERSION 1.2.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 
-# Embed our compute shader in the executable; no external shader or game data
-# is needed at runtime. Reconfigure automatically when its source changes.
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS src/sc_gpu_terrain.hlsl)
-file(READ "${CMAKE_SOURCE_DIR}/src/sc_gpu_terrain.hlsl" SC_GPU_SHADER)
-string(REPLACE "\\" "\\\\" SC_GPU_SHADER "${SC_GPU_SHADER}")
-string(REPLACE "\"" "\\\"" SC_GPU_SHADER "${SC_GPU_SHADER}")
-string(REPLACE "\n" "\\n\"\n\"" SC_GPU_SHADER "${SC_GPU_SHADER}")
-file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/sc_gpu_shader.h" CONTENT "static const char sc_gpu_shader[] = \"${SC_GPU_SHADER}\";\n")
+# Vulkan shaders are compiled offline and embedded. Building and running the
+# game needs no shader compiler, SDK or runtime shader files. Regenerate the
+# checked-in SPIR-V with tools/compile_gpu_shaders.py after editing HLSL.
 
 option(SC_CONSOLE "Open a Windows console for development diagnostics" OFF)
 function(sc_configure_windows_app target)
@@ -70,12 +65,16 @@ endif()
 add_executable(UrbanRecomp
     src/main.c
     src/sc_world.c
-    src/sc_world_guest.c
+    src/sc_world_guest.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c
     src/sc_journey.c
     src/sc_development.c
     src/sc_population.c
     src/sc_mouse_ui.c
     src/sc_construction.c src/sc_refresh_clock.c src/sc_power_refresh.c
+    src/sc_clipboard.c
+    src/sc_math.c
+    src/sc_wait.c
+    src/sc_music.c src/sc_pcm.c
     src/sc_launcher.c
     src/sc_sram.c
     src/sc_icon.c
@@ -88,7 +87,7 @@ add_executable(UrbanRecomp
     src/sc_video.c
     $<$<BOOL:${SC_HAVE_LAUNCHER}>:${CMAKE_SOURCE_DIR}/src/sc_mods.c>
     src/sc_renderer.c
-    src/sc_terrain.c src/sc_gpu_terrain.c
+    src/sc_terrain.c src/sc_native_ppu.c src/sc_gpu_terrain.c src/sc_gpu_fields.c
 )
 
 target_include_directories(UrbanRecomp PRIVATE
@@ -131,6 +130,28 @@ set(SC_DEVICE_SOURCES
 )
 target_sources(UrbanRecomp PRIVATE ${SC_DEVICE_SOURCES})
 
+# Let the compiler optimize the native simulation, map helpers and device
+# scheduler together. This must be a target property: a cache variable alone
+# does not enable LTO. Keep debug builds and unsupported toolchains usable.
+option(SC_LTO "Enable supported link-time optimization for release builds" OFF)
+if(SC_LTO)
+    include(CheckIPOSupported)
+    set(SC_IPO_LANGUAGES C)
+    if(CMAKE_CXX_COMPILER_LOADED)
+        list(APPEND SC_IPO_LANGUAGES CXX)
+    endif()
+    check_ipo_supported(RESULT SC_IPO_SUPPORTED OUTPUT SC_IPO_DIAGNOSTICS
+                        LANGUAGES ${SC_IPO_LANGUAGES})
+    if(SC_IPO_SUPPORTED)
+        set_target_properties(UrbanRecomp PROPERTIES
+            INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
+            INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+        message(STATUS "UrbanRecomp: release link-time optimization enabled")
+    else()
+        message(STATUS "UrbanRecomp: link-time optimization unavailable; using ordinary compilation")
+    endif()
+endif()
+
 # A trace build (-DSNESRECOMP_ENABLE_TRACE=ON) turns on the observability
 # rings in cpu_trace.h, and those call into the debug server. This target
 # hand-picks its sources instead of taking SNESRECOMP_RUNNER_SOURCES whole,
@@ -162,10 +183,8 @@ endif()
 #
 # Build the fallback with -DSNESRECOMP_SDL_BACKEND=SDL2.
 #
-# Known SDL3 gap: SDL_RenderReadPixels returns black on this backend, so
-# write_renderer_ppm() and SC_MENU_PREVIEW do not capture. The framebuffer
-# dump (SC_DUMP_AT / write_ppm) is unaffected and is the reliable check --
-# it is byte-identical between the two backends.
+# SDL GPU/Vulkan presentation and framebuffer dumps are independently verified.
+# Shader readback is a test-only path; ordinary gameplay does not wait for it.
 snesrecomp_target_sdl(UrbanRecomp)
 if(SC_HAVE_LAUNCHER)
     # Box art and window icon are derived from assets/urbanrecomp_logo.png by
@@ -262,22 +281,22 @@ if(BUILD_TESTING)
     add_test(NAME simcity_video COMMAND sc_video_test ${CMAKE_CURRENT_BINARY_DIR}/sc-test-video.ini)
     list(APPEND SC_RENDER_TESTS sc_video_test)
     endif()
-    add_executable(sc_renderer_test tests/sc_renderer_test.c src/sc_renderer.c src/sc_terrain.c src/sc_video.c
-                   src/sc_selector.c src/sc_titlesign.c)
+    add_executable(sc_renderer_test tests/sc_renderer_test.c src/sc_renderer.c src/sc_terrain.c src/sc_native_ppu.c src/sc_video.c
+                   src/sc_selector.c src/sc_titlesign.c src/sc_world.c src/sc_mapgen.c)
     target_include_directories(sc_renderer_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
     add_test(NAME simcity_renderer COMMAND sc_renderer_test)
-    add_executable(sc_scroll_renderer_test tests/sc_scroll_renderer_test.c src/sc_renderer.c src/sc_terrain.c
-                   src/sc_video.c src/sc_selector.c src/sc_titlesign.c)
+    add_executable(sc_scroll_renderer_test tests/sc_scroll_renderer_test.c src/sc_renderer.c src/sc_terrain.c src/sc_native_ppu.c
+                   src/sc_video.c src/sc_selector.c src/sc_titlesign.c src/sc_world.c src/sc_mapgen.c)
     target_include_directories(sc_scroll_renderer_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
     list(APPEND SC_RENDER_TESTS sc_scroll_renderer_test)
     add_test(NAME simcity_scroll_renderer COMMAND sc_scroll_renderer_test)
-    add_executable(sc_terrain_test tests/sc_terrain_test.c src/sc_renderer.c src/sc_terrain.c
-                   src/sc_video.c src/sc_selector.c src/sc_titlesign.c)
+    add_executable(sc_terrain_test tests/sc_terrain_test.c src/sc_renderer.c src/sc_terrain.c src/sc_native_ppu.c
+                   src/sc_video.c src/sc_selector.c src/sc_titlesign.c src/sc_world.c src/sc_mapgen.c)
     target_include_directories(sc_terrain_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
     list(APPEND SC_RENDER_TESTS sc_terrain_test)
     add_test(NAME simcity_deferred_terrain COMMAND sc_terrain_test)
     add_executable(UrbanRecompGpuTest EXCLUDE_FROM_ALL tests/sc_terrain_test.c src/sc_renderer.c
-                   src/sc_terrain.c src/sc_gpu_terrain.c src/sc_video.c src/sc_selector.c src/sc_titlesign.c)
+                   src/sc_terrain.c src/sc_native_ppu.c src/sc_gpu_terrain.c src/sc_gpu_fields.c src/sc_video.c src/sc_selector.c src/sc_titlesign.c src/sc_world.c src/sc_mapgen.c)
     target_include_directories(UrbanRecompGpuTest PRIVATE src ${CMAKE_BINARY_DIR} ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
     target_compile_definitions(UrbanRecompGpuTest PRIVATE SC_TEST_GPU=1)
     snesrecomp_target_sdl(UrbanRecompGpuTest)
@@ -441,11 +460,15 @@ if(SC_GEN_SOURCES)
     add_executable(UrbanRecompAOT EXCLUDE_FROM_ALL
         src/main.c
         src/sc_world.c
-        src/sc_world_guest.c
+        src/sc_world_guest.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c
         src/sc_development.c
         src/sc_population.c
         src/sc_mouse_ui.c
         src/sc_construction.c src/sc_refresh_clock.c src/sc_power_refresh.c
+        src/sc_clipboard.c
+        src/sc_math.c
+        src/sc_wait.c
+        src/sc_music.c src/sc_pcm.c
         src/sc_launcher.c
         src/sc_sram.c
         src/sc_icon.c
@@ -462,7 +485,7 @@ if(SC_GEN_SOURCES)
     src/sc_video.c
     $<$<BOOL:${SC_HAVE_LAUNCHER}>:${CMAKE_SOURCE_DIR}/src/sc_mods.c>
     src/sc_renderer.c
-    src/sc_terrain.c src/sc_gpu_terrain.c
+    src/sc_terrain.c src/sc_native_ppu.c src/sc_gpu_terrain.c src/sc_gpu_fields.c
         ${SNESRECOMP_ROOT}/runner/src/cpu_state.c
         ${SNESRECOMP_ROOT}/runner/src/common_cpu_infra.c
         ${SNESRECOMP_ROOT}/runner/src/common_rtl.c
@@ -561,7 +584,12 @@ add_executable(UrbanRecompFiberTest EXCLUDE_FROM_ALL
 target_include_directories(UrbanRecompFiberTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 add_executable(UrbanRecompPointerTest EXCLUDE_FROM_ALL tests/sc_pointer_test.c src/sc_video.c)
-add_executable(UrbanRecompPpuTest EXCLUDE_FROM_ALL tests/sc_ppu_test.c src/sc_ppu.c
+add_executable(sc_beam_test tests/sc_beam_test.c)
+target_include_directories(sc_beam_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+if(BUILD_TESTING)
+    add_test(NAME simcity_beam_events COMMAND sc_beam_test)
+endif()
+add_executable(UrbanRecompPpuTest EXCLUDE_FROM_ALL tests/sc_ppu_test.c src/sc_ppu.c src/sc_terrain.c src/sc_native_ppu.c
     ${SNESRECOMP_ROOT}/runner/src/snes/ppu_legacy.c
     ${SNESRECOMP_ROOT}/runner/src/snes/ws_shadow.c)
 target_include_directories(UrbanRecompPpuTest PRIVATE ${CMAKE_SOURCE_DIR}/src
@@ -580,32 +608,68 @@ endif()
 
 add_executable(UrbanRecompDevelopmentTest EXCLUDE_FROM_ALL
     tests/sc_development_test.c src/sc_development.c src/sc_population.c
-    src/sc_world.c src/sc_world_guest.c src/sc_mapgen.c
+    src/sc_world.c src/sc_world_guest.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c src/sc_mapgen.c
     ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
 target_include_directories(UrbanRecompDevelopmentTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
 
 add_executable(UrbanRecompConstructionTest EXCLUDE_FROM_ALL
     tests/sc_construction_test.c src/sc_construction.c
-    src/sc_world.c src/sc_world_guest.c src/sc_mapgen.c
+    src/sc_world.c src/sc_world_guest.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c src/sc_mapgen.c
     ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
 target_include_directories(UrbanRecompConstructionTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+
+add_executable(UrbanRecompClipboardTest EXCLUDE_FROM_ALL
+    tests/sc_clipboard_test.c src/sc_clipboard.c src/sc_construction.c
+    src/sc_world.c src/sc_world_guest.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c src/sc_mapgen.c src/sc_population.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
+target_include_directories(UrbanRecompClipboardTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+
+add_executable(UrbanRecompMathTest EXCLUDE_FROM_ALL
+    tests/sc_math_test.c src/sc_math.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
+target_include_directories(UrbanRecompMathTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
 
 add_executable(UrbanRecompMouseUiTest EXCLUDE_FROM_ALL tests/sc_mouse_ui_test.c src/sc_mouse_ui.c)
 target_include_directories(UrbanRecompMouseUiTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 add_executable(UrbanRecompPopulationTest EXCLUDE_FROM_ALL
-    tests/sc_population_test.c src/sc_population.c
+    tests/sc_population_test.c src/sc_population.c src/sc_world.c src/sc_mapgen.c
     ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
 target_include_directories(UrbanRecompPopulationTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
 
 add_executable(UrbanRecompMapGenTest EXCLUDE_FROM_ALL tests/sc_mapgen_test.c src/sc_mapgen.c)
+add_executable(UrbanRecompMusicTest EXCLUDE_FROM_ALL
+    tests/sc_music_test.c src/sc_music.c src/sc_pcm.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/apu.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/spc.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/dsp.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/dsp_shadow.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/audio_shadow.c
+    ${SNESRECOMP_ROOT}/runner/src/audio_trace.c)
+target_include_directories(UrbanRecompMusicTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+snesrecomp_target_sdl(UrbanRecompMusicTest)
+
+add_executable(UrbanRecompPcmTest EXCLUDE_FROM_ALL tests/sc_pcm_test.c src/sc_pcm.c)
+target_include_directories(UrbanRecompPcmTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# Imported soundtrack assets are optional and local. They are not bundled in
+# the repository or published by the build. A portable private build finds
+# the pack next to its executable, independently of its working directory.
+if(EXISTS "${CMAKE_SOURCE_DIR}/music/restored/scity-msu1-19.pcm")
+    add_custom_command(TARGET UrbanRecomp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/music/restored" "$<TARGET_FILE_DIR:UrbanRecomp>/music/restored")
+endif()
 target_include_directories(UrbanRecompMapGenTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 add_executable(UrbanRecompWorldTest EXCLUDE_FROM_ALL
-    tests/sc_world_test.c src/sc_world.c src/sc_world_guest.c src/sc_mapgen.c
+    tests/sc_world_test.c src/sc_world.c src/sc_world_guest.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c src/sc_mapgen.c
     src/sc_population.c
     ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
 target_include_directories(UrbanRecompWorldTest PRIVATE
@@ -613,14 +677,34 @@ target_include_directories(UrbanRecompWorldTest PRIVATE
 
 add_executable(UrbanRecompPowerRefreshTest EXCLUDE_FROM_ALL
     tests/sc_power_refresh_test.c src/sc_refresh_clock.c src/sc_power_refresh.c src/sc_construction.c
-    src/sc_world.c src/sc_world_guest.c src/sc_mapgen.c
+    src/sc_world.c src/sc_world_guest.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c src/sc_mapgen.c
     ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
 target_include_directories(UrbanRecompPowerRefreshTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
 
 add_executable(UrbanRecompJourneyTest EXCLUDE_FROM_ALL
     tests/sc_journey_test.c src/sc_journey.c src/sc_world.c src/sc_mapgen.c
-    src/sc_construction.c src/sc_world_guest.c
+    src/sc_construction.c src/sc_world_guest.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c
     ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
 target_include_directories(UrbanRecompJourneyTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+
+add_executable(UrbanRecompWaitTest EXCLUDE_FROM_ALL
+    tests/sc_wait_test.c src/sc_wait.c
+    ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
+target_include_directories(UrbanRecompWaitTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+
+# Whole-field compute uses the same Vulkan device as presentation. This target
+# requires a functioning SDL3 GPU renderer and is run explicitly on GPU hosts.
+if(SNESRECOMP_SDL_BACKEND STREQUAL "SDL3")
+    add_executable(UrbanRecompGpuFieldsTest EXCLUDE_FROM_ALL tests/sc_gpu_fields_test.c
+        src/sc_gpu_fields.c src/sc_gpu_terrain.c src/sc_renderer.c src/sc_terrain.c
+        src/sc_native_ppu.c src/sc_video.c src/sc_selector.c src/sc_titlesign.c
+        src/sc_world.c src/sc_mapgen.c)
+    target_include_directories(UrbanRecompGpuFieldsTest PRIVATE src ${CMAKE_BINARY_DIR} ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
+    snesrecomp_target_sdl(UrbanRecompGpuFieldsTest)
+    if(NOT MSVC)
+        target_link_libraries(UrbanRecompGpuFieldsTest PRIVATE m)
+    endif()
+endif()

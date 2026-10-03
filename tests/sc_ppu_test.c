@@ -1,4 +1,5 @@
 #include "sc_ppu.h"
+#include "sc_native_ppu.h"
 #include "snes/ppu.h"
 #include "snes/snes.h"
 #ifdef NDEBUG
@@ -25,8 +26,76 @@ static void equivalent(Ppu *a,Ppu *b) {
     assert(!memcmp(a->wsOamMotionGrace,b->wsOamMotionGrace,sizeof a->wsOamMotionGrace));
     assert(!memcmp(a->wsOamMotionX,b->wsOamMotionX,sizeof a->wsOamMotionX));
 }
+static void native_pixels(Ppu *full,Ppu *skip,uint8_t *image,uint8_t *scratch) {
+    ScTerrainFrame captured={0};assert(ScTerrainResize(&captured,256,224));
+    for(unsigned id=0;id<256;++id) {
+        ppu_reset(full);PpuSetExtraSpace(full,0);
+        full->inidisp=id%16;full->bgmode=1|(id&1?8:0);
+        full->bgTileAdr=0x321;full->bgXsc[0]=0x40|(id%4);
+        full->bgXsc[1]=0x50|((id/4)%4);full->bgXsc[2]=0x60|((id/16)%4);
+        full->screenEnabled[0]=id%32;full->screenEnabled[1]=(id*13)%32;
+        full->screenWindowed[0]=(id*7)%32;full->screenWindowed[1]=(id*19)%32;
+        full->cgadsub=id;full->cgwsel=(id*61)&0xfe;full->fixedColor=(id*197)&32767;
+        full->windowsel=(id*0x1b2935)&0xffffff;full->wbgobjlog=id*157;
+        full->window1left=id%128;full->window1right=255-id%64;
+        full->window2left=255-id%192;full->window2right=id%128;
+        full->obsel=(id%8)<<5;
+        for(unsigned i=0;i<0x8000;++i) full->vram[i]=(uint16_t)(i*197+(i>>3)*719+id*37);
+        for(unsigned i=0;i<256;++i) full->cgram[i]=(i*313+id*139)&32767;
+        for(unsigned i=0;i<128;++i) {
+            full->oam[i*2]=((i*13+id)%224)*256+((i*17+id)%256);
+            full->oam[i*2+1]=(i*11%256)|((i%8)<<9)|((i%4)<<12)|((i%4)<<14);
+        }
+        memset(full->highOam,id%2?0xaa:0,sizeof full->highOam);
+        *skip=*full;
+        uint32_t flags=(id&2?kPpuRenderFlags_NewRenderer:0)|(id&4?kPpuRenderFlags_NoSpriteLimits:0);
+        PpuBeginDrawing(full,image,kPpuBufWidth*4,flags);PpuBeginDrawing(skip,scratch,kPpuBufWidth*4,flags);
+        for(unsigned line=0;line<=224;++line) {
+            for(unsigned layer=0;layer<3;++layer) {
+                full->hScroll[layer]=skip->hScroll[layer]=(id*17+line*3+layer*251)&1023;
+                full->vScroll[layer]=skip->vScroll[layer]=(id*31+line*5+layer*193)&1023;
+            }
+            full->inidisp=skip->inidisp=(id+line/32)%16;
+            full->vram[0x1000+(line%2048)]=skip->vram[0x1000+(line%2048)]=(uint16_t)(line*719+id);
+            full->cgram[line%256]=skip->cgram[line%256]=(line*193+id*139)&32767;
+            ScPpuReferenceLine(full,line);ScPpuSkipPixels(true);ppu_runLine(skip,line);
+            equivalent(full,skip);
+            assert(ScNativePpuSupported(skip));
+            if(!line) continue;
+            ScNativePpuCapture(&captured,skip,line-1,line);
+            const uint32_t *expected=(const uint32_t *)(image+(line-1)*kPpuBufWidth*4);
+            for(unsigned x=0;x<256;++x) {
+                uint32_t actual=ScNativePixel(&captured,x,line-1);
+                if((actual&0xffffff)!=(expected[x]&0xffffff)) {
+                    fprintf(stderr,"native pixel case=%u flags=%u line=%u x=%u actual=%08x expected=%08x\n",id,flags,line,x,actual,expected[x]);
+                    fprintf(stderr,"main/sub buffers=%04x/%04x math=%02x control=%02x win=%x/%x screens=%x/%x\n",full->bgBuffers[0].data[x+kPpuExtraLeftRight],full->bgBuffers[1].data[x+kPpuExtraLeftRight],full->cgadsub,full->cgwsel,full->screenWindowed[0],full->screenWindowed[1],full->screenEnabled[0],full->screenEnabled[1]);
+                    fprintf(stderr,"obj=%04x/%04x windows=%x logic=%x bounds=%u,%u,%u,%u fixed=%x\n",full->objBuffer.data[x+kPpuExtraLeftRight],skip->objBuffer.data[x+kPpuExtraLeftRight],full->windowsel,full->wbgobjlog,full->window1left,full->window1right,full->window2left,full->window2right,full->fixedColor);
+                    for(unsigned l=0;l<3;++l) {unsigned px=x+captured.native[line-1].phase[l];ScNativeTile t=captured.native[line-1].tiles[l][px/8];fprintf(stderr,"layer%u phase=%u planes=%08x word=%04x\n",l,captured.native[line-1].phase[l],t.planes,t.attributes);}
+                    abort();
+                }
+            }
+        }
+        ++snes_frame_counter;
+    }
+    skip->bgmode=0;assert(!ScNativePpuSupported(skip));skip->bgmode=0x11;assert(!ScNativePpuSupported(skip));
+    skip->bgmode=1;skip->mosaic=0x11;assert(!ScNativePpuSupported(skip));skip->mosaic=0;
+    skip->setini=8;assert(!ScNativePpuSupported(skip));skip->setini=1;assert(!ScNativePpuSupported(skip));
+    skip->setini=0;skip->inidisp=0x80;assert(!ScNativePpuSupported(skip));
+    ScTerrainDestroy(&captured);ScPpuSkipPixels(false);
+    puts("PASS: 256 complete native Mode 1 frames match both PPU renderers, live VRAM/palettes, phase/wrap/flip, OAM, windows, colour math and brightness");
+}
 int main(void) {
     Ppu *full=ppu_init(),*skip=ppu_init();assert(full && skip);
+    /* Both byte ports and explicit host writes publish a render-only revision.
+     * Unrelated registers leave it alone; guest VRAM/remap semantics match. */
+    ppu_reset(full);full->vramPointer=0x1234;full->vramIncrementOnHigh=true;
+    uint64_t revision=ScPpuVramRevision(full);
+    ppu_write(full,0x18,0x5a);assert(full->vram[0x1234]==0x005a);
+    assert(ScPpuVramRevision(full)==revision+1);
+    ppu_write(full,0x19,0xa7);assert(full->vram[0x1234]==0xa75a);
+    assert(ScPpuVramRevision(full)==revision+2);
+    ppu_write(full,0,15);assert(ScPpuVramRevision(full)==revision+2);
+    ScPpuVramChanged();assert(ScPpuVramRevision(full)==revision+3);
     size_t bytes=kPpuBufWidth*4*240;
     uint8_t *images[2]={calloc(1,bytes),calloc(1,bytes)};assert(images[0] && images[1]);
     for(unsigned case_id=0;case_id<32;++case_id) {
@@ -65,6 +134,7 @@ int main(void) {
             ++snes_frame_counter;
         }
     }
+    ScPpuMeasurePixels(NULL,1);native_pixels(full,skip,images[0],images[1]);
     ScPpuSkipPixels(false);free(images[0]);free(images[1]);ppu_free(full);ppu_free(skip);
     puts("PASS: skipped PPU pixels retain flags, OAM, brightness and next displayed frame (32 cases)");
     return 0;

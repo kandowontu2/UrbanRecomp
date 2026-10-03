@@ -25,6 +25,9 @@ ScViewport ScVideoViewport(const ScVideoSettings *settings, int width, int heigh
 ScVideoRect ScVideoDestination(ScViewport view, int width, int height);
 /* Capture the displayed tile scale before expanding the drawable window. */
 void ScVideoCaptureScale(ScVideoSettings *settings, ScViewport view, int width, int height);
+/* Change tile scale while retaining a complete native HUD and the drawable
+ * window. Smaller scales expose more land rather than resizing the window. */
+bool ScVideoZoom(ScVideoSettings *settings,ScViewport current,int width,int height,double factor);
 bool ScVideoToGuest(ScViewport view, ScVideoRect destination, double x, double y,
                    int *guest_x, int *guest_y);
 /* SDL pointer coordinates are window units; destination is drawable pixels.

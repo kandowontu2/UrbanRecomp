@@ -47,10 +47,36 @@ static void check_fit_scale(void) {
         assert(d.w<=64 && d.h<=64); /* Shrinking retains the full native UI. */
     }
 }
+static void check_zoom(void) {
+    for(unsigned dpi=1;dpi<=3;++dpi) for(unsigned centered=0;centered<2;++centered) {
+        int w=1920*dpi,h=1080*dpi;
+        ScVideoSettings s={.enabled=true,.aspect=SC_FIT,.centered=centered,
+            .fit_scale=3*dpi,.fit_pixel_aspect=7.0/6};
+        ScViewport before=ScVideoViewport(&s,w,h);
+        assert(ScVideoZoom(&s,before,w,h,.5));
+        ScViewport after=ScVideoViewport(&s,w,h);ScVideoRect d=ScVideoDestination(after,w,h);
+        assert(after.width>=before.width*2-2 && after.height>=before.height*2-2);
+        assert(after.pixel_scale==before.pixel_scale*.5 && d.w<=w && d.h<=h);
+        int x,y;
+        double px=d.x+(after.core_x+128.5)*d.w/after.width;
+        double py=d.y+(after.core_y+112.5)*d.h/after.height;
+        assert(ScVideoToGuest(after,d,px,py,&x,&y) && x==128 && y==112);
+        assert(ScVideoZoom(&s,after,w,h,2));
+        assert(fabs(s.fit_scale-before.pixel_scale)<1e-9);
+        assert(ScVideoZoom(&s,ScVideoViewport(&s,w,h),w,h,1e-30));
+        after=ScVideoViewport(&s,w,h);assert(after.width<=SC_MAX_CANVAS && after.height<=SC_MAX_CANVAS);
+        assert(ScVideoZoom(&s,after,w,h,1e30));
+        after=ScVideoViewport(&s,w,h);assert(after.width>=256 && after.height>=224);
+        ScVideoSettings valid=s;
+        assert(!ScVideoZoom(&s,after,w,h,NAN) && !ScVideoZoom(&s,after,w,h,0));
+        assert(!ScVideoZoom(&s,after,0,h,2));assert(!memcmp(&s,&valid,sizeof s));
+    }
+}
 
 int main(int argc,char **argv) {
     assert(argc==2);
     check_fit_scale();
+    check_zoom();
     ScVideoSettings s; ScVideoDefaults(&s);
     /* The adaptive renderer is the default, at 21:9. */
     assert(s.enabled && s.aspect==SC_21_9 && !s.centered);

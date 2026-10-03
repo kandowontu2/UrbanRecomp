@@ -16,6 +16,7 @@
  * is understood well enough to declare it safely -- see README.md.
  */
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -32,6 +33,7 @@
  * for how upstream does each one. */
 #include "sc_sdl_compat.h"
 #include "sc_gpu_terrain.h"
+#include "sc_gpu_fields.h"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -101,10 +103,16 @@ uint8_t    g_ram[0x20000];
 #include "sc_mapgen.h"
 #include "sc_decomp.h"
 #include "sc_development.h"
+#include "sc_math.h"
+#include "sc_tile_lookup.h"
+#include "sc_wait.h"
+#include "sc_music.h"
+#include "sc_beam.h"
 #include "sc_ppu.h"
 #include "sc_population.h"
 #include "sc_mouse_ui.h"
 #include "sc_construction.h"
+#include "sc_clipboard.h"
 #include "sc_power_refresh.h"
 #include "sc_world_guest.h"
 #include "sc_journey.h"
@@ -113,10 +121,12 @@ static ScWorldGuest s_world_guest;
 static bool s_perf_detail;
 static double s_perf_clock_ms,s_perf_raster_ms,s_perf_power_ms;
 static uint64_t s_perf_spatial_cells;
+static uint64_t s_perf_native_development_calls;
 static bool s_skip_custom_frame;
 static bool s_measure_custom_frame;
 static double s_custom_frame_ms;
-static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge, 3 960x800 */
+static double s_perf_custom_ms,s_perf_native_ms;
+static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge, 3 960x800, 4 1920x1600 */
 static bool s_journey_arming;
 static unsigned s_journey_menu_selection;
 static unsigned s_loading_slot;
@@ -154,6 +164,14 @@ static int s_build_x0, s_build_y0, s_build_x1, s_build_y1;
 static int s_build_scroll_x, s_build_scroll_y;
 static unsigned s_build_tool;
 static uint64_t s_build_release_frame;
+static ScClipboard s_clipboard;
+static unsigned s_clip_tool, s_clip_pending; /* 0 native, 1 Copy, 2 Paste */
+static ScMousePan s_middle_pan;
+static bool s_clip_drag, s_clip_hover;
+static int s_clip_x0,s_clip_y0,s_clip_x1,s_clip_y1;
+static int s_clip_scroll_x,s_clip_scroll_y;
+static unsigned s_clip_native_tool;
+static void commit_clipboard(void);
 static bool s_map_mouse_accept_pending;
 static bool s_map_mouse_refresh_pending;
 static void commit_mouse_construction(void);
@@ -164,15 +182,29 @@ Snes      *g_snes;
 Ppu       *g_ppu;
 static Interp816 *g_cpu;
 static uint64_t   g_master_cycles;
+static uint64_t sc_audio_guest_cycle(void) {
+  return (g_master_cycles/21477272u)*1025280u+
+      (g_master_cycles%21477272u)*1025280u/21477272u;
+}
+static void sc_catchup_apu(Snes *snes) {
+  if(ScMusicRunning()) {
+    /* Preserve the guest clock's fraction while the audio worker owns SPC
+     * synthesis. No mutex or sample production on the hot opcode path. */
+    if(snes->apuCatchupCycles>=1.0) snes->apuCatchupCycles-=(uint64_t)snes->apuCatchupCycles;
+  } else snes_catchupApu(snes);
+}
 
 /* ── RTL glue the device sources call. This host bypasses common_rtl.c (the
  * AOT/CpuState runtime) entirely for Phase 1, so these are the same
  * minimal no-op/direct implementations snesrecomp's own reference driver
  * uses (cosim/ref_driver.c) rather than a game-specific reinterpretation. */
-void RtlApuLock(void)   {}
-void RtlApuUnlock(void) {}
-void rtl_sync_apu_to_cpu_locked(void) {}
-void RtlApuWrite(uint16 adr, uint8 val) { g_snes->apu->inPorts[adr & 3] = val; }
+void RtlApuLock(void)   {ScMusicLock();}
+void RtlApuUnlock(void) {ScMusicUnlock();}
+void rtl_sync_apu_to_cpu_locked(void) {ScMusicSyncLocked(sc_audio_guest_cycle());}
+void RtlApuWrite(uint16 adr, uint8 val) {
+  if(ScMusicRunning()) ScMusicWrite(adr&3,val,sc_audio_guest_cycle());
+  else g_snes->apu->inPorts[adr&3]=val;
+}
 void rtl_accumulate_apu_catchup(void) {}
 void NORETURN Die(const char *e) { fprintf(stderr, "FATAL: %s\n", e ? e : "(null)"); exit(1); }
 void debug_on_wram_write_byte(uint32_t a, uint8_t o, uint8_t n) { (void)a; (void)o; (void)n; }
@@ -1075,7 +1107,14 @@ static void handle_pos_stuff(void) {
         }
         const uint8_t saved = g_ppu->screenWindowed[1];
         if (sub_window_mask >= 0) g_ppu->screenWindowed[1]=(uint8_t)sub_window_mask;
+        bool skipped=ScPpuPixelsSkipped();
+        s_custom_renderer.native_line=false;
+        bool native_gpu=s_custom_video.enabled && !s_skip_custom_frame &&
+            sub_window_mask<0 && g_snes_ppu_dbg_layer_mask==0xff &&
+            ScRendererDeferNativeLine(&s_custom_renderer,g_ppu,g_ram,snes->vPos-1);
+        if(native_gpu) ScPpuSkipPixels(true);
         ppu_runLine(g_ppu, snes->vPos);
+        ScPpuSkipPixels(skipped);
         g_ppu->screenWindowed[1]=saved;
       }
       if (s_custom_video.enabled && !s_skip_custom_frame && snes->vPos == 1)
@@ -2055,10 +2094,14 @@ static unsigned long s_gen_trigger_hits;
 static int s_bank_profile;
 static unsigned long long s_bank_ops[256];
 static unsigned long long s_b3_page[256];
+static int s_pc_profile_page=-1;
+static unsigned long long s_pc_profile_ops[256];
 /* Which bank the per-page breakdown covers. Default 03 (the simulation),
  * but the overview-map load lives in banks 00/02, and a breakdown nailed
  * to one bank cannot see that. SC_BANK_PROFILE_PAGE=02. */
 static int s_bank_page_sel = 3;
+static uint64_t s_interpreter_bank_ops[256],s_interpreter_pages[256],s_interpreter_pc[256];
+
 static unsigned long long s_tick_count, s_tick_frames_total, s_tick_ops_total;
 static unsigned long long s_tick_frames_max, s_tick_start_frame, s_tick_start_ops;
 
@@ -2068,6 +2111,7 @@ static unsigned long long s_tick_frames_max, s_tick_start_frame, s_tick_start_op
  * are redistributed. The host solve also respects plant capacity and every
  * expanded-map cell instead of temporarily powering the stock 12,000 cells. */
 static bool s_power_fix = true;
+static bool s_mute_city_warnings;
 static uint32_t s_power_fix_hits;
 static void restore_loaded_power(void);
 static void apply_power_fix(void) { restore_loaded_power(); }
@@ -2222,7 +2266,7 @@ static void sc_beam_step(void) {
   g_beam_steps++;
   handle_pos_stuff();
   g_snes->apuCatchupCycles += 2.0 * kApuCyclesPerMaster;
-  if (++steps >= 24) { steps = 0; snes_catchupApu(g_snes); }
+  if (++steps >= 24) { steps = 0; sc_catchup_apu(g_snes); }
 }
 void sc_advance_beam_one_frame(void) {
   uint64_t before = s_frames;
@@ -2230,7 +2274,7 @@ void sc_advance_beam_one_frame(void) {
   while (s_frames == before && guard++ < 400000) {
     sc_beam_step();
   }
-  snes_catchupApu(g_snes);
+  sc_catchup_apu(g_snes);
 }
 
 /* Advance until the auto-joypad read has finished.
@@ -2251,7 +2295,7 @@ void sc_advance_until_input_ready(void) {
   while (g_snes->autoJoyTimer && guard++ < 40000) {
     sc_beam_step();
   }
-  snes_catchupApu(g_snes);
+  sc_catchup_apu(g_snes);
 }
 
 /* Catch a vblank entry that happened inside the bridge rather than in this
@@ -2329,7 +2373,7 @@ static bool run_one_frame_fiber(void) {
   { unsigned guard = 0;
     while (!g_snes->inVblank && s_frames == before && guard++ < 400000)
       sc_beam_step();
-    snes_catchupApu(g_snes); }
+    sc_catchup_apu(g_snes); }
 
   /* Hand the host's NMI request to the guest rather than faking its effect --
    * handle_pos_stuff() raises it on g_cpu, the Interp816, which never executes
@@ -2351,7 +2395,7 @@ static bool run_one_frame_fiber(void) {
     /* Cross the boundary with the guest stopped. This is the present. */
     { unsigned guard = 0;
       while (s_frames == before && guard++ < 400000) sc_beam_step();
-      snes_catchupApu(g_snes); }
+      sc_catchup_apu(g_snes); }
 
     /* Slice B: the remainder of this frame's budget, capped so the beam
      * cannot reach the NEXT boundary either. No NMI -- one per frame. */
@@ -2399,7 +2443,7 @@ static bool run_one_frame_fiber(void) {
       while (delta) {
         uint32_t chunk = delta > 4096u ? 4096u : (uint32_t)delta;
         g_snes->apuCatchupCycles += (double)chunk * kApuCyclesPerMaster;
-        snes_catchupApu(g_snes);
+        sc_catchup_apu(g_snes);
         delta -= chunk;
       }
     }
@@ -2458,6 +2502,7 @@ static const int kDevelopmentSpeeds[] = {1, 2, 5, 10, 50};
 static const char *const kDevelopmentSpeedNames[] = {"NORMAL", "X2", "X5", "X10", "X50"};
 static ScDevelopment s_development;
 static ScPopulation s_population;
+static ScPopulationCensus *s_population_census;
 static ScRefreshClock s_population_clock;
 static ScPowerRefresh s_power_refresh;
 static bool s_native_power_active;
@@ -2532,7 +2577,7 @@ static void world_saved_city(bool save) {
   unsigned slot=!save && s_city_loading?s_loading_slot:(g_ram[addr]|(g_ram[addr+1]<<8))==1?0:1;
   if (!save) {
     if (ScWorldCityLoad(&s_world,data,size,g_snes->cart->ram,slot)) {
-      fprintf(stderr,"world: loaded city slot %u (%s)\n",slot+1,s_world.active?(s_world.giant?"960x800":s_world.huge?"480x400":"240x200"):"120x100");
+      fprintf(stderr,"world: loaded city slot %u (%s)\n",slot+1,s_world.active?(s_world.colossal?"1920x1600":s_world.giant?"960x800":s_world.huge?"480x400":"240x200"):"120x100");
       if (s_world.active) {
         bool hud=(g_ram[0x1d7]|g_ram[0x1d8])!=0;
         ram_set_w(0x1c5,ScWorldWidth(&s_world)-(hud?25:30));
@@ -3469,6 +3514,23 @@ static int sc_audio_rate_control(const int16_t *in, int n, uint32_t queued,
  *
  * The fiber tier keeps snes.c's own behaviour: its bridge sets and restores
  * the flag itself and syncs the beam from the CpuState clock. */
+static void sc_advance_beam(uint64_t clocks) {
+  static int reference=-1;
+  if(reference<0) {const char *e=getenv("SC_BEAM_REFERENCE");reference=e && *e!='0';}
+  /* The old two-clock driver samples 0 (scanout), 1024 (HDMA/vertical IRQ),
+   * the programmed horizontal IRQ, and 1362 (line/frame wrap). Between those
+   * events only beam position and the auto-joy countdown change. */
+  clocks=(clocks+1)&~UINT64_C(1);
+  while(clocks) {
+    unsigned remaining=clocks>1364?1364:(unsigned)clocks;
+    unsigned idle=reference?0:ScBeamIdleClocks(g_snes->hPos,g_snes->vPos,remaining,
+        g_snes->hIrqEnabled,g_snes->vIrqEnabled,g_snes->hTimer,g_snes->vTimer);
+    if(idle) {
+      g_snes->autoJoyTimer=g_snes->autoJoyTimer<=idle?0:(uint16_t)(g_snes->autoJoyTimer-idle);
+      g_snes->hPos+=idle;clocks-=idle;
+    } else {handle_pos_stuff();clocks-=2;}
+  }
+}
 static void sc_charge_master_cycles(Snes *snes, uint64_t clocks) {
 #ifdef SC_AOT_TIER
   if (s_fiber_mode) {
@@ -3481,7 +3543,7 @@ static void sc_charge_master_cycles(Snes *snes, uint64_t clocks) {
   }
 #endif
   g_master_cycles += clocks;
-  for (uint64_t i = 0; i < clocks; i += 2) handle_pos_stuff();
+  sc_advance_beam(clocks);
   snes->apuCatchupCycles += (double)clocks * kApuCyclesPerMaster;
 }
 
@@ -3492,6 +3554,14 @@ static void sc_own_the_beam(void) {
   if (s_fiber_mode) return;
 #endif
   g_interp_apu_driving = 1;
+}
+
+static bool refresh_live_population(const uint8_t *rom,size_t size) {
+  static int reference=-1;
+  if(reference<0) {const char *e=getenv("SC_POPULATION_CENSUS_REFERENCE");reference=e && *e=='1';}
+  if(reference) return ScPopulationRefreshLive(&s_population,g_ram,&s_world,rom,size);
+  if(!s_population_census) s_population_census=ScPopulationCensusCreate();
+  return ScPopulationRefreshCached(s_population_census,&s_population,g_ram,&s_world,rom,size);
 }
 
 static bool run_one_frame(void) {
@@ -3509,7 +3579,7 @@ static bool run_one_frame(void) {
   else if (host_map_screen_live() && !ram_w(0xd7) &&
       (!s_population.live || population_due)) {
     uint64_t prior=s_population.value;
-    ScPopulationRefreshLive(&s_population,g_ram,&s_world,g_snes->cart->rom,g_snes->cart->romSize);
+    refresh_live_population(g_snes->cart->rom,g_snes->cart->romSize);
     if (getenv("SC_POPULATION_DIAG") && s_population.value!=prior)
       fprintf(stderr,"[population] frame %llu speed %d value %llu -> %llu\n",
           (unsigned long long)s_frames,s_development_speed,
@@ -3540,6 +3610,8 @@ static bool run_one_frame(void) {
   }
   long guard = 20000000L * s_development_speed;
   const bool power_diag=getenv("SC_POWER_DIAG")!=NULL;
+  static int native_diag=-1;
+  if(native_diag<0) native_diag=getenv("SC_NATIVE_DIAG")!=NULL;
   /* The extra attempts are bounded but can share one host frame; give
    * them a proportional instruction allowance. Normal retains the old bar. */
   while (s_frames < target && guard-- > 0) {
@@ -3555,6 +3627,7 @@ static bool run_one_frame(void) {
     if (s_bank_profile) {
       s_bank_ops[cpu->k]++;
       if (cpu->k == s_bank_page_sel) s_b3_page[cpu->pc >> 8]++;
+      if(cpu->k==s_bank_page_sel && (cpu->pc>>8)==s_pc_profile_page) ++s_pc_profile_ops[cpu->pc&255];
       if (cpu->k == 0x03 && cpu->pc == 0x8000) {
         s_tick_count++;
         s_tick_start_frame = s_frames;
@@ -3650,7 +3723,7 @@ static bool run_one_frame(void) {
         pr.s1 = (uint16_t)(g_ram[0x5b] | (g_ram[0x5c] << 8));
         pr.t  = (uint16_t)(g_ram[0x5d] | (g_ram[0x5e] << 8));
         if (s_large_maps && !s_journey_arming && s_rom_fnv==SC_ROM_FNV_US) {
-          if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr); else if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr); else ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
+          if(s_large_maps==4) ScWorldGenerateColossal(&s_world,&pr); else if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr); else if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr); else ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
         } else {
           ScWorldReset(&s_world); sc_mapgen_generate(&pr, &gs);
           s_world.journey=s_journey_arming;
@@ -3701,6 +3774,33 @@ static bool run_one_frame(void) {
      * 03:ce61 is the scenario equivalent -- map in place, about to return. */
     if (s_ninth_scenario) ninth_scenario_hook(cpu->k, cpu->pc);
     if (s_rom_is_us) {
+      /* Suppress only these notice/adviser publications. Their crime,
+       * traffic and pollution calculations and all other events still run.
+       * The original routine's RTS keeps the caller's stack intact. */
+      if(s_mute_city_warnings && cpu->k==3 && !cpu->mf) {
+        unsigned id=cpu->a;
+        if(cpu->pc==0xc030 && (id==9 || id==10 || id==11 || id==27))
+          cpu->pc=0xc085;
+        else if((cpu->pc==0xbe0b || cpu->pc==0xc08b) &&
+            (id==6 || id==7 || id==8 || id==21 || id==30 || id==40)) {
+          if(getenv("SC_SETTINGS_DIAG")) fprintf(stderr,"[settings] suppressed city warning %u\n",id);
+          cpu->pc=cpu->pc==0xbe0b?0xbe11:0xc094;
+        }
+      }
+      if(s_mute_city_warnings && cpu->k==1 && cpu->pc==0x8976 &&
+          cpu->dp==0 && cpu->db==0) {
+        /* Also discard a pending publication restored from a save or queued
+         * before F12 was opened. Already-open adviser panels keep their native
+         * close path; do not interrupt a gift or milestone visit. */
+        unsigned id=ram_w(0x397),notice=ram_w(0x389);
+        if(!ram_w(0x391) && (id==6 || id==7 || id==8 || id==21 || id==30 || id==40)) {
+          ram_set_w(0x395,0);ram_set_w(0x397,0);
+        }
+        if(notice==10 || notice==11 || notice==12 || notice==28) ram_set_w(0x389,0);
+        notice=ram_w(0x381);
+        if(ram_w(0x387) && (notice==9 || notice==10 || notice==11 || notice==27))
+          ram_set_w(0x38b,0); /* ordinary notice expiry clears its panel */
+      }
       if(cpu->k==3 && cpu->pc==0xd306) {s_size_selecting=false;s_practice_size_pending=false;ScMapSizeMenuSet(false);}
       if(s_size_selecting && cpu->k==3 && cpu->pc==0xd337) cpu->pc=0xd33b;
       if(s_size_selecting && cpu->k==3 && cpu->pc==0xd333 && (g_ram[0xc9]&0x80)) {
@@ -3713,9 +3813,14 @@ static bool run_one_frame(void) {
         ScJourneyMenuFont(g_ppu->vram);
         ScJourneyMenuFrame(g_ppu->vram,PPU_bgTilemapAdr(g_ppu,2));
       }
-      if(cpu->k==2 && cpu->pc==0xbcfe)
-        cpu->a=(cpu->a&0xff00)|ScJourneyMenuY(!ScMapSizeMenuActive() && ram_w(0x44)!=0,
-            ram_w(0x14)==2 || ram_w(0x14)==3 || ram_w(0x14)==18?ram_w(0x3e):s_journey_menu_selection);
+      if(cpu->k==2 && cpu->pc==0xbcfe) {
+        unsigned selection=ScMapSizeMenuActive() && !s_size_selecting?s_large_maps+1:
+            ram_w(0x14)==2 || ram_w(0x14)==3 || ram_w(0x14)==18?ram_w(0x3e):s_journey_menu_selection;
+        cpu->a=(cpu->a&0xff00)|ScJourneyMenuY(!ScMapSizeMenuActive() && ram_w(0x44)!=0,selection);
+        if(ScMapSizeMenuActive() && getenv("SC_SIZE_MENU_DIAG"))
+          fprintf(stderr,"[map-size pointer] frame %llu choice %u y %u selecting %d action %u\n",
+            (unsigned long long)s_frames,selection,cpu->a&255,s_size_selecting,ram_w(0x3e));
+      }
       /* Open the size page before e574 starts the native exit fade. */
       if(cpu->k==3 && cpu->pc==0xd366 && !s_size_selecting &&
           (ram_w(0x3e)==1 || ram_w(0x3e)==2)) {
@@ -3725,7 +3830,7 @@ static bool run_one_frame(void) {
       if(cpu->k==3 && cpu->pc==0xd369) {
         unsigned selected=ram_w(0x3e);
         if(s_size_selecting) {
-          s_large_maps=selected>=1 && selected<=4?selected-1:0;
+          s_large_maps=selected>=1 && selected<=5?selected-1:0;
           save_large_map_setting();s_size_selecting=false;
           selected=s_size_game_choice;ram_set_w(0x3e,selected);
           s_practice_size_pending=selected==1;
@@ -3781,6 +3886,8 @@ static bool run_one_frame(void) {
     if (s_build_pending && s_rom_is_us && cpu->k == 1 && cpu->pc == 0x897f &&
         cpu->dp == 0 && cpu->db == 0 && host_map_screen_live())
       commit_mouse_construction();
+    if (s_clip_pending && s_rom_is_us && cpu->k==1 && cpu->pc==0x897f &&
+        cpu->dp==0 && cpu->db==0 && host_map_screen_live()) commit_clipboard();
     if (s_population.live && s_rom_is_us && cpu->k==1 && cpu->pc==0x897f &&
         cpu->dp==0 && cpu->db==0 && host_map_screen_live() && !ram_w(0xd7))
       ScPopulationMirror(&s_population,g_ram);
@@ -3997,10 +4104,12 @@ static bool run_one_frame(void) {
       for (int i = 0; i < s_addr_trace_count; i++) {
         if (s_addr_trace_pcs[i] == pc && s_addr_trace_hits[i] < 200) {
           fprintf(stderr, "[addrtrace f=%llu] pc=%02x:%04x a=%04x x=%04x y=%04x "
-                  "s=%04x d=%04x db=%02x m%s x%s hit#%u\n",
+                  "s=%04x d=%04x db=%02x m%s x%s p=%02x nmi=%u irq=%u e=%u wait=%u stop=%u world=%u hit#%u\n",
                   (unsigned long long)s_frames, cpu->k, cpu->pc, cpu->a, cpu->x,
                   cpu->y, cpu->sp, cpu->dp, cpu->db, cpu->mf ? "8" : "16",
-                  cpu->xf ? "8" : "16", s_addr_trace_hits[i]);
+                  cpu->xf ? "8" : "16", interp816_getFlags(cpu), (unsigned)cpu->nmiWanted,
+                  (unsigned)cpu->irqWanted, (unsigned)cpu->e, (unsigned)cpu->waiting,
+                  (unsigned)cpu->stopped, (unsigned)s_world.active, s_addr_trace_hits[i]);
           if (s_addr_trace_hits[i] < 40) {
             fprintf(stderr, "  pc history (oldest..newest, this pc last):\n");
             int n = s_pc_history_filled;
@@ -4047,6 +4156,12 @@ static bool run_one_frame(void) {
       if(power_writeback && cpu->pc==0xb1a4) {
         s_native_power_active=false;
         if(s_development_speed>1) refresh_fast_power(true);
+        else if(s_world.giant) {
+          /* The guest's word-sized branch stack cannot cover these maps.
+           * Publish the full-width C network on the same Normal power tick. */
+          ScPowerRefreshRestore(&s_power_refresh,g_ram,&s_world,g_snes->cart->rom,
+              g_snes->cart->romSize,s_frames);
+        }
       }
       ScWorldGuestVehicles(&s_world, cpu, g_ram, g_snes->multiplyA);
     }
@@ -4058,7 +4173,7 @@ static bool run_one_frame(void) {
       if (cpu->pc == 0xcbe2) world_saved_city(true);
       if(cpu->pc==0xc633 && s_practice_size_pending) {
         ScMapGenPrng pr={ram_w(0x59),ram_w(0x5b),ram_w(0x5d)};
-        if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr);
+        if(s_large_maps==4) ScWorldGenerateColossal(&s_world,&pr); else if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr);
         else if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr);
         else if(s_large_maps==1) ScWorldGenerate(&s_world,&pr);
         if(s_world.active) {
@@ -4077,7 +4192,7 @@ static bool run_one_frame(void) {
       if (cpu->pc==0x81a3) {
         ScRefreshClockObserve(&s_population_clock,s_frames);
         if (s_population.live)
-          ScPopulationRefreshLive(&s_population,g_ram,&s_world,g_snes->cart->rom,g_snes->cart->romSize);
+          refresh_live_population(g_snes->cart->rom,g_snes->cart->romSize);
       }
       uint16_t population_pc = ScPopulationStep(&s_population, g_ram, cpu->pc, cpu->dp);
       if(cpu->pc==0x81a3 && s_population.valid) ScJourneyObservePopulation(&s_world,s_population.value);
@@ -4136,11 +4251,86 @@ static bool run_one_frame(void) {
       !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i);
     const uint32_t executed_pc=((uint32_t)cpu->k<<16)|cpu->pc;
     const bool interrupt_work=cpu->nmiWanted || (cpu->irqWanted && !cpu->i);
+    /* The clean US driver's music command write (not its upload/SFX ports).
+     * Keep its following acknowledgement store consistent with the SPC-zero
+     * substitution. The ROM bytes and all other port writes remain original. */
+    if(s_rom_is_us && !interrupt_work && cpu->k==0 && cpu->pc==0x9882 && cpu->mf && cpu->dp==0)
+      cpu->a=(cpu->a&0xff00)|ScMusicCommand((uint8_t)cpu->a);
+    if(s_rom_is_us && !interrupt_work && cpu->k==1 && cpu->pc==0xa9c4 && !cpu->mf)
+      ScMusicEnabled((cpu->a&8)!=0);
     ScWorldGuestBegin(&s_world_guest, &s_world, cpu, g_snes->cart->rom, g_snes->cart->romSize);
-    unsigned fast_cycles=0;
+    unsigned fast_cycles=0,fast_budget=0;
+    static int native_simulation=-1;
+    if(native_simulation<0) {const char *e=getenv("SC_NATIVE_SIMULATION");native_simulation=!e || *e!='0';}
+    static int extra_beam_reference=-1;
+    if(extra_beam_reference<0) {const char *e=getenv("SC_EXTRA_BEAM_REFERENCE");extra_beam_reference=e && *e=='1';}
+    const bool extra_native=development_work && native_simulation && !extra_beam_reference;
+    if(native_simulation && s_rom_fnv==SC_ROM_FNV_US && !interrupt_work &&
+       cpu->k==1 && ScTileLookupOwns(cpu->pc)) {
+      /* Tile lookup publishes scratch and hardware-multiply state at its
+       * original boundaries, before the next scanout/HDMA/IRQ event. */
+      unsigned boundary=snes->hPos<1024?1024:1364;
+      if(snes->hIrqEnabled && (!snes->vIrqEnabled || snes->vPos==snes->vTimer+1)) {
+        unsigned irq=4*snes->hTimer;
+        if(irq>=snes->hPos && irq<boundary) boundary=irq;
+      }
+      if(snes->hPos && boundary>snes->hPos+2)
+        fast_cycles=ScTileLookupStep(&s_world,cpu,g_ram,g_snes->cart->rom,
+            g_snes->cart->romSize,(boundary-snes->hPos-2)/8);
+      if(fast_cycles) s_world_guest.mapped=false;
+    }
+    if(native_simulation && development_work && s_rom_fnv==SC_ROM_FNV_US && !interrupt_work) {
+      static bool native_layout_reported;
+      if(!native_layout_reported && native_diag) {
+        fprintf(stderr,"[native C] extra attempt pc=%x dp=%x sp=%x\n",cpu->pc,cpu->dp,cpu->sp);native_layout_reported=true;
+      }
+      if(cpu->pc==0x9a3e) fast_cycles=ScWorldGuestHousingStep(&s_world,cpu,g_ram,512);
+      if(cpu->pc==0x987f) fast_cycles=ScWorldGuestHouseSiteStep(&s_world,cpu,g_ram,
+          g_snes->cart->rom,g_snes->cart->romSize,512);
+      if(!fast_cycles) fast_cycles=ScDevelopmentNativeBatch(&s_development,&s_world,cpu,g_ram,
+          g_snes->cart->rom,g_snes->cart->romSize);
+      if(fast_cycles && s_perf_detail) ++s_perf_native_development_calls;
+    }
+    if(!fast_cycles && native_simulation && s_rom_fnv==SC_ROM_FNV_US && !interrupt_work &&
+       !cpu->k && (cpu->pc==0x9311 || cpu->pc==0x9313 || cpu->pc==0x9315)) {
+      /* Frame-wait counters are observable by the original RNG. Advance the
+       * exact original loop clocks and bytes; never skip to the next frame. */
+      unsigned boundary=snes->hPos<1024?1024:1364;
+      if(snes->hIrqEnabled && (!snes->vIrqEnabled || snes->vPos==snes->vTimer+1)) {
+        unsigned irq=4*snes->hTimer;
+        if(irq>=snes->hPos && irq<boundary) boundary=irq;
+      }
+      if(snes->hPos && boundary>snes->hPos+2)
+        fast_cycles=ScWaitStep(cpu,g_ram,(boundary-snes->hPos-2)/8);
+    }
+    static int math_reference=-1;
+    if(math_reference<0) {const char *e=getenv("SC_MATH_REFERENCE");math_reference=e && *e=='1';}
+    if(!fast_cycles && native_simulation && !math_reference &&
+       s_rom_fnv==SC_ROM_FNV_US && !interrupt_work && cpu->k==3 &&
+       ((cpu->pc>=0xa32e && cpu->pc<=0xa342) || cpu->pc==0xa395 || cpu->pc==0xa3cf ||
+        (cpu->pc>=0xa406 && cpu->pc<=0xa420) || cpu->pc==0xa462 ||
+        cpu->pc==0x9035 || cpu->pc==0x904d || cpu->pc==0x905b || cpu->pc==0x907e ||
+        cpu->pc==0x9092 || cpu->pc==0x90a0 || cpu->pc==0x90a6)) {
+      /* Multiply/divide keeps the original clock on every map size. RNG is
+       * inside the existing map-scaled spatial clock range ($88f3-$90a6),
+       * so its deadline budget must include that same area and remainder. */
+      unsigned boundary=snes->hPos<1024?1024:1364;
+      if(snes->hIrqEnabled && (!snes->vIrqEnabled || snes->vPos==snes->vTimer+1)) {
+        unsigned irq=4*snes->hTimer;
+        if(irq>=snes->hPos && irq<boundary) boundary=irq;
+      }
+      if(extra_native) fast_cycles=ScMathBatchStep(cpu,g_ram,4096);
+      else if(snes->hPos && boundary>snes->hPos+2) {
+        unsigned budget=boundary-snes->hPos-2;
+        bool rng_scaled=s_world.active && cpu->pc>=0x9035 && cpu->pc<=0x90a6;
+        if(rng_scaled) budget*=ScWorldCells(&s_world)/12000;
+        unsigned remainder=rng_scaled?s_map_cycle_remainder:0;
+        if(budget>remainder) fast_cycles=ScMathBatchStep(cpu,g_ram,(budget-remainder)/8);
+      }
+    }
     static int kernel_enabled=-1;
     if(kernel_enabled<0) {const char *e=getenv("SC_SPATIAL_KERNELS");kernel_enabled=!e || *e!='0';}
-    if(kernel_enabled && s_rom_fnv==SC_ROM_FNV_US && s_world.active && !interrupt_work) {
+    if(!fast_cycles && kernel_enabled && s_rom_fnv==SC_ROM_FNV_US && s_world.active && !interrupt_work) {
       /* Stop before scanout, HDMA, line wrap, or the programmable IRQ. No
        * batched cell can delay an interrupt or render a row after its time. */
       unsigned boundary=snes->hPos<1024?1024:1364;
@@ -4148,17 +4338,45 @@ static bool run_one_frame(void) {
         unsigned irq=4*snes->hTimer;
         if(irq>=snes->hPos && irq<boundary) boundary=irq;
       }
-      if(snes->hPos && boundary>snes->hPos+2) {
-        unsigned budget=(boundary-snes->hPos-2)*(ScWorldCells(&s_world)/12000);
-        if(budget>s_map_cycle_remainder)
-          fast_cycles=ScWorldGuestKernelStep(&s_world,cpu,g_ram,g_snes->cart->rom,
-              g_snes->cart->romSize,(budget-s_map_cycle_remainder)/8);
+      if(extra_native) {
+        /* Extra attempts leave beam/calendar/audio clocks stationary. Their
+         * C work can span complete helpers even at a scanline boundary;
+         * the development scheduler still owns the final PLD/RTS. */
+        fast_budget=4096;
+        fast_cycles=ScWorldGuestBatchStep(&s_world,cpu,g_ram,g_snes->cart->rom,
+            g_snes->cart->romSize,fast_budget);
+        if(fast_cycles) s_world_guest.mapped=false;
+      } else if(snes->hPos && boundary>snes->hPos+2) {
+        unsigned scale=ScWorldGuestClockScale(&s_world,executed_pc);
+        unsigned budget=(boundary-snes->hPos-2)*scale;
+        unsigned remainder=scale>1?s_map_cycle_remainder:0;
+        if(budget>remainder) {
+          fast_budget=(budget-remainder)/8;
+          fast_cycles=ScWorldGuestBatchStep(&s_world,cpu,g_ram,g_snes->cart->rom,
+              g_snes->cart->romSize,fast_budget);
+        }
         if(fast_cycles) s_world_guest.mapped=false;
       }
     }
-    if(!fast_cycles && s_rom_fnv==SC_ROM_FNV_US)
+    if(!fast_cycles && s_rom_fnv==SC_ROM_FNV_US &&
+       (cpu->pc!=0x9dca || (cpu->a&1023)<0x28 || fast_budget>=192 || development_work))
       fast_cycles=ScWorldGuestFastStep(&s_world,cpu,g_ram,g_snes->cart->rom,g_snes->cart->romSize);
+    static int atomic_reference=-1;
+    if(atomic_reference<0) {const char *e=getenv("SC_NATIVE_ATOMIC_REFERENCE");atomic_reference=e && *e=='1';}
+    if(!fast_cycles && native_simulation && !atomic_reference &&
+       s_rom_fnv==SC_ROM_FNV_US && !interrupt_work) {
+      fast_cycles=ScWorldGuestInstructionStep(&s_world,cpu,g_ram,
+          g_snes->cart->rom,g_snes->cart->romSize);
+      if(fast_cycles) s_world_guest.mapped=false;
+    }
     if(fast_cycles) ++s_perf_spatial_cells;
+    if(s_bank_profile && !fast_cycles) {
+      ++s_interpreter_bank_ops[cpu->k];
+      if(cpu->k==s_bank_page_sel) {
+        ++s_interpreter_pages[cpu->pc>>8];
+        if((cpu->pc>>8)==s_pc_profile_page) ++s_interpreter_pc[cpu->pc&255];
+      }
+    }
     int cyc = fast_cycles?fast_cycles:interp816_runOpcode(cpu);
     /* Extra development attempts are host work, like the native map
      * generator. They do not advance the SNES beam, audio clock or calendar
@@ -4169,9 +4387,9 @@ static bool run_one_frame(void) {
     if (s_rom_fnv==SC_ROM_FNV_US && !interrupt_work)
       master=ScWorldGuestMasterCycles(&s_world,executed_pc,master,&s_map_cycle_remainder);
     g_master_cycles += (uint64_t)master;
-    for (int i = 0; i < master; i += 2) handle_pos_stuff();
+    sc_advance_beam(master);
     snes->apuCatchupCycles += (double)master * kApuCyclesPerMaster;
-    snes_catchupApu(snes);
+    sc_catchup_apu(snes);
   }
   if (getenv("SC_ADDR_TRACE_ARM_ON_01ED")) {
     if (s_addr_trace_last_ed == 0xff) { s_addr_trace_last_ed = g_ram[0x01ed]; s_addr_trace_armed = false; }
@@ -5307,6 +5525,7 @@ static void widen_wood_bg(void) {
  * runs after it, so the card is laid back over columns 42..49. */
 static void selector_extend_tilemap(void) {
   if (!g_ppu) return;
+  ScPpuVramChanged();
   const unsigned map = (unsigned)PPU_bgTilemapAdr(g_ppu, 0);   /* BG1, in words */
   if (map + 0x800u > 0x8000u) return;
   /* Remember each row's anchor, and keep using the last good one while the
@@ -6397,7 +6616,9 @@ static bool write_ppm(const char *path) {
             s_custom_renderer.city_frame ? "true" : "false",
             s_custom_renderer.advisor_frame ? "true" : "false");
     for (int y=0;y<224;++y) fprintf(audit,"%s%u",y ? "," : "",s_custom_renderer.repaired_edges[y]);
-    fprintf(audit,"],\"ppu\":{\"main\":%u,\"sub\":%u,\"window_sub\":%u,\"windows\":%u,\"math\":%u,\"math_control\":%u}}\n",
+    fprintf(audit,"],\"wood_layer\":%d,\"screen\":%u,\"city_flag\":%u,\"ppu\":{\"mode\":%u,\"inidisp\":%u,\"main\":%u,\"sub\":%u,\"window_sub\":%u,\"windows\":%u,\"math\":%u,\"math_control\":%u}}\n",
+            s_custom_renderer.wood_layer,g_ram[0x14],ram_w(0x3e),
+            PPU_mode(g_ppu),g_ppu->inidisp,
             g_ppu->screenEnabled[0],g_ppu->screenEnabled[1],g_ppu->screenWindowed[1],
             g_ppu->windowsel,g_ppu->cgadsub,g_ppu->cgwsel);
     fclose(audit);
@@ -6555,7 +6776,7 @@ static bool save_state(const char *path) {
   fs.f = f;
   fs.ok = true;
   fs.base.func(&fs.base, (void *)kScStateHeader, sizeof(kScStateHeader));
-  snes_saveload(g_snes, &fs.base);
+  ScMusicLock();snes_saveload(g_snes, &fs.base);ScMusicUnlock();
   interp816_saveload(g_cpu, &fs.base);
   fs.base.func(&fs.base, &s_frames, sizeof(s_frames));
   fs.base.func(&fs.base, &g_ppu->vramPointer, kScPpuBusBytes);
@@ -6603,7 +6824,7 @@ static bool load_state(const char *path) {
   fs.ok = true;
   ScSram_Hold();   /* the saved cities on disk stay the player's */
   s_mouse_dialog=SC_MOUSE_DIALOG_NONE;
-  snes_saveload(g_snes, &fs.base);
+  ScMusicLock();snes_saveload(g_snes, &fs.base);ScMusicResetLocked();ScMusicUnlock();
   interp816_saveload(g_cpu, &fs.base);
   fs.base.func(&fs.base, &s_frames, sizeof(s_frames));
   ScDevelopmentReset(&s_development);
@@ -6645,6 +6866,7 @@ static bool load_state(const char *path) {
   ScRendererResetHistory(&s_custom_renderer);
   memset(s_scroll_pass,0,sizeof s_scroll_pass);
   s_scroll_multiplier=1;
+  s_middle_pan=(ScMousePan){0};
   s_journey_menu_selection=ram_w(0x3e);
   ScSram_Release();
   ScVehicles_Reset();   /* host-side, not in the state; back within 4 frames */
@@ -6669,8 +6891,11 @@ static bool load_state(const char *path) {
 #endif
   if (ok) {
     unsigned screen=ram_w(0x14);
+    ScMusicLock();ScMusicRestoreLocked(g_ram[8],!host_map_screen_live() || (ram_w(0x195)&8)!=0);ScMusicUnlock();
     s_journey_arming=s_world.journey && ((screen>=4 && screen<=9) || screen==21 || screen==22);
     s_build_active = s_build_pending = s_build_cancelled = false;
+    s_clip_tool=s_clip_pending=0;s_clip_drag=s_clip_hover=false;
+    ScClipboardClear(&s_clipboard);
     s_map_mouse_accept_pending = false;
     s_map_mouse_refresh_pending = false;
   }
@@ -6800,12 +7025,12 @@ static const char *const kScenarioOverrideNames[] = { "OFF", "LAS VEGAS", "FREE 
 /* Population override for exercising milestones and the extended display.
  * Assign the authoritative 64-bit value and its native compatibility mirror
  * every frame while active; the next simulation sweep otherwise recalculates
- * population from zone capacities. INT_MAX represents the ten-billion profile
+ * population from zone capacities. INT_MAX represents the maximum profile
  * in this int-valued menu; ScPopulationSet receives the actual 64-bit limit. */
 static const int kPopOverrides[] = { -1, 0, 2000, 10000, 50000, 100000, 500000, 600000,
                                     1000000, 1000000000, INT_MAX };
 static const char *const kPopOverrideNames[] = { "OFF", "0", "2000", "10000", "50000", "100000",
-    "500000", "600000", "1000000", "1000000000", "9999999999" };
+    "500000", "600000", "1000000", "1000000000", "9999999999999" };
 
 /* City class override ($0deb, 0-5 = Village through Megalopolis). SET POP
  * now derives this as well; an explicit class override applies afterward to
@@ -6954,7 +7179,7 @@ static bool s_mouse_enabled = true;
 static ScMouseUiResult mouse_ui_point(uint8_t *ram,int x,int y,bool select,bool ninth) {
   if(s_size_selecting && ram_w(0x14)==3) {
     ScMouseUiResult result={true,false};
-    for(unsigned i=0;i<4;++i) if(x>=48 && x<232 && y>=112+24*i && y<128+24*i) {
+    for(unsigned i=0;i<5;++i) if(x>=48 && x<232 && y>=(int)ScJourneyMenuY(false,i+1) && y<(int)ScJourneyMenuY(false,i+1)+16) {
       result.hit=true;if(select) ram_set_w(0x3e,i+1);
     }
     return result;
@@ -7090,26 +7315,36 @@ static void save_large_map_setting(void) {
     settings.large_maps=s_large_maps;
     if (!ScSettingsSave(&settings,kScSettingsPath)) fprintf(stderr,"settings: could not save larger-map preference\n");
   }
-  fprintf(stderr,"new city map size: %s\n",s_large_maps==3?"960x800":s_large_maps==2?"480x400":s_large_maps?"240x200":"120x100");
+  fprintf(stderr,"new city map size: %s\n",s_large_maps==4?"1920x1600":s_large_maps==3?"960x800":s_large_maps==2?"480x400":s_large_maps?"240x200":"120x100");
 }
 static void menu_action_fit_screen(void) {s_fit_screen_requested=true;}
 
-static void setting_activate(SettingDesc *d) {
+static void setting_adjust(SettingDesc *d,int direction) {
   switch (d->kind) {
     case kSettingHeader: break;
-    case kSettingBool: *(bool *)d->field = !*(bool *)d->field; break;
-    case kSettingBit:  *(uint8_t *)d->field ^= d->mask; break;
-    case kSettingAction: if (d->action) d->action(); break;
+    case kSettingBool: *(bool *)d->field = direction?direction>0:!*(bool *)d->field; break;
+    case kSettingBit:
+      if(direction<0) *(uint8_t *)d->field &= (uint8_t)~d->mask;
+      else if(direction>0) *(uint8_t *)d->field |= d->mask;
+      else *(uint8_t *)d->field ^= d->mask;
+      break;
+    case kSettingAction: if (direction>=0 && d->action) d->action(); break;
     case kSettingCycle: {
       int *v = (int *)d->field;
       int i = 0;
       for (; i < d->value_count; i++) if (d->values[i] == *v) break;
-      *v = d->values[(i + 1) % d->value_count]; /* not-found wraps to values[1] */
+      if(d->value_count<=0 || !d->values) break;
+      if(i==d->value_count) i=direction<0?0:-1;
+      *v = d->values[(i+(direction<0?-1:1)+d->value_count)%d->value_count];
       break;
     }
   }
   if (d->field==&s_large_maps) save_large_map_setting();
+  if(getenv("SC_SETTINGS_DIAG") && d->field)
+    fprintf(stderr,"[settings] %s value %d direction %d\n",d->label,
+        d->kind==kSettingCycle?*(int *)d->field:(int)setting_get(d),direction);
 }
+static void setting_activate(SettingDesc *d) {setting_adjust(d,0);}
 
 static void menu_action_save_slot1(void) {
   if (save_state("savestate_1.bin"))
@@ -7194,6 +7429,34 @@ static void commit_mouse_construction(void) {
       (unsigned long long)(s_frames-s_build_release_frame),
       (SDL_GetPerformanceCounter()-started)*1000.0/SDL_GetPerformanceFrequency());
   if (r != SC_BUILD_OK) g_ram[5] = 2; /* The game's normal reject sound. */
+}
+static uint8_t clipboard_rom_read(void *ctx,uint32_t address) {
+  const ScRenderer *r=ctx;
+  size_t offset=(size_t)((address>>16)&127)*0x8000+(address&0x7fff);
+  return offset<r->rom_size?r->rom[offset]:255;
+}
+static void commit_clipboard(void) {
+  unsigned action=s_clip_pending;s_clip_pending=0;
+  if(ram_w(0xd7) || ram_w(0x379) || ram_w(0x020d)!=s_clip_native_tool) return;
+  if(action==1) {
+    bool ok=ScClipboardCopy(&s_clipboard,g_ram,&s_world,s_rom_data,s_rom_size,
+        s_clip_x0,s_clip_y0,s_clip_x1,s_clip_y1);
+    if(ok) {
+      s_clip_tool=2;
+      fprintf(stderr,"[copy] %u cells, %dx%d, price %llu, %u reward buildings excluded\n",
+          s_clipboard.count,s_clipboard.width,s_clipboard.height,
+          (unsigned long long)s_clipboard.price,s_clipboard.excluded);
+    } else {g_ram[5]=2;fprintf(stderr,"[copy] no eligible objects or invalid selection\n");}
+  } else if(action==2) {
+    ScBuildResult result=ScClipboardPaste(&s_clipboard,g_ram,&s_world,s_rom_data,s_rom_size,s_clip_x1,s_clip_y1);
+    if(result==SC_BUILD_OK) {
+      ScPowerRefreshRestore(&s_power_refresh,g_ram,&s_world,s_rom_data,s_rom_size,s_frames);
+      refresh_live_population(s_rom_data,s_rom_size);
+      ScPopulationMirror(&s_population,g_ram);
+    } else g_ram[5]=2;
+    fprintf(stderr,"[paste] at %d,%d: %s\n",s_clip_x1,s_clip_y1,
+        result==SC_BUILD_OK?"committed":result==SC_BUILD_FUNDS?"insufficient funds":"occupied or outside city");
+  }
 }
 static void restore_loaded_power(void) {
   bool ok=ScPowerRefreshRestore(&s_power_refresh,g_ram,&s_world,g_snes->cart->rom,
@@ -7433,6 +7696,7 @@ static SettingDesc s_settings[] = {
   { "REPLAY MENU",           kSettingBool, &s_replay_menu,         0,    NULL, NULL, 0 },
   { "FIX POWER ON LOAD",     kSettingBool, &s_power_fix,           0,    NULL, NULL, 0 },
   { "CHEATS",                kSettingHeader, NULL, 0, NULL, NULL, 0 },
+  { "MUTE CITY WARNINGS",     kSettingBool, &s_mute_city_warnings, 0, NULL, NULL, 0 },
   { "ALL SCENARIO WON",      kSettingBool, &s_unlock_all,          0,    NULL, NULL, 0 },
   { "CHEAT NO DISASTER",     kSettingBit,  &g_ram[0x0425],         0x01, NULL, NULL, 0 },
   { "CHEAT MONEY",           kSettingBit,  &g_ram[0x0425],         0x02, NULL, NULL, 0 },
@@ -8011,6 +8275,7 @@ static void load_sylt_card(void) {
  * on returning from the fax. 72 tiles is 576 words a frame, which is nothing. */
 static void sylt_place_card(void) {
   if (!s_sylt_tiles || !g_ppu) return;
+  ScPpuVramChanged();
   const unsigned map = (unsigned)PPU_bgTilemapAdr(g_ppu, 0);
 
   for (int i = 0; i < s_sylt_tw * s_sylt_th; i++) {
@@ -8155,6 +8420,7 @@ static void apply_surfaces(void) {
   const int scr = g_ram[0x14];
   if (scr == last_screen) return;
   last_screen = scr;
+  ScPpuVramChanged();
   for (int i = 0; i < s_surf_count; i++) {
     const uint8_t *s = s_surf[i];
     if (s[6] != (uint8_t)scr) continue;
@@ -8203,6 +8469,7 @@ static void place_translated_cards(void) {
   /* A packet patch puts the same cards in through the game's own DMA, and
    * doing both means this one races the other and loses. */
   if (scpk_active()) return;
+  ScPpuVramChanged();
   const unsigned map = (unsigned)PPU_bgTilemapAdr(g_ppu, 0);
   for (int i = 0; i < s_card_count; i++) {
     for (int t = 0; t < s_card_nt[i]; t++) {
@@ -8792,7 +9059,7 @@ int main(int argc, char **argv) {
       const char *as = getenv("SC_MAPGEN_A");
       const unsigned idx = (unsigned)strtoul(st, NULL, 0);
       const int large = getenv("SC_MAPGEN_LARGE")?atoi(getenv("SC_MAPGEN_LARGE")):0;
-      const unsigned cells = large==3?768000:large==2?192000:large?SC_WORLD_CELLS:SC_MAPGEN_CELLS;
+      const unsigned cells = large==4?3072000:large==3?768000:large==2?192000:large?SC_WORLD_CELLS:SC_MAPGEN_CELLS;
       static ScMapGenState gs;
       ScMapGenPrng pr;
       { const char *pv = getenv("SC_MAPGEN_PREV");
@@ -8811,7 +9078,8 @@ int main(int argc, char **argv) {
          * Kept only as a sweep knob; 1 is correct. */
         g_sc_mapgen_prng_steps = 0;
         for (unsigned r = 0; r < reps; r++) {
-          if (large==3) sc_mapgen_generate_giant(&pr, &gs);
+          if (large==4) sc_mapgen_generate_colossal(&pr, &gs);
+          else if (large==3) sc_mapgen_generate_giant(&pr, &gs);
           else if (large==2) sc_mapgen_generate_huge(&pr, &gs);
           else if (large) sc_mapgen_generate_large(&pr, &gs);
           else sc_mapgen_generate(&pr, &gs);
@@ -8895,6 +9163,7 @@ int main(int argc, char **argv) {
   { const char *e = getenv("SC_GFX_TRACE"); if (e && *e) s_gfx_trace = true; }
   { const char *e = getenv("SC_DECOMP_TRACE"); if (e && *e) s_decomp_trace = true; }
   { const char *e = getenv("SC_UNLOCK_ALL"); if (e && *e) s_unlock_all = true; }
+  { const char *e = getenv("SC_MUTE_CITY_WARNINGS"); s_mute_city_warnings=e && *e=='1'; }
   { const char *e = getenv("SC_WRAM_MAP");
     if (e && *e) {
       s_wram_flags = (uint8_t *)calloc(0x20000, 1);
@@ -9665,6 +9934,7 @@ int main(int argc, char **argv) {
   { const char *e = getenv("SC_BANK_PROFILE"); if (e && *e) s_bank_profile = (*e != '0'); }
   { const char *e = getenv("SC_BANK_PROFILE_PAGE");
     if (e && *e) s_bank_page_sel = (int)strtol(e, NULL, 16) & 0xff; }
+  {const char *e=getenv("SC_PC_PROFILE_PAGE");if(e && *e) s_pc_profile_page=(int)strtol(e,NULL,16)&255;}
   { const char *e = getenv("SC_WS_CLAMP");
     if (e && *e) { s_ws_clamp = (uint8_t)strtol(e, NULL, 0); s_ws_clamp_auto = false; } }
   { const char *e = getenv("SC_HOST_HDMA");
@@ -9714,10 +9984,20 @@ int main(int argc, char **argv) {
   PpuBeginDrawing(g_ppu, s_video_pixels, (size_t)s_video_pitch, s_render_flags);
   host_map_init();
   ScRendererInit(&s_custom_renderer, g_snes->cart->rom, rom_size, s_rom_is_us);
+  s_custom_renderer.vram_revision=ScPpuVramRevision;
+  if(s_rom_is_us) {
+    uint8_t *font=calloc(1,0x20000);
+    if(font) {
+      ScDecompResult result;
+      sc_decomp_run(font,clipboard_rom_read,&s_custom_renderer,9,0xc0fb,0,&result);
+      if(!result.bad) ScRendererClipboardFont(&s_custom_renderer,font+0x8000,result.bytes_out);
+      free(font);
+    }
+  }
   s_custom_renderer.population=&s_population;
   if(s_rom_is_us) ScJourneyMenuInit(g_snes->cart->rom,rom_size);
   { const char *large=getenv("SC_LARGE_MAPS");
-    s_large_maps=large?atoi(large):s_launch_settings.large_maps; if(s_large_maps<0 || s_large_maps>3) s_large_maps=0; }
+    s_large_maps=large?atoi(large):s_launch_settings.large_maps; if(s_large_maps<0 || s_large_maps>4) s_large_maps=0; }
   s_custom_renderer.world=&s_world;
   s_custom_renderer.sylt = s_ninth_scenario;   /* its pin and mark */
   if (!ScRendererResize(&s_custom_renderer,
@@ -9832,7 +10112,8 @@ int main(int argc, char **argv) {
    * never the bottleneck (SC_FRAME_TIME showed zero frames exceeding the
    * 16.67ms budget). Pace manually against the wall clock instead below. */
   /* vsync off deliberately -- see the comment above; pacing is manual. */
-  SDL_Renderer *renderer = snesrecomp_sdl_create_renderer(window, false, false);
+  SDL_Renderer *renderer = ScGpuTerrainRenderer(window);
+  if(!renderer) renderer = snesrecomp_sdl_create_renderer(window, false, false);
   if (!renderer) { fprintf(stderr, "SDL_CreateRenderer failed: %s\n", SDL_GetError()); return 1; }
   { const char *rn = snesrecomp_sdl_renderer_name(renderer);
     fprintf(stderr, "renderer: %s\n", rn ? rn : "?"); }
@@ -9854,7 +10135,28 @@ int main(int argc, char **argv) {
    * folded the same behaviour into SDL_AudioStream, so the backend difference
    * lives in sc_sdl_compat.h rather than here. */
   ScAudio audio; SDL_memset(&audio, 0, sizeof(audio));
-  bool audio_dev = s_enable_audio && sc_audio_open(&audio, 32040, 2, 1024);
+  const char *music_setting=getenv("SC_MUSIC_THREAD");
+  bool want_music_thread=music_setting?*music_setting!='0':getenv("SC_SCRIPTED_INPUT")==NULL;
+  bool restored_music=false;
+  const char *restored_dir=getenv("SC_RESTORED_MUSIC");
+  if(s_enable_audio && s_rom_is_us && want_music_thread && (!restored_dir || strcmp(restored_dir,"0"))) {
+    char path[4096];
+    if(!restored_dir) {
+#if SNESRECOMP_SDL3
+      const char *base=SDL_GetBasePath();
+#else
+      char *base=SDL_GetBasePath();
+#endif
+      snprintf(path,sizeof path,"%smusic/restored",base?base:"");
+#if !SNESRECOMP_SDL3
+      SDL_free(base);
+#endif
+      restored_dir=path;
+    }
+    restored_music=ScMusicLoadRestored(restored_dir);
+    if(!restored_music) fprintf(stderr,"[restored music] complete pack unavailable; using original SPC soundtrack\n");
+  }
+  bool audio_dev = s_enable_audio && sc_audio_open(&audio, restored_music?44100:32040, 2, 1024);
   if (audio_dev) {
     fprintf(stderr, "audio: opened driver=%s freq=%d channels=%d samples=%d\n",
             SDL_GetCurrentAudioDriver() ? SDL_GetCurrentAudioDriver() : "?",
@@ -9866,10 +10168,22 @@ int main(int argc, char **argv) {
     fprintf(stderr, "audio: SDL_OpenAudioDevice failed: %s\n", SDL_GetError());
   }
 
+  bool music_thread=false;
+  {
+    if(audio_dev && want_music_thread) music_thread=ScMusicStart(g_snes->apu,&audio);
+    if(music_thread && restored_music) {
+      ScMusicLock();ScMusicRestoreLocked(g_ram[8],!host_map_screen_live() || (ram_w(0x195)&8)!=0);ScMusicUnlock();
+    } else if(restored_music) {
+      ScMusicLoadRestored(NULL);
+      if(audio_dev) {sc_audio_close(&audio);audio_dev=sc_audio_open(&audio,32040,2,1024);}
+    }
+    if(music_thread) fprintf(stderr,"audio: dedicated SPC/DSP music thread active\n");
+  }
   double audio_acc = 0.0;
   int16_t audio_buf[1024 * 2];
   bool quit = false;
   ScGpuTerrain *gpu_terrain=NULL;
+  ScGpuFields *gpu_fields=NULL;
   bool gpu_failed=false;
   {const char *e=getenv("SC_GPU_TERRAIN");s_gpu_terrain_enabled=!e || *e!='0';}
   /* Live FPS counter in the window title, updated once/sec -- lets a user
@@ -9879,18 +10193,46 @@ int main(int argc, char **argv) {
   /* SC_PERF=1: once a second, where the wall clock of a host frame went --
    * guest emulation, texture upload and draw, the pacing sleep, and the
    * present. Average and worst frame, in ms. */
-  const bool perf_on = getenv("SC_PERF") != NULL;
+  const char *perf_frame_path=getenv("SC_PERF_FRAME_PATH");
+  const bool perf_on = getenv("SC_PERF") != NULL || (perf_frame_path && *perf_frame_path);
+  FILE *perf_frame_file=NULL;
+  FILE *bank_frame_file=NULL;
+  const char *bank_frame_path=getenv("SC_BANK_FRAME_PATH");
+  if(bank_frame_path && *bank_frame_path) {
+    bank_frame_file=fopen(bank_frame_path,"w");
+    if(bank_frame_file) {
+      s_bank_profile=1;setvbuf(bank_frame_file,NULL,_IOFBF,512*1024);
+      fputs("frame,emu_ms",bank_frame_file);
+      for(unsigned p=0;p<256;++p) fprintf(bank_frame_file,",bank%02x",p);
+      for(unsigned p=0;p<256;++p) fprintf(bank_frame_file,",page%02x",p);
+      for(unsigned p=0;p<256;++p) fprintf(bank_frame_file,",pc%02x",p);
+      fputc('\n',bank_frame_file);
+    }
+  }
+  ScWorldGuestInterpreterProfile(s_bank_profile!=0);
+  if(perf_frame_path && *perf_frame_path) {
+    perf_frame_file=fopen(perf_frame_path,"w");
+    if(perf_frame_file) {
+      setvbuf(perf_frame_file,NULL,_IOFBF,512*1024);
+      fputs("frame,city,development,input_ms,emu_ms,audio_ms,draw_ms,present_ms,sleep_ms,advisor,extra_attempts,host_raster_ms,objects_ms,terrain_capture_ms,rows_ms,native_capture_ms,repair_ms,hud_ms,pointer_ms,map_track_ms\n",perf_frame_file);
+    }
+  }
+  const char *perf_exit_text=getenv("SC_PERF_EXIT_AT");
+  const uint64_t perf_exit_frame=perf_exit_text?strtoull(perf_exit_text,NULL,0):0;
   s_perf_detail=perf_on;s_perf_clock_ms=1000.0/SDL_GetPerformanceFrequency();
+  const char *render_profile=getenv("SC_RENDER_PROFILE");
+  s_custom_renderer.measure_clock=render_profile && *render_profile=='1'?SDL_GetPerformanceCounter:NULL;
   enum { kPerfInput, kPerfEmu, kPerfAudio, kPerfDraw, kPerfSleep, kPerfPresent,
          kPerfCount };
   double perf_sum[kPerfCount] = {0}, perf_max[kPerfCount] = {0};
   double perf_total[kPerfCount]={0};
+  double perf_current[kPerfCount]={0};
   uint64_t perf_total_frames=0,perf_total_guests=0;
   int perf_frames = 0;
   const double perf_ms = 1000.0 / (double)SDL_GetPerformanceFrequency();
 #define SC_PERF_ADD(slot, t0, t1) do { if (perf_on) { \
     const double _ms = (double)((t1) - (t0)) * perf_ms; \
-    perf_sum[slot] += _ms; perf_total[slot]+=_ms; if (_ms > perf_max[slot]) perf_max[slot] = _ms; } } while (0)
+    perf_sum[slot] += _ms; perf_total[slot]+=_ms; perf_current[slot]=_ms; if (_ms > perf_max[slot]) perf_max[slot] = _ms; } } while (0)
   uint64_t fps_window_frames = 0;
   uint64_t fps_guest_frames=0;
   double full_frame_ms=8.0,extra_frame_ms=6.0;
@@ -9904,6 +10246,14 @@ int main(int argc, char **argv) {
   uint64_t next_frame_deadline = SDL_GetPerformanceCounter();
   while (!quit) {
     const uint64_t loop_t0 = perf_on ? SDL_GetPerformanceCounter() : 0;
+    const uint64_t perf_extra_begin=perf_frame_file?s_development.extra_attempts:0;
+    unsigned long long bank_begin[256],page_begin[256],pc_begin[256];
+    if(bank_frame_file) {
+      memcpy(bank_begin,s_bank_ops,sizeof bank_begin);memcpy(page_begin,s_b3_page,sizeof page_begin);
+      memcpy(pc_begin,s_pc_profile_ops,sizeof pc_begin);
+    }
+    if(perf_on) memset(perf_current,0,sizeof perf_current);
+    double zoom_factor=1;
     SDL_Event ev;
     for (;;) {
       /* SC_PERF also names a poll that stalls, and the event it returned. */
@@ -9923,6 +10273,27 @@ int main(int argc, char **argv) {
       if (!got) break;
       if (ev.type == SDL_QUIT) quit = true;
       if (getenv("SC_SCRIPTED_INPUT")) continue; /* owned UI regression window */
+      if(!s_menu_open && !s_build_active && !s_build_pending && !s_clip_drag && !s_clip_pending && host_map_screen_live() &&
+         !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3]) {
+        if(ev.type==SDL_MOUSEWHEEL && (SDL_GetModState()&KMOD_CTRL)) {
+#if SNESRECOMP_SDL3
+          double amount=ev.wheel.y;
+#elif SDL_VERSION_ATLEAST(2,0,18)
+          double amount=ev.wheel.preciseY;
+#else
+          double amount=ev.wheel.y;
+#endif
+          if(ev.wheel.direction==SDL_MOUSEWHEEL_FLIPPED) amount=-amount;
+          if(isfinite(amount)) zoom_factor*=pow(1.125,fmax(-32,fmin(32,amount)));
+          continue;
+        }
+#if SNESRECOMP_SDL3 && SDL_VERSION_ATLEAST(3,4,0)
+        if(ev.type==SDL_EVENT_PINCH_UPDATE) {
+          if(isfinite(ev.pinch.scale) && ev.pinch.scale>0) zoom_factor*=ev.pinch.scale;
+          continue;
+        }
+#endif
+      }
       if (ev.type == SDL_KEYDOWN && !ev.key.repeat && SC_EVENT_SCANCODE(ev)==SDL_SCANCODE_F11) {
         s_fullscreen=!s_fullscreen;
 #if SNESRECOMP_SDL3
@@ -10018,11 +10389,25 @@ int main(int argc, char **argv) {
             }
             break;
           case SDL_SCANCODE_RETURN:
-          case SDL_SCANCODE_LEFT:
-          case SDL_SCANCODE_RIGHT:
             setting_activate(&s_settings[s_menu_selected]);
             break;
+          case SDL_SCANCODE_LEFT:
+          case SDL_SCANCODE_RIGHT:
+            setting_adjust(&s_settings[s_menu_selected],SC_EVENT_SCANCODE(ev)==SDL_SCANCODE_LEFT?-1:1);
+            break;
           default: break;
+        }
+      }
+      /* Handle every mouse event while it is being polled. Checking only the
+       * last event after polling lost clicks followed by motion/window events. */
+      if(s_menu_open && (ev.type==SDL_MOUSEMOTION ||
+          (ev.type==SDL_MOUSEBUTTONDOWN && ev.button.button==SDL_BUTTON_LEFT))) {
+        double x=ev.type==SDL_MOUSEMOTION?ev.motion.x:ev.button.x;
+        double y=ev.type==SDL_MOUSEMOTION?ev.motion.y:ev.button.y;
+        int row=settings_mouse_row(window,renderer,x,y);
+        if(row>=0) {
+          s_menu_selected=row;
+          if(ev.type==SDL_MOUSEBUTTONDOWN) setting_activate(&s_settings[row]);
         }
       }
       /* F4: dump WRAM to a fixed path right now, on demand -- for pinning
@@ -10129,6 +10514,17 @@ int main(int argc, char **argv) {
       if(!ScVideoSave(&s_custom_video,s_video_config))
         fprintf(stderr,"settings: could not save fit-to-screen preference\n");
     }
+    if(zoom_factor!=1) {
+      int zoom_w=0,zoom_h=0;SDL_GetRendererOutputSize(renderer,&zoom_w,&zoom_h);
+      ScViewport current=s_custom_video.enabled?s_custom_renderer.view:
+          ScVideoViewport(&s_custom_video,zoom_w,zoom_h);
+      if(ScVideoZoom(&s_custom_video,current,zoom_w,zoom_h,zoom_factor)) {
+        if(s_ws_extra) {
+          s_ws_extra=0;s_host_map=false;s_video_w=kVideoWidth;s_video_pitch=kVideoWidth*4;
+          PpuSetExtraSpace(g_ppu,0);PpuBeginDrawing(g_ppu,s_video_pixels,(size_t)s_video_pitch,s_render_flags);
+        }
+      }
+    }
     int drawable_w = 0, drawable_h = 0;
     SDL_GetRendererOutputSize(renderer, &drawable_w, &drawable_h);
     /* Older Fit preferences have no captured scale. Lock their initial view
@@ -10177,17 +10573,30 @@ int main(int argc, char **argv) {
     bool mouse_ui_handled = false, mouse_ui_hit = false;
     bool mouse_ui_select = false;
     bool mouse_raw_left = false;
+    bool mouse_pan_active = false;
+    static bool panning;
+    static bool mouse_pan_grab_requested;
+    static bool mouse_pan_relative_requested;
+    static double mouse_pan_virtual_x,mouse_pan_virtual_y;
+    static double mouse_pan_restore_x,mouse_pan_restore_y;
     bool mouse_navigation_hit = false;
     uint16_t mouse_edge_input = 0;
+    uint16_t middle_pan_input = 0;
     int mouse_target_x = 0, mouse_target_y = 0;
     int mouse_city_x = 0, mouse_city_y = 0;
     bool mouse_city_hit = false;
+    bool mouse_clip_hit = false, mouse_clip_consumed = false;
+    int mouse_clip_button = -1;
+    s_clip_hover=false;
     s_custom_renderer.pointer_active = false;
+    s_custom_renderer.pointer_hud = false;
+    s_custom_renderer.pointer_hidden = false;
+    s_custom_renderer.clipboard_cursor=s_clip_tool!=0;
     uint32_t mouse_buttons = 0;
     if (s_mouse_enabled && !scripted_input && !s_menu_open) {
       const uint32_t wf = (uint32_t)SDL_GetWindowFlags(window);
       bool focused = (wf & SDL_WINDOW_INPUT_FOCUS) &&
-                           ((wf & SDL_WINDOW_MOUSE_FOCUS) || s_build_active);
+                           ((wf & SDL_WINDOW_MOUSE_FOCUS) || s_build_active || s_clip_drag || s_middle_pan.active || panning);
       double mx, my;
 #if SNESRECOMP_SDL3
       float fx = 0, fy = 0;
@@ -10198,6 +10607,14 @@ int main(int argc, char **argv) {
       mouse_buttons = SDL_GetMouseState(&ix, &iy);
       mx = ix; my = iy;
 #endif
+      /* Relative motion never reaches a window edge. Keep an unbounded
+       * virtual position for the drag accumulator, independent of SDL's
+       * centered, invisible cursor. Recorded canvas input remains absolute. */
+      if(mouse_pan_relative_requested && !getenv("SC_MOUSE_INPUT")) {
+        double dx,dy;sc_relative_mouse_delta(&dx,&dy);
+        mouse_pan_virtual_x+=dx;mouse_pan_virtual_y+=dy;
+        mx=mouse_pan_virtual_x;my=mouse_pan_virtual_y;
+      }
       int ww = 0, wh = 0;
       SDL_GetWindowSize(window, &ww, &wh);
       mouse_raw_left = focused && (mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT));
@@ -10231,16 +10648,55 @@ int main(int argc, char **argv) {
               mx,my,&mouse_target_x,&mouse_target_y,&mouse_navigation_hit) :
           ScVideoWindowToGuest(pointer_view,s_destination,ww,wh,drawable_w,drawable_h,
               mx,my,&mouse_target_x,&mouse_target_y));
+      if(focused && s_rom_is_us && host_map_screen_live() && ram_w(0x1d7) &&
+          !ram_w(0xd7) && !ram_w(0x379) && s_mouse_dialog==SC_MOUSE_DIALOG_NONE &&
+          !s_custom_renderer.advisor_frame && !s_custom_renderer.map_hold) {
+        int gx,gy;
+        if(ScVideoWindowToGuest(pointer_view,s_destination,ww,wh,drawable_w,drawable_h,mx,my,&gx,&gy)) {
+          for(unsigned b=0;b<2;++b) {
+            ScVideoRect rect=ScRendererClipboardButton(pointer_view,b);
+            int x=gx+pointer_view.core_x,y=gy+pointer_view.core_y;
+            if(x>=rect.x && x<rect.x+rect.w && y>=rect.y && y<rect.y+rect.h) {
+              mouse_clip_hit=true;mouse_clip_button=b;
+            }
+          }
+        }
+      }
       mouse_city_hit=inside && !mouse_navigation_hit && s_mouse_dialog==SC_MOUSE_DIALOG_NONE && s_custom_video.enabled &&
           ScRendererCityPoint(&s_custom_renderer,g_ram,mouse_target_x,mouse_target_y,
               &mouse_city_x,&mouse_city_y);
-      static bool panning;
       static bool last_inside;
       static int last_x, last_y;
       static double pan_x, pan_y;
       static unsigned pan_clock;
       const bool right = focused && (mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT));
-      if (right && !mouse_raw_left && !s_build_active &&
+      const bool middle = focused && (mouse_buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE));
+      const bool middle_was_active=s_middle_pan.active;
+      const bool pan_allowed=focused && !mouse_raw_left && !right && !s_build_active && !s_build_pending &&
+          !s_clip_drag && !s_clip_pending && host_map_screen_live() && !ram_w(0x379) &&
+          s_mouse_dialog==SC_MOUSE_DIALOG_NONE && !s_custom_renderer.advisor_frame &&
+          (s_middle_pan.active || (!ram_w(0xd7) && !g_ram[0x391] && !g_ram[0xe3] && !s_custom_renderer.map_hold));
+      const bool pan_land=inside && !mouse_navigation_hit && !mouse_clip_hit &&
+          (s_custom_video.enabled?mouse_city_hit:(!ram_w(0x1d7) || (mouse_target_x>=56 && mouse_target_y>=48)));
+      ScMousePanDirection middle_direction=ScMousePanUpdate(&s_middle_pan,pan_allowed,middle,pan_land,mx,my,
+          ww>0 && s_destination.w>0?(double)drawable_w/ww*pointer_view.width/s_destination.w:0,
+          wh>0 && s_destination.h>0?(double)drawable_h/wh*pointer_view.height/s_destination.h:0,
+          (int16_t)ram_w(0x1bd)*8+(g_ppu->hScroll[1]&7),
+          (int16_t)ram_w(0x1bf)*8+(g_ppu->vScroll[1]&7));
+      if(getenv("SC_MOUSE_PAN_DIAG") && (middle_was_active || s_middle_pan.active))
+        fprintf(stderr,"[middle pan] frame %llu active %d direction %d,%d camera %d,%d pending %.2f,%.2f\n",
+            (unsigned long long)s_frames,(int)s_middle_pan.active,middle_direction.x,middle_direction.y,
+            (int16_t)ram_w(0x1bd)*8+(g_ppu->hScroll[1]&7),(int16_t)ram_w(0x1bf)*8+(g_ppu->vScroll[1]&7),
+            s_middle_pan.pending_x,s_middle_pan.pending_y);
+      if(!middle_was_active && s_middle_pan.active) SDL_CaptureMouse(true);
+      if(s_middle_pan.active) {
+        middle_pan_input=kPad_A;
+        if(middle_direction.x<0) middle_pan_input|=kPad_Left;
+        if(middle_direction.x>0) middle_pan_input|=kPad_Right;
+        if(middle_direction.y<0) middle_pan_input|=kPad_Up;
+        if(middle_direction.y>0) middle_pan_input|=kPad_Down;
+        panning=false;s_pan_dir_frames=0;s_mouse_dir_frames=0;
+      } else if (right && !mouse_raw_left && !s_build_active && !s_clip_drag && !s_clip_tool &&
           (inside || panning) && host_map_screen_live()) {
         if (!panning) { pan_x = mx; pan_y = my; pan_clock = 0; }
         panning = true;
@@ -10280,6 +10736,15 @@ int main(int argc, char **argv) {
             s_custom_renderer.pointer_active=true;
             s_custom_renderer.pointer_x=mouse_target_x;
             s_custom_renderer.pointer_y=mouse_target_y;
+          } else if(s_custom_video.enabled && s_custom_renderer.city_input && !mouse_navigation_hit &&
+              !right && s_mouse_dialog==SC_MOUSE_DIALOG_NONE && ram_w(0x1d7) &&
+              !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3]) {
+            int gx,gy;
+            if(ScVideoWindowToGuest(pointer_view,s_destination,ww,wh,drawable_w,drawable_h,mx,my,&gx,&gy) &&
+                ((gy>=0 && gy<46) || (gx>=0 && gx<56 && gy>=46 && gy<224))) {
+              s_custom_renderer.pointer_active=true;s_custom_renderer.pointer_hud=true;
+              s_custom_renderer.pointer_x=gx;s_custom_renderer.pointer_y=gy;
+            }
           }
           mouse_target_valid = true;
           s_mouse_dir = 0;
@@ -10294,11 +10759,12 @@ int main(int argc, char **argv) {
             mouse_ui_select = dx || dy || (mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT));
             mouse_ui_handled = ui.handled; mouse_ui_hit = ui.hit;
             if (mouse_navigation_hit) { mouse_ui_handled=true; mouse_ui_hit=false; }
+            if (mouse_clip_hit) {mouse_ui_handled=true;mouse_ui_hit=false;}
             if (ui.handled) s_mouse_dir_frames = 0;
           }
           static unsigned edge_clock;
           const bool buttons_up = !(mouse_buttons &
-              (SDL_BUTTON(SDL_BUTTON_LEFT) | SDL_BUTTON(SDL_BUTTON_RIGHT)));
+              (SDL_BUTTON(SDL_BUTTON_LEFT) | SDL_BUTTON(SDL_BUTTON_RIGHT) | SDL_BUTTON(SDL_BUTTON_MIDDLE)));
           int edge = mouse_target_x < 8 ? -1 : mouse_target_x >= 248 ? 1 : 0;
           if (buttons_up && edge && g_ram[0x14] == 11 && s_rom_is_us) {
             if (edge_clock++ % 30 == 0)
@@ -10319,12 +10785,42 @@ int main(int argc, char **argv) {
           }
         } else {
           /* Letterboxing is outside the rendered input surface. */
-          if (!s_build_active) mouse_buttons = 0;
+          if (!s_build_active && !s_clip_drag) mouse_buttons = 0;
           s_mouse_dir_frames = 0;
         }
       }
       last_inside = inside; last_x = mouse_target_x; last_y = mouse_target_y;
       if (!focused) { mouse_buttons = 0; panning = false; }
+      mouse_pan_active=focused && (panning || s_middle_pan.active);
+      if(mouse_pan_active && !mouse_pan_grab_requested) {
+        mouse_pan_virtual_x=mouse_pan_restore_x=mx;
+        mouse_pan_virtual_y=mouse_pan_restore_y=my;
+      }
+    } else {
+      s_middle_pan=(ScMousePan){0};
+      panning=false;s_pan_dir_frames=0;
+    }
+    if(mouse_pan_relative_requested!=s_middle_pan.active) {
+      if(!s_middle_pan.active && (SDL_GetWindowFlags(window)&SDL_WINDOW_INPUT_FOCUS))
+        SDL_WarpMouseInWindow(window,(int)mouse_pan_restore_x,(int)mouse_pan_restore_y);
+      bool accepted=sc_window_relative_mouse(window,s_middle_pan.active);
+      mouse_pan_relative_requested=s_middle_pan.active;
+      if(!accepted) fprintf(stderr,"mouse drag relative mode: %s\n",SDL_GetError());
+      if(getenv("SC_MOUSE_PAN_DIAG"))
+        fprintf(stderr,"[mouse drag relative] frame %llu enabled %d accepted %d\n",
+            (unsigned long long)s_frames,(int)s_middle_pan.active,(int)accepted);
+    }
+    s_custom_renderer.pointer_hidden=s_middle_pan.active;
+    /* Only panning confines the pointer. Releasing, opening F12, disabling
+     * mouse input or losing focus must always restore normal desktop motion. */
+    if(mouse_pan_grab_requested!=mouse_pan_active) {
+      bool accepted=sc_window_mouse_grab(window,mouse_pan_active);
+      mouse_pan_grab_requested=mouse_pan_active;
+      if(!accepted) fprintf(stderr,"mouse pan grab: %s\n",SDL_GetError());
+      if(getenv("SC_MOUSE_PAN_DIAG"))
+        fprintf(stderr,"[mouse pan grab] frame %llu requested %d actual %d accepted %d\n",
+            (unsigned long long)s_frames,(int)mouse_pan_active,
+            (int)sc_window_mouse_grabbed(window),(int)accepted);
     }
     if (s_fast_cursor_enabled) {
       /* Host-driven, independent of the ROM's own cadence -- see
@@ -10413,6 +10909,7 @@ int main(int argc, char **argv) {
       g_ram[0x01ed] = cursor_before_mouse_y;
       mouse_target_valid = false;
       s_custom_renderer.pointer_active = false;
+      s_custom_renderer.pointer_hud = false;
       s_mouse_dir_frames = 0;
       mouse_edge_input = 0;
     } else if (mouse_ui_handled && mouse_ui_select) {
@@ -10436,8 +10933,55 @@ int main(int argc, char **argv) {
           s_mouse_dialog==SC_MOUSE_DIALOG_NONE &&
           mouse_target_valid && !mouse_navigation_hit && host_map_screen_live() && !ram_w(0xd7) && on_land &&
           ram_w(0x020d) <= 15 && !s_menu_open && !scripted_input;
-      if (!host_map_screen_live()) s_build_pending = false;
-      if (mouse_raw_left && !previous_left && supported && !s_build_pending && !right) {
+      if (!host_map_screen_live()) {
+        s_build_pending=false;s_clip_tool=s_clip_pending=0;s_clip_drag=false;
+      }
+      bool pressed=mouse_raw_left && !previous_left;
+      if(pressed && mouse_clip_hit && !s_build_active && !s_build_pending && !s_clip_pending) {
+        unsigned tool=(unsigned)mouse_clip_button+1;
+        if(tool==1 || s_clipboard.count) {
+          s_clip_tool=s_clip_tool==tool?0:tool;
+          s_clip_native_tool=ram_w(0x20d);
+        } else g_ram[5]=2;
+        mouse_clip_consumed=true;
+      }
+      /* Selecting an ordinary palette tool leaves the clipboard tool. */
+      if(s_clip_tool && (ram_w(0x20d)!=s_clip_native_tool ||
+          (pressed && mouse_target_valid && mouse_target_x>=8 && mouse_target_x<56 &&
+           mouse_target_y>=46 && mouse_target_y<176))) {
+        s_clip_tool=s_clip_pending=0;s_clip_drag=false;
+      }
+      if(right && (s_clip_tool || s_clip_drag)) {
+        s_clip_tool=s_clip_pending=0;s_clip_drag=false;mouse_clip_consumed=true;
+      }
+      if(s_clip_tool && supported && !mouse_clip_hit && !s_clip_pending) {
+        s_clip_hover=true;
+        s_clip_x1=s_custom_video.enabled?mouse_city_x:(int16_t)ram_w(0x1bd)+mouse_target_x/8;
+        s_clip_y1=s_custom_video.enabled?mouse_city_y:(int16_t)ram_w(0x1bf)+mouse_target_y/8;
+        if(pressed && !s_clip_pending && !right) {
+          s_clip_native_tool=ram_w(0x20d);
+          if(s_clip_tool==1) {
+            s_clip_drag=true;s_clip_x0=s_clip_x1;s_clip_y0=s_clip_y1;
+            s_clip_scroll_x=(int16_t)ram_w(0x1bd);s_clip_scroll_y=(int16_t)ram_w(0x1bf);
+            SDL_CaptureMouse(true);
+          } else s_clip_pending=2;
+        }
+      }
+      if(s_clip_drag) {
+        if(ram_w(0xd7) || ram_w(0x379) || s_menu_open ||
+            (int16_t)ram_w(0x1bd)!=s_clip_scroll_x || (int16_t)ram_w(0x1bf)!=s_clip_scroll_y) {
+          s_clip_drag=false;s_build_cancelled=true;
+        } else if(!mouse_raw_left && previous_left) {
+          s_clip_drag=false;s_clip_pending=1;
+        }
+      }
+      if(s_clip_tool || s_clip_pending || mouse_clip_hit || mouse_clip_consumed) {
+        mouse_edge_input=0;s_mouse_dir_frames=0;
+        if(on_land || s_clip_pending || mouse_clip_hit) mouse_clip_consumed=true;
+      }
+      s_custom_renderer.clipboard_cursor=s_clip_tool!=0;
+      if (pressed && supported && !s_clip_tool && !s_clip_pending && !mouse_clip_consumed &&
+          !s_build_pending && !right) {
         s_build_tool = ram_w(0x020d);
         s_build_scroll_x = (int16_t)ram_w(0x01bd); s_build_scroll_y = (int16_t)ram_w(0x01bf);
         s_build_x0 = s_custom_video.enabled ? mouse_city_x : s_build_scroll_x + mouse_target_x / 8;
@@ -10465,27 +11009,18 @@ int main(int argc, char **argv) {
           }
         }
       }
-      if (s_menu_open && (ev.type == SDL_MOUSEMOTION ||
-          (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT))) {
-        double x = ev.type == SDL_MOUSEMOTION ? ev.motion.x : ev.button.x;
-        double y = ev.type == SDL_MOUSEMOTION ? ev.motion.y : ev.button.y;
-        int row = settings_mouse_row(window, renderer, x, y);
-        if (row >= 0) {
-          s_menu_selected = row;
-          if (ev.type == SDL_MOUSEBUTTONDOWN) setting_activate(&s_settings[row]);
-        }
-      }
       if (s_build_active || s_build_cancelled || s_build_pending) {
         mouse_edge_input = 0; s_pan_dir_frames = 0; s_mouse_dir_frames = 0;
       }
       if (s_custom_video.enabled && (s_build_active || s_build_pending)) {
         s_custom_renderer.pointer_active=true;
+        s_custom_renderer.pointer_hud=false;
         s_custom_renderer.pointer_x=s_build_x1*8-s_custom_renderer.scroll_x-s_custom_renderer.scroll_adjust_x;
         s_custom_renderer.pointer_y=s_build_y1*8-s_custom_renderer.scroll_y-s_custom_renderer.scroll_adjust_y;
       }
       if (!mouse_raw_left) s_build_cancelled = false;
       previous_left = mouse_raw_left;
-      if (!s_build_active) SDL_CaptureMouse(false);
+      if (!s_build_active && !s_clip_drag && !s_middle_pan.active) SDL_CaptureMouse(false);
     }
     { const uint32_t mb = s_mouse_enabled ? mouse_buttons : SDL_GetMouseState(NULL, NULL);
       /* On a MENU, feed the synthesised d-pad without waiting for a button.
@@ -10514,15 +11049,16 @@ int main(int argc, char **argv) {
       if ((mb & SDL_BUTTON(SDL_BUTTON_LEFT)) &&
           (!mouse_ui_handled || mouse_ui_hit) &&
           !(s_custom_video.enabled && mouse_city_hit && ram_w(0x020d)>15) &&
-          !s_build_active && !s_build_pending && !s_build_cancelled) input |= kPad_B;
+          !s_build_active && !s_build_pending && !s_build_cancelled && !mouse_clip_consumed) input |= kPad_B;
       /* Right button drives the map pan directly (see the pan block in the
        * mouse handler) rather than feeding A, so it does not also trigger the
        * ROM's own hold-A scroll and double up. */
-      if ((mb & SDL_BUTTON(SDL_BUTTON_RIGHT)) && !s_build_cancelled) {
+      if ((mb & SDL_BUTTON(SDL_BUTTON_RIGHT)) && !s_build_cancelled && !mouse_clip_consumed) {
         input |= kPad_A;                      /* the game's own pan modifier */
         if (s_pan_dir_frames > 0) { input |= s_pan_dir; s_pan_dir_frames--; }
       } }
     input |= mouse_edge_input;
+    input |= middle_pan_input;
     /* Don't feed the keyboard to the game while the settings menu is open:
      * the menu navigates with Up/Down/Left/Right/Enter, which are also the
      * SNES D-pad and Start bindings. The game is frozen so nothing acts on
@@ -10562,13 +11098,24 @@ int main(int argc, char **argv) {
      * the one that mattered, and the other was advancing the simulation during
      * ordinary play. Only explicit held gestures remain. */
     bool fast_forward = keys[SDL_SCANCODE_TAB] || test_fast_forward;
-    s_scroll_multiplier=(keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL]) &&
+    /* Mouse pans consume their queued motion at the faster native scroll rate
+     * at every zoom. Ctrl uses the same rate, rather than multiplying it again. */
+    s_scroll_multiplier=(keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL] ||
+        s_middle_pan.active || s_pan_dir_frames) &&
         host_map_screen_live() && !s_menu_open?3:1;
     /* Deterministic equivalent of Ctrl for mouse/keyboard scroll replays. */
     {const char *e=getenv("SC_SCROLL_MULTIPLIER");if(e && !s_menu_open) s_scroll_multiplier=atoi(e)==3?3:1;}
-    s_measure_custom_frame=fast_forward;
+    s_measure_custom_frame=fast_forward || perf_on;
     if(s_gpu_terrain_enabled && s_custom_video.enabled && !gpu_terrain && !gpu_failed) {
       gpu_terrain=ScGpuTerrainCreate(renderer,s_linear_filter);
+      const char *field_reference=getenv("SC_GPU_FIELDS_REFERENCE");
+      if(gpu_terrain && (!field_reference || *field_reference!='1')) {
+        gpu_fields=ScGpuFieldsCreate(renderer);
+        if(gpu_fields) {
+          ScStencilBackend backend={gpu_fields,ScGpuFieldsBegin,ScGpuFieldsData};
+          ScWorldGuestSetStencilBackend(&backend);
+        }
+      }
       if(!gpu_terrain) {
         fprintf(stderr,"[gpu terrain] unavailable; retaining CPU renderer\n");
         s_gpu_terrain_enabled=false;gpu_failed=true;
@@ -10621,13 +11168,14 @@ int main(int argc, char **argv) {
         { static int skip_native=-1;
           if(skip_native<0) {const char *e=getenv("SC_TAB_SKIP_PIXELS");skip_native=!e || *e!='0';}
           ScPpuSkipPixels(s_skip_custom_frame && skip_native); }
-        ScPpuMeasurePixels(fast_forward?SDL_GetPerformanceCounter:NULL,s_perf_clock_ms);
+        ScPpuMeasurePixels((fast_forward || perf_on)?SDL_GetPerformanceCounter:NULL,s_perf_clock_ms);
         s_custom_frame_ms=0;
         uint64_t guest_t0=SDL_GetPerformanceCounter();
         if (mouse_target_valid && !s_fast_cursor_enabled) {
           g_ram[0x01eb] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_x<0?0:mouse_target_x>255?255:mouse_target_x);
           g_ram[0x01ed] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_y<0?0:mouse_target_y>223?223:mouse_target_y);
         }
+        ScGpuFieldsPoll(gpu_fields);
         if (!run_one_frame()) {
           fprintf(stderr, "frame %llu: opcode guard tripped (hang/runaway) -- stopping\n",
                   (unsigned long long)s_frames);
@@ -10637,6 +11185,7 @@ int main(int argc, char **argv) {
         ++fps_guest_frames;
         if(perf_on) ++perf_total_guests;
         double guest_ms=(SDL_GetPerformanceCounter()-guest_t0)*s_perf_clock_ms;
+        if(perf_on) {s_perf_custom_ms+=s_custom_frame_ms;s_perf_native_ms+=ScPpuPixelMilliseconds();}
         double *estimate=s_skip_custom_frame?&extra_frame_ms:&full_frame_ms;
         /* React immediately to an expensive simulation phase; recover the
          * boost gradually when it ends, rather than oscillating into hitches. */
@@ -10669,6 +11218,19 @@ int main(int argc, char **argv) {
     const uint64_t emu_t1 = perf_on ? SDL_GetPerformanceCounter() : 0;
     SC_PERF_ADD(kPerfEmu, frame_t0, emu_t1);
     ScSram_Tick();
+    if(music_thread) {
+      static bool stall_test_done;
+      const char *e=getenv("SC_AUDIO_STALL_AT");
+      if(!stall_test_done && e && s_frames>=strtoull(e,NULL,0)) {
+        stall_test_done=true;ScMusicStats before=ScMusicGetStats();SDL_Delay(250);
+        ScMusicStats after=ScMusicGetStats();
+        fprintf(stderr,"[music stall] 250ms cycles=%llu samples=%llu audible=%llu failures=%llu\n",
+            (unsigned long long)(after.cycles-before.cycles),
+            (unsigned long long)(after.samples-before.samples),
+            (unsigned long long)(after.nonzero_samples-before.nonzero_samples),
+            (unsigned long long)after.write_failures);
+      }
+    }
 
     /* A fast-forward batch leaves several frames of audio in the DSP ring;
      * the audio drain below trims it to one frame, so the sound does not
@@ -10720,7 +11282,8 @@ int main(int argc, char **argv) {
     /* Audio: drain one frame's worth of DSP output at the native SNES rate,
      * same pacing model as snesrecomp/cosim/ref_driver.c's deterministic
      * consumer, queued to the SDL audio device instead of discarded. */
-    if (audio_dev) {
+    if(music_thread) ScMusicGuestFrame(sc_audio_guest_cycle(),s_menu_open);
+    if (audio_dev && !music_thread) {
       /* Don't accrue playback debt for wall-clock time the emulator wasn't
        * actually running: while the settings menu is open no frames are
        * simulated, so no samples are produced and there is nothing to pace
@@ -10795,6 +11358,17 @@ int main(int argc, char **argv) {
     const uint64_t draw_t0 = perf_on ? SDL_GetPerformanceCounter() : 0;
     SC_PERF_ADD(kPerfAudio, emu_t1, draw_t0);
     void *pixels = NULL; int pitch = 0;
+    bool clipboard_ui=s_rom_is_us && host_map_screen_live() && ram_w(0x1d7) &&
+        !ram_w(0xd7) && !ram_w(0x379) && s_mouse_dialog==SC_MOUSE_DIALOG_NONE &&
+        !s_custom_renderer.advisor_frame && !s_custom_renderer.map_hold;
+    if(clipboard_ui && s_custom_video.enabled) {
+      ScViewport v=s_custom_renderer.view;
+      for(int y=v.core_y;y<v.core_y+224 && y<v.height;++y)
+        if(y>=0 && (y<v.core_y+10 || (s_clip_tool && y>=v.core_y+176)))
+          ScRendererClipboardRow(&s_custom_renderer,g_ppu,v,s_clip_tool,s_clipboard.count!=0,
+              s_clipboard.price,y,s_custom_renderer.pixels+(size_t)y*v.width);
+      ScRendererHudPointer(&s_custom_renderer,g_ppu);
+    }
     SDL_Texture *present_texture=texture;
     if(s_custom_renderer.defer_terrain && s_custom_renderer.terrain.deferred) {
       SDL_Texture *computed=ScGpuTerrainDraw(gpu_terrain,&s_custom_renderer);
@@ -10820,6 +11394,9 @@ int main(int argc, char **argv) {
         if (!s_custom_video.enabled && host_map_screen_live() && ram_w(0x1d7))
           ScRendererPopulationRow(&s_custom_renderer,g_ppu,viewport,false,y,
               (uint32_t *)((uint8_t *)pixels+(size_t)y*pitch));
+        if(clipboard_ui && !s_custom_video.enabled)
+          ScRendererClipboardRow(&s_custom_renderer,g_ppu,viewport,s_clip_tool,s_clipboard.count!=0,
+              s_clipboard.price,y,(uint32_t *)((uint8_t *)pixels+(size_t)y*pitch));
       }
     }
     if (_lok) SDL_UnlockTexture(texture);
@@ -10846,6 +11423,42 @@ int main(int argc, char **argv) {
                           s_destination.y + (v.core_y + gy) * sy, step * 8 * sx, step * 8 * sy);
         SDL_RenderDrawRect(renderer, &r);
       }
+    }
+    if(clipboard_ui && !s_menu_open && (s_clip_drag || s_clip_pending || (s_clip_tool==2 && s_clip_hover))) {
+      ScViewport v=s_custom_video.enabled?s_custom_renderer.view:viewport;
+      double sx=(double)s_destination.w/v.width,sy=(double)s_destination.h/v.height;
+      int scroll_x=s_custom_video.enabled?s_custom_renderer.scroll_x+s_custom_renderer.scroll_adjust_x:(int16_t)ram_w(0x1bd)*8;
+      int scroll_y=s_custom_video.enabled?s_custom_renderer.scroll_y+s_custom_renderer.scroll_adjust_y:(int16_t)ram_w(0x1bf)*8;
+      int left=s_clip_x1,top=s_clip_y1,w=s_clipboard.width,h=s_clipboard.height;
+      bool copy=s_clip_drag || s_clip_pending==1;
+      if(copy) {
+        left=s_clip_x0<s_clip_x1?s_clip_x0:s_clip_x1;top=s_clip_y0<s_clip_y1?s_clip_y0:s_clip_y1;
+        w=abs(s_clip_x1-s_clip_x0)+1;h=abs(s_clip_y1-s_clip_y0)+1;
+      }
+      bool valid=copy || (left>=0 && top>=0 && left+w<=(s_world.active?ScWorldWidth(&s_world):120) &&
+          top+h<=(s_world.active?ScWorldHeight(&s_world):100));
+      SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(renderer,255,valid?230:70,valid?60:70,240);
+      SDL_Rect clip={(int)s_destination.x,(int)s_destination.y,(int)s_destination.w,(int)s_destination.h};
+      SDL_RenderSetClipRect(renderer,&clip);
+      int dx0=(scroll_x-v.core_x)/8-left-1,dy0=(scroll_y-v.core_y)/8-top-1;
+      int dx1=dx0+v.width/8+3,dy1=dy0+v.height/8+3;
+      if(dx0<0) dx0=0;if(dy0<0) dy0=0;if(dx1>w) dx1=w;if(dy1>h) dy1=h;
+      static const int neighbour[4][2]={{0,-1},{1,0},{0,1},{-1,0}};
+      for(int dy=dy0;dy<dy1;++dy) for(int dx=dx0;dx<dx1;++dx) {
+        if(!copy && !s_clipboard.mask[dy*w+dx]) continue;
+        int gx=(left+dx)*8-scroll_x,gy=(top+dy)*8-scroll_y;
+        for(unsigned edge=0;edge<4;++edge) {
+          int nx=dx+neighbour[edge][0],ny=dy+neighbour[edge][1];
+          if(nx>=0 && ny>=0 && nx<w && ny<h && (copy || s_clipboard.mask[ny*w+nx])) continue;
+          int ax=gx+(edge==1?8:0),ay=gy+(edge==2?8:0);
+          int bx=ax+(edge==0 || edge==2?8:0),by=ay+(edge==1 || edge==3?8:0);
+          if((ay<46 && by>=0) || (ax<56 && bx>=8 && ay<224 && by>=46)) continue;
+          SDL_RenderDrawLine(renderer,s_destination.x+(v.core_x+ax)*sx,s_destination.y+(v.core_y+ay)*sy,
+              s_destination.x+(v.core_x+bx)*sx,s_destination.y+(v.core_y+by)*sy);
+        }
+      }
+      SDL_RenderSetClipRect(renderer,NULL);
     }
     /* Validation hook: publish only complete presented frames, atomically.
      * No guest work is performed for a capture, including during resizing. */
@@ -10971,6 +11584,27 @@ int main(int argc, char **argv) {
     SC_PERF_ADD(kPerfSleep, sleep_t0, SDL_GetPerformanceCounter());
     fps_window_frames++;
     if(perf_on) ++perf_total_frames;
+    if(perf_frame_file) fprintf(perf_frame_file,"%llu,%d,%d,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%llu,%.6f",
+        (unsigned long long)s_frames,(int)s_custom_renderer.city_frame,s_development_speed,
+        perf_current[kPerfInput],perf_current[kPerfEmu],perf_current[kPerfAudio],
+        perf_current[kPerfDraw],perf_current[kPerfPresent],perf_current[kPerfSleep],
+        (int)s_custom_renderer.advisor_frame,
+        (unsigned long long)(s_development.extra_attempts>=perf_extra_begin?
+            s_development.extra_attempts-perf_extra_begin:0),s_custom_frame_ms);
+    if(perf_frame_file) {
+      for(unsigned stage=0;stage<SC_RENDER_STAGES;++stage)
+        fprintf(perf_frame_file,",%.6f",s_custom_renderer.measure_ticks[stage]*s_perf_clock_ms);
+      fputc('\n',perf_frame_file);
+    }
+    memset(s_custom_renderer.measure_ticks,0,sizeof s_custom_renderer.measure_ticks);
+    if(bank_frame_file) {
+      fprintf(bank_frame_file,"%llu,%.6f",(unsigned long long)s_frames,perf_current[kPerfEmu]);
+      for(unsigned p=0;p<256;++p) fprintf(bank_frame_file,",%llu",s_bank_ops[p]-bank_begin[p]);
+      for(unsigned p=0;p<256;++p) fprintf(bank_frame_file,",%llu",s_b3_page[p]-page_begin[p]);
+      for(unsigned p=0;p<256;++p) fprintf(bank_frame_file,",%llu",s_pc_profile_ops[p]-pc_begin[p]);
+      fputc('\n',bank_frame_file);
+    }
+    if(perf_exit_frame && s_frames>=perf_exit_frame) quit=true;
     double fps_window_elapsed = (double)(SDL_GetPerformanceCounter() - fps_window_start) /
                                  (double)SDL_GetPerformanceFrequency();
     if (fps_window_elapsed >= 1.0) {
@@ -10989,8 +11623,12 @@ int main(int argc, char **argv) {
           fprintf(stderr, "  %s %.2f/%.2f", kPerfName[k], perf_sum[k] / perf_frames, perf_max[k]);
           perf_sum[k] = perf_max[k] = 0;
         }
-        fprintf(stderr,"  raster %.2f power %.2f spatial %llu boost %.2fx\n",s_perf_raster_ms/perf_frames,
-            s_perf_power_ms/perf_frames,(unsigned long long)s_perf_spatial_cells,boost);
+        fprintf(stderr,"  raster %.2f native %.2f host %.2f power %.2f spatial %llu C-development %llu boost %.2fx\n",s_perf_raster_ms/perf_frames,
+            s_perf_native_ms/perf_frames,s_perf_custom_ms/perf_frames,
+            s_perf_power_ms/perf_frames,(unsigned long long)s_perf_spatial_cells,
+            (unsigned long long)s_perf_native_development_calls,boost);
+        s_perf_native_ms=s_perf_custom_ms=0;
+        s_perf_native_development_calls=0;
         s_perf_raster_ms=s_perf_power_ms=0;s_perf_spatial_cells=0;
         perf_frames = 0;
       }
@@ -11000,6 +11638,16 @@ int main(int argc, char **argv) {
     }
   }
 
+  if(music_thread) {
+    ScMusicStats stats=ScMusicGetStats();
+    fprintf(stderr,"[music thread] cycles=%llu samples=%llu audible=%llu blocks=%llu failures=%llu\n",
+        (unsigned long long)stats.cycles,(unsigned long long)stats.samples,
+        (unsigned long long)stats.nonzero_samples,(unsigned long long)stats.blocks,
+        (unsigned long long)stats.write_failures);
+  }
+  ScMusicStop();
+  if(perf_frame_file) fclose(perf_frame_file);
+  if(bank_frame_file) fclose(bank_frame_file);
   if (audio_dev) sc_audio_close(&audio);
   ScSram_Flush();
   if(perf_on && perf_total_frames) fprintf(stderr,
@@ -11007,12 +11655,67 @@ int main(int argc, char **argv) {
       (unsigned long long)perf_total_frames,(unsigned long long)perf_total_guests,
       perf_total[kPerfEmu]/perf_total_frames,perf_total[kPerfDraw]/perf_total_frames,
       perf_total[kPerfPresent]/perf_total_frames);
+  if(s_bank_profile) {
+    unsigned long long pages[256];memcpy(pages,s_b3_page,sizeof pages);
+    fprintf(stderr,"[bank profile] bank %02x %llu dispatches; remaining hot pages:\n",s_bank_page_sel,s_bank_ops[s_bank_page_sel]);
+    for(unsigned n=0;n<12;++n) {
+      unsigned best=0;for(unsigned p=1;p<256;++p) if(pages[p]>pages[best]) best=p;
+      if(!pages[best]) break;
+      fprintf(stderr,"  %02x:%02xxx %llu\n",s_bank_page_sel,best,pages[best]);pages[best]=0;
+    }
+  }
+  if(s_bank_profile) {
+    fprintf(stderr,"[interpreter calls] main:");
+    for(unsigned bank=0;bank<256;++bank) if(s_interpreter_bank_ops[bank])
+      fprintf(stderr," bank%02x=%llu",bank,(unsigned long long)s_interpreter_bank_ops[bank]);
+    fputc('\n',stderr);
+    uint64_t pages[256];memcpy(pages,s_interpreter_pages,sizeof pages);
+    fprintf(stderr,"[main interpreter pages] bank %02x:\n",s_bank_page_sel);
+    for(unsigned n=0;n<12;++n) {
+      unsigned best=0;for(unsigned p=1;p<256;++p) if(pages[p]>pages[best]) best=p;
+      if(!pages[best]) break;
+      fprintf(stderr,"  %02x:%02xxx %llu\n",s_bank_page_sel,best,(unsigned long long)pages[best]);pages[best]=0;
+    }
+    if(s_pc_profile_page>=0) {
+      fprintf(stderr,"[main interpreter PCs] bank %02x page %02x:\n",s_bank_page_sel,s_pc_profile_page);
+      for(unsigned n=0;n<24;++n) {
+        unsigned best=0;for(unsigned p=1;p<256;++p) if(s_interpreter_pc[p]>s_interpreter_pc[best]) best=p;
+        if(!s_interpreter_pc[best]) break;
+        fprintf(stderr,"  %02x:%02x%02x %llu\n",s_bank_page_sel,s_pc_profile_page,best,(unsigned long long)s_interpreter_pc[best]);
+        s_interpreter_pc[best]=0;
+      }
+    }
+    const uint64_t *ops=ScWorldGuestInterpreterCounts();uint64_t total=0;
+    memset(pages,0,sizeof pages);
+    for(unsigned p=0;p<65536;++p) {total+=ops[p];pages[p>>8]+=ops[p];}
+    fprintf(stderr,"[kernel interpreter calls] bank03=%llu\n",(unsigned long long)total);
+    for(unsigned n=0;n<12;++n) {
+      unsigned best=0;for(unsigned p=1;p<256;++p) if(pages[p]>pages[best]) best=p;
+      if(!pages[best]) break;
+      fprintf(stderr,"  03:%02xxx %llu\n",best,(unsigned long long)pages[best]);pages[best]=0;
+    }
+  }
+  if(gpu_fields) fprintf(stderr,"[gpu fields] native publication cells=%llu\n",(unsigned long long)ScWorldGuestStencilCells());
+  fprintf(stderr,"[gpu service] fused cells=%llu GPU cells=%llu\n",(unsigned long long)ScWorldGuestServiceCells(),(unsigned long long)ScWorldGuestServiceGpuCells());
+  fprintf(stderr,"[power stages] spans=%llu guest-clocks=%llu\n",(unsigned long long)ScPowerTraversalStageSpans(),(unsigned long long)ScPowerTraversalStageClocks());
+  ScWorldGuestSetStencilBackend(NULL);ScGpuFieldsDestroy(gpu_fields);
   ScGpuTerrainDestroy(gpu_terrain);
+  if(s_bank_profile && s_pc_profile_page>=0) {
+    fprintf(stderr,"[PC profile] bank %02x page %02x:\n",s_bank_page_sel,s_pc_profile_page);
+    for(unsigned n=0;n<24;++n) {
+      unsigned best=0;for(unsigned i=1;i<256;++i) if(s_pc_profile_ops[i]>s_pc_profile_ops[best]) best=i;
+      if(!s_pc_profile_ops[best]) break;
+      fprintf(stderr,"  %02x:%02x%02x %llu\n",s_bank_page_sel,s_pc_profile_page,best,s_pc_profile_ops[best]);
+      s_pc_profile_ops[best]=0;
+    }
+  }
   SDL_DestroyTexture(texture);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();
   ScRendererDestroy(&s_custom_renderer);
+  ScClipboardClear(&s_clipboard);
+  ScPopulationCensusDestroy(s_population_census);s_population_census=NULL;
   write_pc_bitmap_dump();
   write_map_trace_summary();
   { const char *p = getenv("SC_WRAM_MAP"); if (s_wram_map && p) write_wram_map(p); }

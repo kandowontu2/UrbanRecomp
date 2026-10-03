@@ -1,63 +1,47 @@
-URBAN RECOMP ENHANCED - 1.2.0 BETA 10
+URBAN RECOMP ENHANCED - 1.2.0 BETA 11
 ===================================
 
-Urban Recomp runs the Super Nintendo city builder SimCity (1991) natively on
-Windows, with widescreen, a launcher, mouse control and an in-game settings
-menu. It is an unofficial fan project, not affiliated with Electronic Arts,
-Maxis or Nintendo. It contains no game data: you need your own copy of the
-US cartridge.
+Run the single portable EXE and choose your own clean US SimCity SNES ROM.
+The runtime, assets, documentation, credits and all 19 restored songs are
+embedded. They unpack into a versioned private cache under LOCALAPPDATA.
+Saves and settings stay beside the portable EXE; existing installations are
+not replaced. No ROM or personal saves/settings are included.
 
-Enhanced fork, documentation and issues: https://github.com/kandowontu2/UrbanRecomp
-Original project and credits: https://github.com/blackerking/UrbanRecomp
+Enhanced fork: https://github.com/kandowontu2/UrbanRecomp
+Original project: https://github.com/blackerking/UrbanRecomp
 
-F12 development speed: Normal, 2x, 5x, 10x and 50x, with population and power
-refresh scaled to the selected multiplier. Calendar and budgets keep their
-normal schedule. 64-bit calculated population up to 9,999,999,999; Normal
-120x100, 240x200, 480x400 and 960x800 maps. Select the size on the new
-in-game MAP SIZE screen before starting a city or Practice. It uses the
-original menu font. Map size is no longer an F12 setting.
-START NEW JOURNEY uses the original menu font and starts Normal, expanding
-to Big at 100,000 residents and Huge at 1,000,000. Dr. Wright celebrates each
-expansion. Buildings and city data are preserved; Journey progress is saved.
-Huge maps now render correctly past the old byte-coordinate boundaries.
-Full-widescreen mouse construction, retained off-screen
-drags, and corrected widescreen HUD/minimap placement. See PC_ENHANCEMENTS.md.
-Cursor transitions now clear every sprite row and keep the whole hand together
-when it crosses from the right-hand HUD into the city.
-Beta 7 fixes stalled development on Huge maps by keeping the added spatial
-work from delaying city simulation. Unpowered buildings show the original
-animated lightning warnings throughout the expanded view. Power and population
-refresh rates no longer inherit an extra map-area delay.
-Tab fast-forward now adapts its boost to the frame-time budget, up to 6x,
-and the title shows the measured multiplier. It is independent of Mesen.
-Beta 8 fixes displaced building fragments on Big/Huge maps during repair,
-house growth/removal and destruction. Mouse clicks now activate both save
-slots, Save? confirmation buttons, gift selections and widescreen gift
-placement. END works on the difficulty and confirmation screens.
-Existing stray tiles in previously affected saves require recovery from a
-clean map/backup; this update prevents new corruption without deleting cities.
-Beta 9 launches as a Windows desktop application without opening a console.
-The optional Start-UrbanRecomp.cmd launcher exits after starting the game.
-Beta 10 adds full 960x800 worlds and repairs expanded-city load geometry.
-F12 FIT TO SCREEN expands visible land at the current tile scale. Ctrl makes
-scrolling 3x faster. Held X/arrow panning repairs stale native tile staging.
-Tab avoids drawing intermediate frames while preserving guest simulation.
-GPU TERRAIN starts enabled on supported Windows Direct3D 11 renderers,
-with automatic CPU fallback and an F12 toggle. Span rendering, spatial C
-kernels and cached power work reduce frame costs on large Fit canvases.
-Paired 960x800/X50 tests showed about 44% less frame work; heavy phases can
-still miss 60 FPS. See GPU_PERFORMANCE.md for measurements and limitations.
-Reload rebuilds the real power network before development, across all map
-sizes. Disconnected zones and overloaded plants still show valid warnings.
-These features require the verified clean US ROM and the interpreter build.
-This enhanced build is a prerelease; hands-on gameplay testing is ongoing.
+Latest additions: Vulkan presentation/compute, native C simulation kernels,
+full 1920x1600 maps, population up to 9,999,999,999,999, whole-building
+Copy/Paste with original-font price/preview, Ctrl-wheel/pinch zoom, threaded
+restored music and continuous middle-button drag pan. Gift menus and F12
+mouse clicks work; Left decreases and Right increases. The map-size page's
+text, selection arrow and hitboxes are inset farther down in the panel.
+F12 MUTE CITY WARNINGS suppresses crime, traffic and pollution messages
+without altering their simulation; it defaults to OFF.
 
+Select map size before starting a city/Practice: 120x100, 240x200, 480x400,
+960x800 or 1920x1600. Journey starts at Normal and expands at 100,000 and
+1,000,000 residents, with Dr. Wright celebrations. F12 development speed
+is Normal, 2x, 5x, 10x or 50x; calendar/budget scheduling remains normal.
+Fit to Screen increases visible land at the chosen tile scale.
+
+All 19 restored PCM tracks play with their authored loops and native sound
+effects. Credits: Pinci / Church of Kondo (restoration), Relikk (PCM set).
+Full project/component credits: CREDITS.md and THIRD_PARTY_NOTICES.md.
+Change history: CHANGELOG.md. Software licenses are in the licenses folder.
+Run the portable EXE with --portable-docs to open the embedded documents,
+or --portable-extract <folder> to extract the full bundle for inspection.
+
+Substantial interpreted work has been replaced with C, but complete removal
+of the interpreter and sustained 60 FPS in every heavy phase remain open.
+Touchpad hardware delivery needs hands-on testing. The reported yearly
+black budget popup remains deferred. See GPU_PERFORMANCE.md for evidence.
 
 START
 -----
 
-1. Put your US ROM (.sfc or .smc, any file name) into this folder.
-2. Start UrbanRecomp.exe.
+1. Start the portable EXE.
+2. Select your own US ROM (.sfc or .smc, any file name) in the launcher.
 
 The launcher lets you pick the ROM and set window size, fullscreen,
 widescreen, language, the Sylt scenario and the keys. It needs OpenGL 3.3;
@@ -78,6 +62,8 @@ Select       B
 Tab          fast-forward (hold)
 Ctrl         3x scrolling (hold)
 + / -        zoom the map in the city view
+Ctrl+wheel   zoom (touchpad pinch events also supported)
+Middle mouse hold and drag to pan; pointer is hidden and captured
 Shift+1..0   save state to slot 1-0, 1..0 load it
 F3           mouse moves the game cursor
 F9           fast cursor

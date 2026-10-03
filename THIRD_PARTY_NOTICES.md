@@ -15,6 +15,10 @@ Required Notice: Copyright (c) 2026 Matthew Stan
 in the Windows package. Because of it, the program may be used and passed on
 for noncommercial purposes only.
 
+Additional engine provenance and required notices, including the LakeSnes
+CPU core, are in `licenses/snesrecomp-THIRD_PARTY_ATTRIBUTION.md`. Color-model
+provenance and MIT/Apache/PolyForm texts are in `licenses/psxrecomp_color_lut/`.
+
 ## recomp-ui -- MIT
 
 The launcher. Copyright (c) 2026 Matthew Stanley. Full text:
@@ -74,3 +78,15 @@ own. See `sylt_graphics/PROVENANCE.md`.
 - **Truttle1** found the post-load power bug and the power bit.
 - **Selicre**'s community mouse patch identified the cursor bytes that the
   mouse control drives (<https://github.com/Selicre/simcity-mouse>).
+- **Vitor Vilela**'s SimCity SA-1 Beta 2 is a mouse-behavior reference:
+  <https://www.patreon.com/vitorvilela/posts/simcity-sa-1-2-168886217>.
+  No SA-1 ROM patch bytes are included.
+
+## Restored soundtrack in Enhanced Beta 11
+
+The owner-supplied MSU1 SimCity (Restored) set is bundled with this release.
+Credits: Pinci / Church of Kondo for restoration, Relikk for the PCM set;
+<https://www.zeldix.net/t1602-simcity>. The original SimCity music belongs to
+its original creators and rights holders. The MSU-1 ROM patch is not included.
+See `CREDITS.md` for project and research acknowledgments. Software licenses
+above apply to their respective software components, not to these music files.

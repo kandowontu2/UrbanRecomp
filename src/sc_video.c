@@ -149,6 +149,20 @@ void ScVideoCaptureScale(ScVideoSettings *s, ScViewport v, int w, int h) {
                    v.pixel_scale : (double)d.h / v.height;
     s->fit_pixel_aspect = v.pixel_aspect;
 }
+bool ScVideoZoom(ScVideoSettings *s,ScViewport current,int w,int h,double factor) {
+    if(!s || w<=0 || h<=0 || !isfinite(factor) || factor<=0 ||
+       !isfinite(current.pixel_aspect) || current.pixel_aspect<=0) return false;
+    ScVideoSettings next=*s;ScVideoCaptureScale(&next,current,w,h);
+    double minimum=fmax(w/(SC_MAX_CANVAS*next.fit_pixel_aspect),(double)h/SC_MAX_CANVAS);
+    double maximum=fmin(w/(256*next.fit_pixel_aspect),(double)h/224);
+    if(minimum>maximum) minimum=maximum;
+    double scale=fmax(minimum,fmin(maximum,next.fit_scale*factor));
+    if(!isfinite(scale) || scale<=0) return false;
+    next.enabled=true;next.aspect=SC_FIT;next.fit_scale=scale;
+    bool changed=!s->enabled || s->aspect!=SC_FIT || fabs(s->fit_scale-scale)>1e-9;
+    if(changed) *s=next;
+    return changed;
+}
 bool ScVideoToGuest(ScViewport v, ScVideoRect d, double x, double y, int *gx, int *gy) {
     if (d.w <= 0 || d.h <= 0) return false;
     int px = (int)floor((x-d.x) * v.width/d.w) - v.core_x;

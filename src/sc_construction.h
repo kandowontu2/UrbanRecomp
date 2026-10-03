@@ -21,10 +21,13 @@ ScBuildResult ScConstructionCommit(uint8_t *ram, const uint8_t *rom, size_t size
                                   const ScBuildPlan *plan, unsigned *cost);
 ScBuildResult ScConstructionCommitWorld(uint8_t *ram, ScWorld *world,
     const uint8_t *rom, size_t size, const ScBuildPlan *plan, unsigned *cost);
-/* Original power flood fill in private CPU/WRAM; commits power bits only. */
+/* Original ordered power rules in C; commits power bits only. */
 bool ScConstructionRefreshPower(uint8_t *ram, ScWorld *world,
                                const uint8_t *rom, size_t size);
-/* Same native flood fill, without publishing into live guest state. */
+/* Ordered native power kernel, without publishing into live guest state. */
 bool ScConstructionPowerBitmap(const uint8_t *ram,const ScWorld *world,
+    const uint8_t *rom,size_t size,uint8_t *bitmap,size_t bitmap_size);
+/* Interpreter oracle for differential verification of the ordered kernel. */
+bool ScConstructionPowerBitmapReference(const uint8_t *ram,const ScWorld *world,
     const uint8_t *rom,size_t size,uint8_t *bitmap,size_t bitmap_size);
 #endif

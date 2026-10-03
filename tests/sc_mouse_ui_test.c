@@ -12,6 +12,41 @@ static bool point(int x,int y) {
   ScMouseUiResult s=ScMouseUiPoint(r,x,y,true,true); assert(s.handled); return s.hit;
 }
 int main(void) {
+  ScMousePan pan={0};ScMousePanDirection d;
+  d=ScMousePanUpdate(&pan,true,true,true,100,100,.5,.25,15000,12000);
+  assert(pan.active && !d.x && !d.y);
+  d=ScMousePanUpdate(&pan,true,true,true,132,132,.5,.25,15000,12000);
+  assert(d.x==-1 && d.y==-1 && pan.pending_x==-48 && pan.pending_y==-24); /* direction and 3x DPI/zoom conversion */
+  d=ScMousePanUpdate(&pan,true,true,false,132,132,.5,.25,15000,12000);
+  assert(d.x==-1 && d.y==-1); /* queue survives guest simulation frames */
+  d=ScMousePanUpdate(&pan,true,true,false,132,132,.5,.25,14976,11976);
+  assert(d.x==-1 && !d.y);
+  d=ScMousePanUpdate(&pan,true,true,false,132,132,.5,.25,14952,11976);
+  assert(!d.x && !d.y); /* stationary mouse stops after consumed motion */
+  d=ScMousePanUpdate(&pan,true,true,false,132,132,.5,.25,14928,11976);
+  assert(!d.x && !d.y); /* unrelated keyboard scroll creates no mouse debt */
+  d=ScMousePanUpdate(&pan,true,true,false,-100,-100,.5,.25,14928,11976);
+  assert(d.x==1 && d.y==1 && pan.active); /* outside captured drag */
+  d=ScMousePanUpdate(&pan,true,false,false,-100,-100,.5,.25,14984,11992);
+  assert(!pan.active && !d.x && !d.y && !pan.pending_x);
+  ScMousePanUpdate(&pan,true,true,false,100,100,1,1,0,0);
+  assert(!pan.active); /* cannot start on HUD/outside */
+  ScMousePanUpdate(&pan,true,true,true,100,100,1,1,0,0);
+  ScMousePanUpdate(&pan,true,true,true,92,100,1,1,0,0);
+  d=ScMousePanUpdate(&pan,true,true,true,92,100,1,1,48,0);
+  assert(!d.x && !pan.pending_x); /* Ctrl's 3x pass does not oscillate */
+  d=ScMousePanUpdate(&pan,false,true,true,92,100,1,1,24,0);
+  assert(!pan.active && !d.x && !d.y); /* focus/modal cancellation */
+  for(int i=0;i<3;++i) {
+    const double scale=i==0?.25:i==1?1:2;
+    pan=(ScMousePan){0};
+    ScMousePanUpdate(&pan,true,true,true,100,100,scale,scale,0,0);
+    d=ScMousePanUpdate(&pan,true,true,true,116,84,scale,scale,0,0);
+    assert(d.x==-1 && d.y==1);
+    assert(pan.pending_x==-48*scale && pan.pending_y==48*scale);
+    d=ScMousePanUpdate(&pan,true,true,true,116,84,scale,scale,(int)(-48*scale),(int)(48*scale));
+    assert(!d.x && !d.y && !pan.pending_x && !pan.pending_y);
+  }
   put(0x14,3); put(0x3e,1);
   assert(point(100,142) && word(0x3e)==2);
   assert(!point(100,100) && word(0x3e)==2);
@@ -61,7 +96,11 @@ int main(void) {
   put(0x0ab5,0); put(0x0101,0); put(0x0397,0x0d); put(0x039b,0x0d); r[0x391]=0xff;
   assert(point(84,140) && word(0x037f)==1);
   assert(point(44,140) && word(0x037f)==0);
-  assert(!point(20,150) && !point(64,150) && !point(80,160));
+  assert(!point(20,150) && !point(64,150) && !point(80,167));
+  for(int i=0;i<2;++i) for(int yy=135;yy<167;++yy) for(int xx=32+i*40;xx<64+i*40;++xx)
+    assert(point(xx,yy) && word(0x37f)==(unsigned)i);
+  put(0x397,1);put(0x39b,1);assert(point(240,200)); /* Single gift: dismiss. */
+  assert(!point(256,200));put(0x397,0x0d);put(0x39b,0x0d);
   r[0x391]=0; assert(!ScMouseUiPoint(r,84,140,true,true).handled);
   r[0x391]=0xff; put(0x039b,1);
   assert(!ScMouseUiPoint(r,84,140,true,true).handled); /* queued message */
@@ -84,11 +123,15 @@ int main(void) {
   r[0x3f5]=1; r[0x3f6]=0; r[0x3f7]=4; r[0x3f8]=6;
   assert(ScMouseUiDialogPoint(dialog,r,80,150,true).hit && word(0x3f3)==0);
   assert(!ScMouseUiDialogPoint(dialog,r,120,150,true).hit); /* Empty gift. */
-  assert(ScMouseUiDialogPoint(dialog,r,76,170,true).hit && word(0x3f3)==2);
-  assert(ScMouseUiDialogPoint(dialog,r,116,170,true).hit && word(0x3f3)==3);
+  assert(ScMouseUiDialogPoint(dialog,r,76,180,true).hit && word(0x3f3)==2);
+  assert(ScMouseUiDialogPoint(dialog,r,116,180,true).hit && word(0x3f3)==3);
   assert(!ScMouseUiDialogPoint(dialog,r,100,170,true).hit);
+  for(int i=0;i<4;++i) for(int yy=128+(i/2)*40;yy<160+(i/2)*40;++yy)
+    for(int xx=64+(i&1)*40;xx<96+(i&1)*40;++xx)
+      assert(ScMouseUiDialogPoint(dialog,r,xx,yy,true).hit==(i!=1));
+  assert(!ScMouseUiDialogPoint(dialog,r,80,164,true).hit); /* Row gap. */
   memcpy(before,r,sizeof r); ScMouseUiDialogPoint(dialog,r,80,150,false);
   assert(!memcmp(before,r,sizeof r));
   ScMouseUiObserve(&dialog,r,1,0xcc3a,0); assert(dialog==SC_MOUSE_DIALOG_NONE);
-  puts("PASS: menu hit regions, gaps, pad coexistence, saved-slot and scenario gates, name keys and map controls");
+  puts("PASS: grab-and-drag 3x panning, zoom/DPI scaling, camera feedback, captured exit/release, Ctrl overshoot, focus/modal cancellation; menu hit regions, gaps, pad coexistence, saved-slot and scenario gates, name keys and map controls");
 }

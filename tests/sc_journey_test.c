@@ -78,9 +78,12 @@ static void menu_test(void) {
     c->k=c->db=0;c->pc=0x8ea9;c->sp=0x1ffd;c->e=c->mf=c->xf=false;
     put(0x1ffe,0x6fff);unsigned steps=0;
     while(c->pc!=0x7000) {assert(++steps<20000);interp816_runOpcode(c);}
-    assert(word(ram,0x253)==20*4);
-    for(unsigned row=0;row<5;++row) for(unsigned i=0;i<4;++i)
-      assert(ram[0x2001+4*(row*4+i)]==88+24*row);
+    assert(word(ram,0x253)==25*4);
+    for(unsigned row=0;row<6;++row) for(unsigned i=0;i<(row==5?5:4);++i)
+      assert(ram[0x2001+4*(row*4+i)]==96+20*row);
+    uint8_t wrap;assert(ScJourneyMenuRead(0x03d34c,3,&wrap) && wrap==6);
+    assert(ScJourneyMenuRead(0x03d359,3,&wrap) && wrap==5);
+    assert(ScJourneyMenuY(false,5)==196);
     interp816_free(c);ScMapSizeMenuSet(false);assert(!ScMapSizeMenuActive());
 
 }
@@ -94,6 +97,43 @@ static void saved(void) {
         assert(!memcmp(&world,&decoded,sizeof world));
     }
     free(p);
+}
+static void legacy_giant_save(void) {
+    ScWorldReset(&world);world.active=world.huge=world.giant=true;
+    world.scan_x=959;world.scan_y=799;world.center_x=900;world.center_y=750;world.center_valid=true;
+    ScWorldPutCell(&world,959,799,0xc123);
+    size_t old_size=80+1536000;
+    for(unsigned f=0;f<SC_WORLD_FIELDS;++f) {
+        unsigned n=f<17?ScWorldFieldSize(f)*16:131070;
+        world.fields[f][n-1]=(uint8_t)(197+f);old_size+=n;
+    }
+    uint8_t *full=malloc(ScWorldEncodedSize()),*old=calloc(1,old_size);
+    assert(full && old && ScWorldEncode(&world,full,ScWorldEncodedSize()));
+    memcpy(old,full,80);old[7]=4;
+    for(unsigned i=0;i<4;++i) old[20+i]=(uint8_t)(old_size>>(8*i));
+    memcpy(old+80,world.tiles,1536000);size_t offset=80+1536000;
+    for(unsigned f=0;f<SC_WORLD_FIELDS;++f) {
+        unsigned n=f<17?ScWorldFieldSize(f)*16:131070;
+        memcpy(old+offset,world.fields[f],n);offset+=n;
+    }
+    assert(ScWorldDecode(&decoded,old,old_size) && !memcmp(&world,&decoded,sizeof world));
+    size_t cities_size=24+2*(16+old_size);
+    uint8_t *cities=calloc(1,cities_size),*upgraded=malloc(ScWorldCitiesSize());assert(cities && upgraded);
+    memcpy(cities,"SCWCITY",7);cities[7]=4;
+    const size_t metadata[]={old_size,cities_size,2};
+    for(unsigned k=0;k<3;++k) for(unsigned i=0;i<4;++i) cities[8+4*k+i]=metadata[k]>>(8*i);
+    uint8_t *slot=cities+24+16+old_size;
+    uint32_t city_hash=2166136261u;
+    for(unsigned i=0x4000;i<0x7ff0;++i) city_hash=(city_hash^sram[i])*16777619u;
+    for(unsigned i=0;i<4;++i) slot[i]=city_hash>>(8*i);slot[4]=1;
+    memcpy(slot+16,old,old_size);uint64_t hash=UINT64_C(14695981039346656037);
+    for(size_t i=0;i<old_size;++i) hash=(hash^old[i])*UINT64_C(1099511628211);
+    for(unsigned i=0;i<8;++i) slot[8+i]=hash>>(8*i);
+    assert(ScWorldCitiesUpgrade(upgraded,cities,cities_size));
+    assert(ScWorldCityLoad(&decoded,upgraded,ScWorldCitiesSize(),sram,1));
+    assert(!memcmp(&world,&decoded,sizeof world));
+    slot[16+80]^=1;assert(!ScWorldCitiesUpgrade(upgraded,cities,cities_size));
+    free(full);free(old);free(cities);free(upgraded);
 }
 static void preserved(unsigned ow,unsigned oh,unsigned dx,unsigned dy,bool host) {
     for(unsigned y=0;y<oh;++y) for(unsigned x=0;x<ow;++x)
@@ -113,7 +153,7 @@ static void preserved(unsigned ow,unsigned oh,unsigned dx,unsigned dy,bool host)
 }
 int main(int argc,char **argv) {
     assert(argc==2);FILE *f=fopen(argv[1],"rb");assert(f);
-    assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);menu_test();
+    assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);menu_test();legacy_giant_save();
     memset(ram,0,sizeof ram);ScWorldReset(&world);
     for(unsigned i=0;i<sizeof ram;++i) ram[i]=(uint8_t)(i*13+9);
     put(0x1bd,20);put(0x1bf,15);put(0x205,37);put(0x207,32);

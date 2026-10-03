@@ -63,12 +63,12 @@ bool ScConstructionPlanWorld(ScBuildPlan *p, const ScWorld *w, unsigned tool,
   if (tool>15 || x0<0 || x0>=width || x1<0 || x1>=width ||
       y0<0 || y0>=height || y1<0 || y1>=height) return false;
   p->tool=tool;
-  if (tool>=10) { p->cells[0]=(ScBuildCell){x0,y0}; p->count=1; return true; }
+  if (tool>=10 && tool!=13 && tool!=14) { p->cells[0]=(ScBuildCell){x0,y0}; p->count=1; return true; }
   int dx=x1>=x0?1:-1, dy=y1>=y0?1:-1;
   if (tool>=1 && tool<=3) {
     if (abs(x1-x0)>=abs(y1-y0)) y1=y0; else x1=x0;
   }
-  int step=tool>=5?3:1;
+  int step=tool==13 || tool==14?4:tool>=5?3:1;
   int nx=abs(x1-x0)/step+1, ny=abs(y1-y0)/step+1;
   if ((unsigned)nx*(unsigned)ny>SC_BUILD_MAX) return false;
   for (int y=0;y<ny;++y) for (int x=0;x<nx;++x)
@@ -83,7 +83,7 @@ ScBuildResult ScConstructionCommitWorld(uint8_t *ram,ScWorld *w,const uint8_t *r
                                   const ScBuildPlan *p,unsigned *cost) {
   if (cost) *cost=0;
   if (!rom || size!=0x80000 || p->tool>15 || !p->count || p->count>SC_BUILD_MAX ||
-      (p->tool>=10 && p->count!=1))
+      (p->tool>=10 && p->tool!=13 && p->tool!=14 && p->count!=1))
     return SC_BUILD_INVALID;
   int width=w && w->active?ScWorldWidth(w):120,height=w && w->active?ScWorldHeight(w):100;
   for (unsigned i=0;i<p->count;++i)
@@ -148,12 +148,20 @@ ScBuildResult ScConstructionCommitWorld(uint8_t *ram,ScWorld *w,const uint8_t *r
       b->world->map_anchor=w->map_anchor;
       memcpy(b->world->bank_anchor,w->bank_anchor,sizeof w->bank_anchor);
       memcpy(b->world->coord,w->coord,sizeof w->coord);
+      /* Placements run against a private world for atomic rollback. Its
+       * mapped writes do not invalidate the live world's renderer or power
+       * cache; publish only the tile regions changed by a successful commit. */
+      unsigned bytes=ScWorldCells(w)*2;
+      for(unsigned at=0;at<bytes;at+=SC_WORLD_TILE_CHUNK_BYTES) {
+        unsigned n=bytes-at<SC_WORLD_TILE_CHUNK_BYTES?bytes-at:SC_WORLD_TILE_CHUNK_BYTES;
+        if(memcmp(w->tiles+at,b->world->tiles+at,n)) ScWorldTilesTouch(w,at,n);
+      }
       memcpy(w,b->world,sizeof *w);
     }
   }
   interp816_free(cpu); free(b->world); free(b); return result;
 }
-bool ScConstructionPowerBitmap(const uint8_t *ram,const ScWorld *w,const uint8_t *rom,size_t size,
+bool ScConstructionPowerBitmapReference(const uint8_t *ram,const ScWorld *w,const uint8_t *rom,size_t size,
                                uint8_t *bitmap,size_t bitmap_size) {
   if (!rom || size!=0x80000 || !bitmap || bitmap_size<(w && w->active?ScWorldCells(w)/8:1500u)) return false;
   BuildBus *b=calloc(1,sizeof *b);
@@ -211,16 +219,67 @@ bool ScConstructionPowerBitmap(const uint8_t *ram,const ScWorld *w,const uint8_t
   }
   interp816_free(cpu); free(b->world); free(b); return ok;
 }
+bool ScConstructionPowerBitmap(const uint8_t *ram,const ScWorld *w,const uint8_t *rom,size_t size,
+                               uint8_t *bitmap,size_t bitmap_size) {
+  if (getenv("SC_POWER_REFERENCE"))
+    return ScConstructionPowerBitmapReference(ram,w,rom,size,bitmap,bitmap_size);
+  bool large=w && w->active;
+  unsigned width=large?ScWorldWidth(w):120,height=large?ScWorldHeight(w):100;
+  unsigned cells=width*height,limit=large?cells:5000;
+  if (!ram || !rom || size!=0x80000 || !bitmap || bitmap_size<cells/8) return false;
+  uint32_t *stack=malloc(limit*sizeof *stack);
+  if (!stack) return false;
+  const uint8_t *tiles=large?w->tiles:ram+0x10200;
+  unsigned count=0,coal=0,nuclear=0;uint64_t used=0;
+  for (unsigned i=0;i<cells;++i) {
+    unsigned tile=word(tiles,2*i)&1023;
+    if (tile!=0x28c && tile!=0x27c) continue;
+    if (count>=limit) {free(stack);return false;}
+    stack[count++]=i;
+    if (tile==0x28c) ++coal; else ++nuclear;
+  }
+  memset(bitmap,0,cells/8);
+  uint64_t capacity=(uint64_t)coal*700+(uint64_t)nuclear*2000;
+  /* Ordered translation of 03:afb0..b151. Branches retain the ROM's
+   * second-neighbour-first walk and LIFO stack, including repeated
+   * seed/branch visits in the capacity count. A conventional parallel flood
+   * fill changes which districts brown out when capacity is exhausted.
+   * $b89 is a read-only input to b0f8, not the candidate tile register.
+   * Enlarged maps use a full-width cell stack: the old guest word counter
+   * must not truncate their power seeds or deferred network branches. */
+  unsigned last_tile=word(ram,0xb89);
+  bool traverse=last_tile!=0x27c && last_tile!=0x28c;
+  bool exhausted=false;
+  while (count && !exhausted) {
+    unsigned current=stack[--count];
+    for (;;) {
+      if (++used>capacity) {exhausted=true;break;}
+      bitmap[current/8]|=128>>(current&7);
+      unsigned x=current%width,y=current/width,found=0,next=current;
+      const bool valid[]={y>0,x+1<width,y+1<height,x>0};
+      const unsigned neighbours[]={current-width,current+1,current+width,current-1};
+      for (unsigned direction=0;direction<4 && found<2;++direction) {
+        unsigned candidate=neighbours[direction];
+        if (!traverse || !valid[direction] || (bitmap[candidate/8]&(128>>(candidate&7)))) continue;
+        unsigned tile=word(tiles,2*candidate)&1023;
+        if (!(rom[0x184eb+tile]&128)) continue;
+        next=candidate;++found;
+      }
+      if (found==2 && count<limit) stack[count++]=current;
+      if (!found) break;
+      current=next;
+    }
+  }
+  if (getenv("SC_POWER_DIAG"))
+    fprintf(stderr,"[power network] coal %u nuclear %u capacity %llu visited %llu%s\n",
+        coal,nuclear,(unsigned long long)capacity,(unsigned long long)used,exhausted?" exhausted":"");
+  free(stack);return true;
+}
 bool ScConstructionRefreshPower(uint8_t *ram,ScWorld *w,const uint8_t *rom,size_t size) {
   uint8_t power[SC_WORLD_MAX_CELLS/8];
   if (!ScConstructionPowerBitmap(ram,w,rom,size,power,sizeof power)) return false;
-  int width=w && w->active?ScWorldWidth(w):120,height=w && w->active?ScWorldHeight(w):100;
-  for (int y=0;y<height;++y) for (int x=0;x<width;++x) {
-      unsigned i=y*width+x;
-      unsigned tile=(w && w->active?ScWorldCell(w,x,y):word(ram,0x10200+2*i))&0x7fff;
-      if (power[i/8]&(128>>(i&7))) tile|=0x8000;
-      if (w && w->active) ScWorldPutCell(w,x,y,tile); else put(ram,0x10200+2*i,tile);
-  }
+  bool large=w && w->active;
+  ScWorldPublishPower(large?w:NULL,large?w->tiles:ram+0x10200,power,0,large?ScWorldCells(w):12000);
   if (w && w->active) memcpy(w->fields[5],power,ScWorldCells(w)/8);
   else memcpy(ram+0x1a598,power,1500);
   return true;

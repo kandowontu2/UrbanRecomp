@@ -13,6 +13,11 @@ Developers can build with `-DSC_CONSOLE=ON` to retain the console. Command-line
 arguments, exit codes and diagnostics redirected to files remain available in
 the default desktop build.
 
+Enhanced Beta 11 generates music on a dedicated sound CPU/DSP
+thread. Playback continues during slow simulation frames. Settings pause and
+save/load synchronize with that thread; sound commands retain their order.
+The portable release includes the restored soundtrack on this worker.
+
 F12 opens the host settings overlay; F10 remains an alias. **DEVELOPMENT SPEED**
 cycles through Normal, X2, X5, X10 and X50. The extra work repeats the original
 residential, commercial and industrial development decisions per simulation
@@ -32,6 +37,13 @@ It also works when switching from the classic renderer. The aspect preference
 and captured scale are saved in `sc-video.ini`; maximizing applies to the current
 window.
 
+Dense city tiles no longer qualify as the repeating menu desk. That false
+match could recenter the native city rectangle, repeat buildings across the
+expanded canvas and leave a black rectangle while scrolling. The BG2 city
+cache stays on the world rendering path, with either HUD visibility and CPU
+or GPU terrain. Regression cases cover all map sizes, both view anchors,
+direction changes and transitions between a dense city and the budget panel.
+
 **GPU TERRAIN** in F12 is an optional Windows SDL3/Direct3D 11 acceleration
 path, enabled automatically when supported and session-only. It moves extended terrain decoding and
 colour composition to the GPU, retaining CPU rendering for native pixels,
@@ -47,6 +59,12 @@ times as long to sweep land and initialize the growth fields. Calendar,
 budget, demand, disaster and interrupt instructions retain their timing.
 Normal-sized maps keep the original timing path. Native-loop regressions
 cover zone sweeps, land value and population density on all four map sizes.
+The city-center land-value radius also follows map dimensions: Normal keeps
+the original 64-tile distance cap, while Big uses 128 tiles, Huge 256 tiles,
+960x800 maps 512 tiles, and 1920x1600 maps 1024 tiles. The original value curve applies at the same
+relative distance on each map. Existing cities gain this wider radius when
+the simulation next recalculates land value; power, demand, pollution, crime
+and transport requirements still apply.
 The two hot five-point smoothing kernels execute one cell in C while charging
 their original guest cycles. Differential tests compare both kernels against
 the ROM across Big/Huge edges, zero and saturated fields, mixed values and
@@ -98,16 +116,16 @@ interpreter. They do not implement acceleration in the optional `SC_FIBER=1`
 execution path or regional ROMs.
 
 Choosing **Start new city** or **Practice** opens a dedicated **MAP SIZE**
-page with four choices: **120x100**, **240x200**, **480x400**, and **960x800**.
+page with five choices: **120x100**, **240x200**, **480x400**, **960x800**, and **1920x1600**.
 It uses the game's original tall menu alphabet and numeral artwork. Mouse,
 D-pad and confirmation buttons select a size; right-click/the game cancel
 button returns to the main menu. Map size is no longer in F12 or the main
 menu's former L toggle. The last selection is remembered in `sc-settings.ini`;
-`SC_LARGE_MAPS=0|1|2|3` supplies a default for testing.
+`SC_LARGE_MAPS=0|1|2|3|4` supplies a default for testing.
 
 All sizes generate continuous full-size terrain, with independent simulation
 fields, construction, power and population calculation. Preview samples the
-whole landscape at 1:1, 2:1, 4:1 or 8:1. The navigation minimap and camera bounds
+whole landscape at 1:1, 2:1, 4:1, 8:1 or 16:1. The navigation minimap and camera bounds
 use the active saved dimensions. Existing cities keep their saved size;
 scenarios retain their original dimensions.
 
@@ -181,7 +199,10 @@ population, money and RCI demand at the far right, on a continuous header.
 The navigation minimap moves to the right edge; its outline projects the
 visible city area using the actual map dimensions and canvas size, including
 240x200, 480x400 and 960x800 worlds, instead of letting the old marker run outside its frame.
-Right/up/down navigation arrows follow the wider canvas. Mouse hit regions
+All four X-key navigation arrows follow the expanded canvas, including tall
+Fit views and height-only expansion. The bottom arrow renders below the native
+screen area, and the left/right arrows move down as that area grows. Hidden
+directions stay hidden at city borders. Mouse hit regions
 follow the relocated elements through window scaling and DPI conversion.
 Tool outlines use the original byte-indexed ROM table for all 15 construction
 tools. A hidden minimap also hides its position marker and mouse hit regions.
@@ -199,7 +220,8 @@ On the US interpreter, left-drag roads, rail and power lines creates a line
 along the dominant axis. Parks and bulldozing create rectangles; RCI, police
 and fire stations create rectangles of non-overlapping 3x3 placements. Yellow
 outlines preview the gesture. Release commits it; right-click cancels it.
-Large buildings and gifts use the original single-placement controls.
+Coal and nuclear plants use non-overlapping 4x4 placements. Other large
+buildings and gifts use the original single-placement controls.
 
 Construction runs the original ROM's placement routines against private WRAM,
 including eligibility, bridges, road joins, bulldozing and exact prices. It
@@ -212,7 +234,7 @@ save state cancels an unfinished gesture. These controls have not yet had
 hands-on desktop testing.
 
 Population is calculated with 64-bit arithmetic and capped at
-**9,999,999,999**. Host capacity accumulators count residential, commercial and
+**9,999,999,999,999**. Host capacity accumulators count residential, commercial and
 industrial capacity before the guest's 16-bit counters can wrap. The original
 formula is preserved: `20 * (residential + 8 * (commercial + industrial))`.
 Development retries do not count a zone more than once. Previous population,
@@ -236,8 +258,8 @@ rendered separately from the stock graphs.
 Save-state version 4 includes the development context, explicit little-endian
 64-bit population state, and full world tiles and spatial fields. Versions
 1, 2, 3 and legacy states remain readable. The current world payload is version
-4 and includes 960x800 coordinates, full spatial indices and Journey progress.
-This build also reads version 2/3 world payloads and upgrades their city sidecars. Beta 1/2 executables cannot read the
+5 and includes dimensions through 1920x1600, full spatial indices and Journey progress.
+This build also reads version 2/3/4 world payloads and upgrades their city sidecars. Beta 1/2 executables cannot read the
 new world payload; upstream executables cannot read version 4 states.
 Beta 3 can read the current map geometry but does not understand Journey
 progress, so use Beta 4 or later to continue a Journey.
@@ -487,10 +509,150 @@ Live scanline palettes, flips, fades, windows, objects, power warnings and nativ
 staging repair retain their ordering. Held terrain also retains its saved map
 dimensions when a different city loads.
 
-Vacant 2x2 terrain accumulation and zero-land-value crime cells use equivalent
-C paths. Other spatial cells execute on a dedicated RAM/ROM bus in batches
-bounded by the next scanline, HDMA or programmed IRQ event. Calendar, budgets,
-demand, construction and zone decisions keep their existing paths and timing.
-The existing C smoothing and terrain kernels remain active inside a batch.
-Testing switches `SC_SPATIAL_KERNELS=0` and `SC_TERRAIN_SPANS=0` restore reference
-execution and raster paths. See GPU_PERFORMANCE.md for measurements.
+Native C paths now cover vacant and developed land-value cells, pollution,
+density/pollution smoothing, crime, police/fire coverage diffusion, terrain
+quality, ordered power traversal/search, growth scores, nine-cell zone replacement, zone capacities,
+the simulation PRNG and batches of accelerated development attempts. Adjacent
+spatial cells and their loop control are fused into bounded C spans. Tight beam
+budgets and remaining tile mutations retain interruptible compatibility code.
+Calendar, budgets and demand keep their normal cadence. The hardware clock
+advances between scanline, HDMA, IRQ and wrap events without changing their timing.
+
+The desktop renderer now selects a shared Vulkan compute/presentation device
+with SDL 3.4 or newer. Embedded SPIR-V handles terrain, repaired city pixels,
+objects and electrical warnings; ordinary frames have no GPU image readback.
+Eligible city Mode 1 scanlines now capture native background planes for Vulkan
+composition, including candidates used by repaired cells. Native sprite
+evaluation, menus, unsupported display modes and some simulation routines remain
+on the CPU.
+This is ongoing local work toward 60 FPS on a filled X50 Fit view; that target
+has not yet been achieved. Reference controls and measured limits are documented
+in [GPU_PERFORMANCE.md](GPU_PERFORMANCE.md). No new release is published.
+
+## Interactive zoom and extended population limit (local work)
+
+Ctrl + mouse wheel changes the tile scale in the adaptive view without resizing
+the window. Pinch/spread events use SDL 3.4 gesture scale where the platform
+provides them; Windows touchpads that send Ctrl-wheel use the same wheel path.
+Zoom reveals more land when reducing scale and keeps the complete native HUD
+visible at the upper limit. Geometry checks cover DPI, centered views, bounds
+and pointer mapping. Hardware touchpad behavior has not been verified locally.
+
+Population calculation, negative migration, history, reports, HUD and save
+records support 9,999,999,999,999. Existing 64-bit save encoding is retained, so
+older city values load without a format migration. Thirteen-digit HUD values
+and fourteen-column signed migration use the original game glyphs. Native
+compatibility fields retain their safe six-digit mirror. ROM-backed arithmetic
+tests exercise the former ten-billion boundary and the new calculation cap,
+including mixed capacities, saturation, reports and save-slot round trips.
+
+The local city HUD has Copy and Paste buttons in the original adviser font.
+Drag a rectangle with Copy; releasing selects Paste automatically. Leaving the
+window during a drag retains the last valid selection. Every intersecting
+ordinary building is included in full, without recursively pulling in adjacent
+buildings. Roads, rails, power lines, crossings, bridges, parks and natural
+terrain are included. Reward/gift buildings are excluded completely; their
+footprints remain holes in the copy and paste outline.
+
+Paste shows the total construction price using the original HUD number tiles.
+Prices come from the ROM's construction table, with bridge surcharges and each
+crossing's components counted. Natural terrain is free. Paste replaces terrain;
+an occupied destination or insufficient funds rejects the complete transaction.
+Practice mode retains free construction. Road, rail and wire joins use the
+original connection tables; power and population are refreshed after a paste.
+Copying grants no gifts and consumes no gift inventory. Right-click or select
+an ordinary palette tool to leave Copy/Paste.
+
+Copy also accepts standalone house artwork and recovers complete ordinary
+footprints when a saved city's centre marker has been replaced. Selection
+expansion uses the original rectangle, so a rough border does not recursively
+pull in a neighboring city block. Reward artwork remains excluded even if
+its centre marker is missing. Regression checks select all 13,056 ordinary
+artwork cells individually in the supplied saved city and every cell of
+mature RCI and larger ordinary footprints across all five map sizes.
+
+Hold the middle mouse button over land and drag to pan. Moving right/down
+drags the land right/down, moving the camera in the opposite direction. Motion and the native scroll rate are 3x faster
+at every zoom, with the current zoom and DPI conversion retained. Ctrl uses
+the same scroll rate and does not stack another multiplier. Releasing stops the
+gesture. Middle-button panning hides the pointer and uses centered relative
+mouse capture, so repeated movements continue beyond the screen edge.
+Right-button panning confines the cursor to the game window. Releasing the button, losing focus, opening F12 or disabling mouse input
+releases the cursor. Copy/Paste stays selected while panning; construction and
+selection drags can still continue outside the window. Movement goes through the game's ordinary camera and map staging
+routines, without writing camera registers directly or advancing extra game
+frames. Component and CPU mouse replays cover consumed movement, stationary
+holds, off-window re-entry/release, Ctrl overshoot and clipboard coexistence.
+
+Enhanced Beta 11 includes the fifth 1920x1600 size. ROM-backed clipboard tests cover all five sizes,
+complete footprints, reward exclusions, 96 original-routine join comparisons,
+power reconnection, mature building capacity, wide totals and atomic rejection.
+CPU and Vulkan mouse replays exercise off-window drag release, automatic Paste
+selection, the moving outline, price display and a successful paste.
+
+The fifth size uses 32-bit spatial indices and word-sized density counters.
+The 480x400 quarter-resolution grid crosses 8-bit coordinates, while growth
+and coverage grids cross 65,535-byte offsets. Version 5 world saves preserve
+these fields and migrate older city sidecars without changing native SRAM.
+Terrain, construction, power, population, minimap and renderer checks cover
+far corners of the new size. Journey retains its original expansion thresholds
+and stops at 480x400.
+
+
+The user-provided **MSU1 SimCity (Restored)** soundtrack now replaces all 19
+music tracks when a complete PCM set is present at `music/restored` beside the
+executable. Import it with `python tools/import_restored_music.py <archive>`;
+local CMake builds copy the imported tracks beside the executable. The Beta 11
+portable release embeds all 19 tracks, ready to play; the files stay out of Git.
+Credits: Pinci / Church of Kondo for restoration and Relikk for the PCM set;
+see [CREDITS.md](../CREDITS.md). The game does not need an MSU-patched ROM.
+Track numbers and loop points are retained from the pack, following the clean
+US music-command mapping verified against the [original MSU-1 patch](https://www.zeldix.net/t1602-simcity).
+
+The dedicated music worker mixes the restored stereo tracks at 44.1 kHz with
+native SPC sound effects, resampling only those sound effects. Tracks are
+loaded once before playback, avoiding file reads on either gameplay's hot
+path or the music worker. The existing in-game music toggle pauses/resumes
+PCM playback; F12 pauses the worker. New song requests retain the driver's
+normal restart behavior. State loading starts the saved song from its
+beginning and uses the verified SPC stop/acknowledgement command to prevent
+original music playing underneath it. PCM position is host state, so existing
+save formats remain compatible.
+
+Missing or invalid packs retain the original soundtrack. `SC_RESTORED_MUSIC=0`
+selects the original soundtrack for developer reference runs; setting it to a
+directory selects a different local pack with the same 19 filenames. The
+restored pack needs the dedicated worker; disabling it retains native audio.
+Tests cover all imported tracks and their authored loops, interpolation at
+loop seams, mixing saturation, mute/resume, worker pause/reset/shutdown,
+44.1 kHz playback through a 250 ms game-thread stall, and a real US-driver
+save showing original music silenced while native sound effects remain audible.
+
+The desktop mouse now positions the original HUD hand directly, including
+the left toolbar and relocated right header while Copy/Paste is selected.
+The hand retains its original 16px tile and stays above host clipboard labels;
+HUD hit testing continues to use the native menu coordinates.
+
+F12 options support mouse clicks and distinct Left/Right adjustments. Ordinary
+coal and nuclear plants support 4x4-spaced drag building, with the full price
+checked before placement. Gift icons accept their whole 32x32 image; adviser
+clicks follow the centered panel and can dismiss single-gift messages.
+
+F12's **MUTE CITY WARNINGS** cheat suppresses crime, traffic and pollution
+notice banners and adviser visits. It defaults to OFF and is session-only.
+The underlying calculations, maps, effects on development and other messages
+remain active. Turning it off restores ordinary warning publication.
+
+The map-size page is inset 16 native pixels farther down, including the
+selection arrow and mouse hitboxes. All five choices retain the original font.
+The size selection remains highlighted through the exit fade, even after the
+next screen restores the main-menu action value.
+
+The Windows portable EXE contains the runtime, assets, restored music,
+documentation and license notices. On launch it verifies and unpacks a versioned
+cache under `%LOCALAPPDATA%/UrbanRecomp/bundles`. Saves, settings and ROM selection
+remain in the portable EXE's folder, independent of that cache. It does not
+replace earlier installations or migrate their files automatically. Keep all
+three city save files together when moving them to a new folder.
+`--portable-docs` opens the embedded documentation; `--portable-extract <folder>`
+extracts the complete bundled files for inspection. Game arguments are forwarded.

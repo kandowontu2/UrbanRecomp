@@ -2,152 +2,164 @@
 #include "sc_sdl_compat.h"
 #include <stdlib.h>
 #include <stdio.h>
-#if defined(_WIN32) && SNESRECOMP_SDL3
-#define COBJMACROS
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <d3d11.h>
-#include <d3dcompiler.h>
-#include "sc_gpu_shader.h"
+#include <string.h>
+#if SNESRECOMP_SDL3 && SDL_VERSION_ATLEAST(3,4,0)
+#include "sc_gpu_terrain_spirv.h"
+/* One Vulkan device/queue owns compute and presentation. Only validation
+ * reads an image back; ordinary gameplay keeps the result on the GPU. */
 struct ScGpuTerrain {
     SDL_Renderer *renderer;
-    ID3D11Device *device;
-    ID3D11DeviceContext *context;
-    ID3D11ComputeShader *shader;
-    ID3D11Buffer *buffers[4],*constants;
-    ID3D11ShaderResourceView *views[4];
-    ID3D11Texture2D *output,*staging;
-    ID3D11UnorderedAccessView *uav;
+    SDL_GPUDevice *device;
+    SDL_GPUComputePipeline *pipeline;
+    SDL_GPUBuffer *buffers[8];
+    SDL_GPUTransferBuffer *upload,*download;
+    SDL_GPUTexture *output;
     SDL_Texture *texture;
-    unsigned width,height,stride,frames;
+    unsigned width,height,stride,frames,resource_capacity,city_capacity,offsets[8],bytes[8];
     bool validate,linear_filter;
 };
-_Static_assert(sizeof(ScTerrainRow)==300*4,"shader scanline layout");
-#define RELEASE(p) do {if(p) {(p)->lpVtbl->Release(p);(p)=NULL;}} while(0)
+_Static_assert(sizeof(ScTerrainRow)==308*4,"shader scanline layout");
+_Static_assert(sizeof(ScNativeRow)==202*4,"shader native scanline layout");
+_Static_assert(sizeof(ScTerrainTile)==6*4,"shader terrain span layout");
+SDL_Renderer *ScGpuTerrainRenderer(SDL_Window *window) {
+    const char *driver=getenv("SDL_RENDER_DRIVER");
+    if(driver && strcmp(driver,"gpu") && strcmp(driver,"vulkan")) return NULL;
+    SDL_PropertiesID props=SDL_CreateProperties();if(!props) return NULL;
+    SDL_SetPointerProperty(props,SDL_PROP_RENDERER_CREATE_WINDOW_POINTER,window);
+    SDL_SetStringProperty(props,SDL_PROP_RENDERER_CREATE_NAME_STRING,"gpu");
+    SDL_SetStringProperty(props,SDL_PROP_GPU_DEVICE_CREATE_NAME_STRING,"vulkan");
+    SDL_SetBooleanProperty(props,SDL_PROP_GPU_DEVICE_CREATE_PREFERLOWPOWER_BOOLEAN,false);
+    SDL_SetNumberProperty(props,SDL_PROP_RENDERER_CREATE_PRESENT_VSYNC_NUMBER,0);
+    SDL_Renderer *renderer=SDL_CreateRendererWithProperties(props);SDL_DestroyProperties(props);
+    if(!renderer) fprintf(stderr,"[vulkan] renderer unavailable: %s\n",SDL_GetError());
+    else {
+        SDL_GPUDevice *device=SDL_GetGPURendererDevice(renderer);
+        fprintf(stderr,"[vulkan] shared presentation/compute device: %s (%s)\n",
+            SDL_GetStringProperty(SDL_GetGPUDeviceProperties(device),SDL_PROP_GPU_DEVICE_NAME_STRING,"unknown GPU"),
+            SDL_GetGPUDeviceDriver(device));
+    }
+    return renderer;
+}
 static void release_surface(ScGpuTerrain *g) {
     if(g->texture) {SDL_DestroyTexture(g->texture);g->texture=NULL;}
-    RELEASE(g->uav);RELEASE(g->output);RELEASE(g->staging);
-    for(unsigned i=0;i<4;++i) {RELEASE(g->views[i]);RELEASE(g->buffers[i]);}
-    g->width=g->height=0;
+    if(g->output) SDL_ReleaseGPUTexture(g->device,g->output);
+    if(g->upload) SDL_ReleaseGPUTransferBuffer(g->device,g->upload);
+    if(g->download) SDL_ReleaseGPUTransferBuffer(g->device,g->download);
+    for(unsigned i=0;i<8;++i) {if(g->buffers[i]) SDL_ReleaseGPUBuffer(g->device,g->buffers[i]);g->buffers[i]=NULL;}
+    g->output=NULL;g->upload=g->download=NULL;g->width=g->height=0;
 }
 void ScGpuTerrainDestroy(ScGpuTerrain *g) {
     if(!g) return;
-    release_surface(g);RELEASE(g->constants);RELEASE(g->shader);
-    RELEASE(g->context);RELEASE(g->device);free(g);
+    SDL_FlushRenderer(g->renderer);release_surface(g);
+    if(g->pipeline) SDL_ReleaseGPUComputePipeline(g->device,g->pipeline);
+    free(g);
 }
 ScGpuTerrain *ScGpuTerrainCreate(SDL_Renderer *renderer,bool linear_filter) {
-    ID3D11Device *device=SDL_GetPointerProperty(SDL_GetRendererProperties(renderer),
-        SDL_PROP_RENDERER_D3D11_DEVICE_POINTER,NULL);
-    if(!device || ID3D11Device_GetFeatureLevel(device)<D3D_FEATURE_LEVEL_11_0) return NULL;
+    SDL_GPUDevice *device=SDL_GetPointerProperty(SDL_GetRendererProperties(renderer),SDL_PROP_RENDERER_GPU_DEVICE_POINTER,NULL);
+    if(!device || strcmp(SDL_GetGPUDeviceDriver(device),"vulkan")) return NULL;
     ScGpuTerrain *g=calloc(1,sizeof *g);if(!g) return NULL;
-    g->renderer=renderer;g->device=device;g->linear_filter=linear_filter;ID3D11Device_AddRef(device);
-    ID3D11Device_GetImmediateContext(device,&g->context);
-    HMODULE compiler=LoadLibraryExW(L"d3dcompiler_47.dll",NULL,LOAD_LIBRARY_SEARCH_SYSTEM32);
-    typedef HRESULT (WINAPI *CompileFn)(LPCVOID,SIZE_T,LPCSTR,const D3D_SHADER_MACRO*,
-        ID3DInclude*,LPCSTR,LPCSTR,UINT,UINT,ID3DBlob**,ID3DBlob**);
-    CompileFn compile=compiler?(CompileFn)GetProcAddress(compiler,"D3DCompile"):NULL;
-    ID3DBlob *code=NULL,*error=NULL;
-    HRESULT hr=compile?compile(sc_gpu_shader,sizeof sc_gpu_shader-1,"sc_gpu_terrain.hlsl",
-        NULL,NULL,"main","cs_5_0",D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&code,&error):E_FAIL;
-    if(FAILED(hr) && error) fprintf(stderr,"[gpu terrain] shader: %s\n",
-        (const char *)ID3D10Blob_GetBufferPointer(error));
-    if(SUCCEEDED(hr)) hr=ID3D11Device_CreateComputeShader(device,
-        ID3D10Blob_GetBufferPointer(code),ID3D10Blob_GetBufferSize(code),NULL,&g->shader);
-    RELEASE(code);RELEASE(error);if(compiler) FreeLibrary(compiler);
-    D3D11_BUFFER_DESC desc={0};desc.ByteWidth=16;desc.Usage=D3D11_USAGE_DYNAMIC;
-    desc.BindFlags=D3D11_BIND_CONSTANT_BUFFER;desc.CPUAccessFlags=D3D11_CPU_ACCESS_WRITE;
-    if(SUCCEEDED(hr)) hr=ID3D11Device_CreateBuffer(device,&desc,NULL,&g->constants);
-    if(FAILED(hr)) {ScGpuTerrainDestroy(g);return NULL;}
-    g->validate=getenv("SC_GPU_VALIDATE")!=NULL;
-    fprintf(stderr,"[gpu terrain] Direct3D 11 compute ready%s\n",g->validate?" (pixel validation)":"");
-    return g;
+    g->renderer=renderer;g->device=device;g->linear_filter=linear_filter;
+    SDL_GPUComputePipelineCreateInfo info={0};
+    info.code=(const Uint8 *)sc_gpu_terrain_spirv;info.code_size=sizeof sc_gpu_terrain_spirv;
+    info.entrypoint="main";info.format=SDL_GPU_SHADERFORMAT_SPIRV;
+    info.num_readonly_storage_buffers=8;info.num_readwrite_storage_textures=1;info.num_uniform_buffers=1;
+    info.threadcount_x=info.threadcount_y=8;info.threadcount_z=1;
+    g->pipeline=SDL_CreateGPUComputePipeline(device,&info);
+    if(!g->pipeline) {fprintf(stderr,"[vulkan] compute pipeline: %s\n",SDL_GetError());free(g);return NULL;}
+    const char *validate=getenv("SC_GPU_VALIDATE");
+    g->validate=validate && *validate && *validate!='0';
+    fprintf(stderr,"[gpu terrain] Vulkan compute ready%s\n",g->validate?" (pixel validation)":"");return g;
 }
 static bool surface(ScGpuTerrain *g,const ScTerrainFrame *f) {
-    if(g->width==f->width && g->height==f->height) return true;
+    if(g->width==f->width && g->height==f->height && g->stride==f->stride && g->resource_capacity==f->resource_capacity && g->city_capacity==f->city_capacity) return true;
     SDL_FlushRenderer(g->renderer);release_surface(g);
-    const unsigned count[]={f->width*f->height,f->stride*f->height,f->height*256,f->height*300};
-    const unsigned element[]={4,sizeof(ScTerrainTile),4,4};
-    for(unsigned i=0;i<4;++i) {
-        D3D11_BUFFER_DESC desc={0};desc.ByteWidth=count[i]*element[i];desc.Usage=D3D11_USAGE_DYNAMIC;
-        desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;desc.CPUAccessFlags=D3D11_CPU_ACCESS_WRITE;
-        desc.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;desc.StructureByteStride=element[i];
-        if(FAILED(ID3D11Device_CreateBuffer(g->device,&desc,NULL,&g->buffers[i]))) return false;
-        D3D11_SHADER_RESOURCE_VIEW_DESC view={0};view.Format=DXGI_FORMAT_UNKNOWN;
-        view.ViewDimension=D3D11_SRV_DIMENSION_BUFFER;view.Buffer.NumElements=count[i];
-        if(FAILED(ID3D11Device_CreateShaderResourceView(g->device,(ID3D11Resource *)g->buffers[i],&view,&g->views[i]))) return false;
+    const unsigned counts[]={f->width*f->height,f->stride*f->height,f->height*256,f->height*308,f->width*f->height,f->height*202,f->resource_capacity?f->resource_capacity:1,f->city_capacity?f->city_capacity:1};
+    const unsigned elements[]={4,sizeof(ScTerrainTile),4,4,sizeof(ScTerrainOverlay),4,4,4};unsigned total=0;
+    for(unsigned i=0;i<8;++i) {
+        total=(total+15)&~15u;g->offsets[i]=total;g->bytes[i]=counts[i]*elements[i];total+=g->bytes[i];
+        SDL_GPUBufferCreateInfo info={0};info.usage=SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ;info.size=g->bytes[i];
+        g->buffers[i]=SDL_CreateGPUBuffer(g->device,&info);if(!g->buffers[i]) goto failed;
     }
-    D3D11_TEXTURE2D_DESC desc={0};desc.Width=f->width;desc.Height=f->height;
-    desc.MipLevels=desc.ArraySize=desc.SampleDesc.Count=1;desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;
-    desc.Usage=D3D11_USAGE_DEFAULT;desc.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_UNORDERED_ACCESS;
-    if(FAILED(ID3D11Device_CreateTexture2D(g->device,&desc,NULL,&g->output)) ||
-       FAILED(ID3D11Device_CreateUnorderedAccessView(g->device,(ID3D11Resource *)g->output,NULL,&g->uav))) return false;
-    SDL_PropertiesID props=SDL_CreateProperties();if(!props) return false;
+    SDL_GPUTransferBufferCreateInfo transfer={0};transfer.usage=SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;transfer.size=total;
+    g->upload=SDL_CreateGPUTransferBuffer(g->device,&transfer);if(!g->upload) goto failed;
+    SDL_GPUTextureCreateInfo image={0};image.type=SDL_GPU_TEXTURETYPE_2D;image.format=SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    image.usage=SDL_GPU_TEXTUREUSAGE_SAMPLER|SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_WRITE;
+    image.width=f->width;image.height=f->height;image.layer_count_or_depth=1;image.num_levels=1;
+    g->output=SDL_CreateGPUTexture(g->device,&image);if(!g->output) goto failed;
+    SDL_PropertiesID props=SDL_CreateProperties();if(!props) goto failed;
     SDL_SetNumberProperty(props,SDL_PROP_TEXTURE_CREATE_FORMAT_NUMBER,SDL_PIXELFORMAT_ABGR8888);
-    SDL_SetNumberProperty(props,SDL_PROP_TEXTURE_CREATE_WIDTH_NUMBER,f->width);
-    SDL_SetNumberProperty(props,SDL_PROP_TEXTURE_CREATE_HEIGHT_NUMBER,f->height);
-    SDL_SetPointerProperty(props,SDL_PROP_TEXTURE_CREATE_D3D11_TEXTURE_POINTER,g->output);
-    g->texture=SDL_CreateTextureWithProperties(g->renderer,props);SDL_DestroyProperties(props);
-    if(!g->texture) return false;
-    SDL_SetTextureBlendMode(g->texture,SDL_BLENDMODE_NONE);
-    SDL_SetTextureScaleMode(g->texture,g->linear_filter?SDL_SCALEMODE_LINEAR:SDL_SCALEMODE_NEAREST);
-    if(g->validate) {
-        desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-        if(FAILED(ID3D11Device_CreateTexture2D(g->device,&desc,NULL,&g->staging))) return false;
-    }
-    g->width=f->width;g->height=f->height;g->stride=f->stride;return true;
-}
-static bool upload(ScGpuTerrain *g,ID3D11Buffer *buffer,const void *data,size_t bytes) {
-    D3D11_MAPPED_SUBRESOURCE map={0};
-    if(FAILED(ID3D11DeviceContext_Map(g->context,(ID3D11Resource *)buffer,0,D3D11_MAP_WRITE_DISCARD,0,&map))) return false;
-    memcpy(map.pData,data,bytes);ID3D11DeviceContext_Unmap(g->context,(ID3D11Resource *)buffer,0);return true;
+    SDL_SetNumberProperty(props,SDL_PROP_TEXTURE_CREATE_WIDTH_NUMBER,f->width);SDL_SetNumberProperty(props,SDL_PROP_TEXTURE_CREATE_HEIGHT_NUMBER,f->height);
+    SDL_SetPointerProperty(props,SDL_PROP_TEXTURE_CREATE_GPU_TEXTURE_POINTER,g->output);
+    g->texture=SDL_CreateTextureWithProperties(g->renderer,props);SDL_DestroyProperties(props);if(!g->texture) goto failed;
+    SDL_SetTextureBlendMode(g->texture,SDL_BLENDMODE_NONE);SDL_SetTextureScaleMode(g->texture,g->linear_filter?SDL_SCALEMODE_LINEAR:SDL_SCALEMODE_NEAREST);
+    if(g->validate) {transfer.usage=SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;transfer.size=f->width*f->height*4;
+        g->download=SDL_CreateGPUTransferBuffer(g->device,&transfer);if(!g->download) goto failed;}
+    g->width=f->width;g->height=f->height;g->stride=f->stride;g->resource_capacity=f->resource_capacity;g->city_capacity=f->city_capacity;return true;
+failed:
+    fprintf(stderr,"[vulkan] terrain resources: %s\n",SDL_GetError());release_surface(g);return false;
 }
 SDL_Texture *ScGpuTerrainDraw(ScGpuTerrain *g,const ScRenderer *r) {
     if(!g || !r->terrain.deferred || !surface(g,&r->terrain)) return NULL;
-    const ScTerrainFrame *f=&r->terrain;
-    unsigned dims[]={f->width,f->height,f->stride,0};
-    const void *data[]={r->pixels,f->tiles,f->palette,f->rows};
-    const size_t bytes[]={(size_t)f->width*f->height*4,(size_t)f->stride*f->height*sizeof(ScTerrainTile),
-        (size_t)f->height*256*4,(size_t)f->height*sizeof(ScTerrainRow)};
-    SDL_FlushRenderer(g->renderer);
-    for(unsigned i=0;i<4;++i) if(!upload(g,g->buffers[i],data[i],bytes[i])) return NULL;
-    if(!upload(g,g->constants,dims,sizeof dims)) return NULL;
-    /* SDL caches graphics bindings. Preserve its PS views while compute
-     * writes a texture that SDL may have sampled in the previous frame. */
-    ID3D11ShaderResourceView *saved[3]={0},*empty[4]={0};
-    ID3D11DeviceContext_PSGetShaderResources(g->context,0,3,saved);
-    ID3D11DeviceContext_PSSetShaderResources(g->context,0,3,empty);
-    ID3D11DeviceContext_CSSetShader(g->context,g->shader,NULL,0);
-    ID3D11DeviceContext_CSSetConstantBuffers(g->context,0,1,&g->constants);
-    ID3D11DeviceContext_CSSetShaderResources(g->context,0,4,g->views);
-    ID3D11DeviceContext_CSSetUnorderedAccessViews(g->context,0,1,&g->uav,NULL);
-    ID3D11DeviceContext_Dispatch(g->context,(f->width+7)/8,(f->height+7)/8,1);
-    ID3D11UnorderedAccessView *no_uav=NULL;ID3D11Buffer *no_buffer=NULL;
-    ID3D11DeviceContext_CSSetUnorderedAccessViews(g->context,0,1,&no_uav,NULL);
-    ID3D11DeviceContext_CSSetShaderResources(g->context,0,4,empty);
-    ID3D11DeviceContext_CSSetConstantBuffers(g->context,0,1,&no_buffer);
-    ID3D11DeviceContext_CSSetShader(g->context,NULL,NULL,0);
-    ID3D11DeviceContext_PSSetShaderResources(g->context,0,3,saved);
-    for(unsigned i=0;i<3;++i) RELEASE(saved[i]);
-    if(FAILED(ID3D11Device_GetDeviceRemovedReason(g->device))) return NULL;
+    const ScTerrainFrame *f=&r->terrain;uint32_t empty=0;
+    bool compact=f->stride>=34;
+    for(unsigned y=0;y<f->height && compact;++y) compact=(f->rows[y].math&SC_ROW_CITY_SPANS)!=0;
+    bool compact_objects=f->width>=256;
+    for(unsigned y=0;y<f->height && compact_objects;++y)
+        compact_objects=(f->rows[y].math&(SC_ROW_GPU_OBJECTS|SC_ROW_ADVISOR_BACKGROUND))!=0 &&
+            f->rows[y].core_x+256<=f->width;
+    const void *data[]={r->pixels,f->tiles,f->palette,f->rows,f->overlays,f->native,f->resources?f->resources:&empty,f->city?f->city:&empty};
+    unsigned upload_bytes[8];memcpy(upload_bytes,g->bytes,sizeof upload_bytes);
+    upload_bytes[6]=(f->snapshots?2048+f->snapshots*16384:1)*4;
+    upload_bytes[7]=(f->city_words?f->city_words:1)*4;
+    if(compact) upload_bytes[1]=f->height*34*sizeof(ScTerrainTile);
+    if(compact_objects) upload_bytes[4]=f->height*256*sizeof(ScTerrainOverlay);
+    Uint8 *mapped=SDL_MapGPUTransferBuffer(g->device,g->upload,true);if(!mapped) return NULL;
+    for(unsigned i=0;i<8;++i) {
+        if(i==1 && compact) {
+            for(unsigned y=0;y<f->height;++y) {
+                unsigned first=(f->rows[y].core_x+f->rows[y].phase)/8;
+                unsigned count=first+34>f->stride?f->stride-first:34;
+                Uint8 *to=mapped+g->offsets[1]+(size_t)y*34*sizeof(ScTerrainTile);
+                memcpy(to,f->tiles+(size_t)y*f->stride+first,count*sizeof(ScTerrainTile));
+                if(count<34) memset(to+count*sizeof(ScTerrainTile),0,(34-count)*sizeof(ScTerrainTile));
+            }
+        } else if(i==4 && compact_objects) {
+            for(unsigned y=0;y<f->height;++y)
+                memcpy(mapped+g->offsets[4]+(size_t)y*256*sizeof(ScTerrainOverlay),
+                    f->overlays+(size_t)y*f->width+f->rows[y].core_x,256*sizeof(ScTerrainOverlay));
+        } else memcpy(mapped+g->offsets[i],data[i],upload_bytes[i]);
+    }
+    SDL_UnmapGPUTransferBuffer(g->device,g->upload);SDL_FlushRenderer(g->renderer);
+    SDL_GPUCommandBuffer *command=SDL_AcquireGPUCommandBuffer(g->device);if(!command) return NULL;
+    SDL_GPUCopyPass *copy=SDL_BeginGPUCopyPass(command);
+    for(unsigned i=0;i<8;++i) {SDL_GPUTransferBufferLocation from={g->upload,g->offsets[i]};
+        SDL_GPUBufferRegion to={g->buffers[i],0,upload_bytes[i]};SDL_UploadToGPUBuffer(copy,&from,&to,true);}
+    SDL_EndGPUCopyPass(copy);
+    SDL_GPUStorageTextureReadWriteBinding output={0};output.texture=g->output;output.cycle=true;
+    SDL_GPUComputePass *compute=SDL_BeginGPUComputePass(command,&output,1,NULL,0);
+    SDL_BindGPUComputePipeline(compute,g->pipeline);SDL_BindGPUComputeStorageBuffers(compute,0,g->buffers,8);
+    unsigned dimensions[]={f->width,f->height,f->stride,(compact?1u:0u)|(compact_objects?2u:0u)};SDL_PushGPUComputeUniformData(command,0,dimensions,sizeof dimensions);
+    SDL_DispatchGPUCompute(compute,(f->width+7)/8,(f->height+7)/8,1);SDL_EndGPUComputePass(compute);
     if(g->validate) {
-        ID3D11DeviceContext_CopyResource(g->context,(ID3D11Resource *)g->staging,(ID3D11Resource *)g->output);
-        D3D11_MAPPED_SUBRESOURCE map={0};
-        if(FAILED(ID3D11DeviceContext_Map(g->context,(ID3D11Resource *)g->staging,0,D3D11_MAP_READ,0,&map))) return NULL;
+        copy=SDL_BeginGPUCopyPass(command);SDL_GPUTextureRegion source={0};source.texture=g->output;source.w=f->width;source.h=f->height;source.d=1;
+        SDL_GPUTextureTransferInfo dest={0};dest.transfer_buffer=g->download;SDL_DownloadFromGPUTexture(copy,&source,&dest);SDL_EndGPUCopyPass(copy);
+        SDL_GPUFence *fence=SDL_SubmitGPUCommandBufferAndAcquireFence(command);if(!fence) return NULL;
+        bool ready=SDL_WaitForGPUFences(g->device,true,&fence,1);SDL_ReleaseGPUFence(g->device,fence);if(!ready) return NULL;
+        const Uint32 *pixels=SDL_MapGPUTransferBuffer(g->device,g->download,false);if(!pixels) return NULL;
         bool same=true;
         for(unsigned y=0;y<f->height && same;++y) for(unsigned x=0;x<f->width;++x) {
-            uint32_t value=((const uint32_t *)((const uint8_t *)map.pData+y*map.RowPitch))[x];
-            value=0xff000000|((value&255)<<16)|(value&0xff00)|((value>>16)&255);
-            uint32_t expected=ScRendererPixel(r,x,y)|0xff000000;
-            if(value!=expected) {fprintf(stderr,"[gpu terrain] mismatch %u,%u: %08x != %08x\n",x,y,value,expected);same=false;break;}
+            Uint32 c=pixels[y*f->width+x];c=0xff000000|((c&255)<<16)|(c&0xff00)|((c>>16)&255);
+            Uint32 expected=ScRendererPixel(r,x,y)|0xff000000;
+            if(c!=expected) {fprintf(stderr,"[gpu terrain] mismatch %u,%u: %08x != %08x\n",x,y,c,expected);same=false;break;}
         }
-        ID3D11DeviceContext_Unmap(g->context,(ID3D11Resource *)g->staging,0);
-        if(!same) return NULL;
+        SDL_UnmapGPUTransferBuffer(g->device,g->download);if(!same) return NULL;
         if(g->frames%60==0) fprintf(stderr,"[gpu terrain] pixels match %ux%u, %u deferred\n",f->width,f->height,f->deferred);
-    }
+    } else if(!SDL_SubmitGPUCommandBuffer(command)) return NULL;
     if(!g->frames) fprintf(stderr,"[gpu terrain] composing %ux%u, %u deferred\n",f->width,f->height,f->deferred);
     ++g->frames;return g->texture;
 }
 #else
+SDL_Renderer *ScGpuTerrainRenderer(SDL_Window *window) {(void)window;return NULL;}
 ScGpuTerrain *ScGpuTerrainCreate(SDL_Renderer *renderer,bool linear_filter) {(void)renderer;(void)linear_filter;return NULL;}
 SDL_Texture *ScGpuTerrainDraw(ScGpuTerrain *g,const ScRenderer *r) {(void)g;(void)r;return NULL;}
 void ScGpuTerrainDestroy(ScGpuTerrain *g) {(void)g;}

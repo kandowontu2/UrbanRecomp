@@ -9,12 +9,29 @@
 #include <stdint.h>
 #include <stddef.h>
 typedef struct Ppu Ppu;
+typedef struct {
+    const uint8_t *map;
+    int first,y;
+    unsigned width,height,count,offset;
+    bool owner;
+} ScCityRowCache;
+enum { SC_RENDER_OBJECTS, SC_RENDER_TERRAIN, SC_RENDER_ROWS, SC_RENDER_NATIVE,
+       SC_RENDER_REPAIR, SC_RENDER_HUD, SC_RENDER_POINTER, SC_RENDER_TRACK, SC_RENDER_STAGES };
 typedef struct ScRenderer {
+    /* Optional host-only stage profiling; unset in ordinary gameplay/tests. */
+    uint64_t (*measure_clock)(void);
+    uint64_t measure_ticks[SC_RENDER_STAGES];
+    uint64_t (*vram_revision)(const Ppu *);
+    uint64_t captured_vram_revision;
+    const Ppu *captured_vram_source;
+    ScCityRowCache city_cache[6];
+    unsigned city_cache_next;
     ScViewport view;
     ScViewport gameplay_view; /* configured HUD anchor; menus are centered */
     uint32_t *pixels;
     ScTerrainFrame terrain;
     bool defer_terrain;
+    bool native_line; /* this row's native pixels were delegated to Vulkan */
     bool reference_terrain; /* exact per-pixel oracle for regression/profiling */
     uint32_t *advisor_pixels;
     bool advisor_frame;
@@ -29,7 +46,10 @@ typedef struct ScRenderer {
     bool title_live;
     bool city_frame;
     bool split_hud, pan_frame;
-    bool city_input, pointer_active;
+    bool city_input, pointer_active, pointer_hud, pointer_hidden;
+    bool clipboard_cursor;
+    bool clipboard_font_valid;
+    uint8_t clipboard_font[128][16]; /* original 8x8 adviser lettering */
     int pointer_x, pointer_y; /* full canvas position, relative to the native anchor */
     int light_slot, light_x, light_pitch;
     bool scroll_valid;
@@ -43,7 +63,9 @@ typedef struct ScRenderer {
     Ppu *held_ppu;
     uint8_t held_map[SC_WORLD_MAX_TILE_BYTES], previous_map[SC_WORLD_MAX_TILE_BYTES];
     uint8_t changed_cells[SC_WORLD_MAX_CELLS]; /* committed cells bypass stale native tile staging */
-    bool map_valid, map_hold, map_dark, held_large, held_huge, held_giant;
+    uint64_t map_revisions[SC_WORLD_TILE_CHUNKS];
+    unsigned map_bytes;
+    bool map_valid, map_hold, map_dark, held_large, held_huge, held_giant, held_colossal;
     int map_age, held_x, held_y;
     uint8_t repaired_edges[224]; /* per row: bit 0 left 8 px, bit 1 right */
     bool sylt;                   /* the ninth scenario card is on */
@@ -61,6 +83,7 @@ void ScRendererInit(ScRenderer *r, const uint8_t *rom, size_t size, bool is_us);
 bool ScRendererResize(ScRenderer *r, ScViewport view);
 void ScRendererDestroy(ScRenderer *r);
 bool ScRendererDeferTerrain(ScRenderer *r,bool enabled);
+bool ScRendererDeferNativeLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line);
 uint32_t ScRendererPixel(const ScRenderer *r,int x,int y);
 void ScRendererResetHistory(ScRenderer *r);
 /* Only an actual guest city-load entry may freeze the previous terrain. */
@@ -82,3 +105,9 @@ bool ScRendererCityPoint(const ScRenderer *r, const uint8_t *ram,
 /* Draw extended values from the game's live OBJ digit/icon tiles. */
 void ScRendererPopulationRow(const ScRenderer *r, const Ppu *ppu, ScViewport view,
                              bool split, int y, uint32_t *out);
+void ScRendererClipboardFont(ScRenderer *r,const uint8_t *font,size_t size);
+ScVideoRect ScRendererClipboardButton(ScViewport view,unsigned button);
+void ScRendererClipboardRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,
+    unsigned tool,bool available,uint64_t price,int y,uint32_t *out);
+/* Restore the live HUD hand above host-added COPY/PASTE labels. */
+void ScRendererHudPointer(ScRenderer *r,const Ppu *ppu);

@@ -40,8 +40,8 @@
 
 /* Geometry belongs to each generation, so a large map cannot leak its
  * stride into a subsequent stock generation or the standalone helpers. */
-static unsigned map_width(const ScMapGenState *st) { return st->width==960 && st->height==800 ? 960 : st->width==480 && st->height==400 ? 480 : st->width==240 && st->height==200 ? 240 : 120; }
-static unsigned map_height(const ScMapGenState *st) { return st->width==960 && st->height==800 ? 800 : st->width==480 && st->height==400 ? 400 : st->width==240 && st->height==200 ? 200 : 100; }
+static unsigned map_width(const ScMapGenState *st) { return st->width==1920 && st->height==1600 ? 1920 : st->width==960 && st->height==800 ? 960 : st->width==480 && st->height==400 ? 480 : st->width==240 && st->height==200 ? 240 : 120; }
+static unsigned map_height(const ScMapGenState *st) { return st->width==1920 && st->height==1600 ? 1600 : st->width==960 && st->height==800 ? 800 : st->width==480 && st->height==400 ? 400 : st->width==240 && st->height==200 ? 200 : 100; }
 static int map_bounds(const ScMapGenState *st, int x, int y) {
     return x>=0 && y>=0 && (unsigned)x<map_width(st) && (unsigned)y<map_height(st);
 }
@@ -477,7 +477,7 @@ void sc_mapgen_feature_clusters(ScMapGenPrng *p, ScMapGenState *st) {
  * generation-in-progress flag; it is reproduced because it is cheap, not
  * because its effect is understood. */
 static void generate(ScMapGenPrng *p, ScMapGenState *st, int large) {
-    st->width=large==3?960:large==2?480:large?240:120; st->height=large==3?800:large==2?400:large?200:100;
+    st->width=120u<<large; st->height=100u<<large;
     memset(st->map,0,sizeof st->map);
     g_sc_mapgen_cur = st;
     const unsigned pick = sc_mapgen_prng_step(p) & 0x00ffu;
@@ -523,6 +523,7 @@ void sc_mapgen_generate(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,0); 
 void sc_mapgen_generate_large(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,1); }
 void sc_mapgen_generate_huge(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,2); }
 void sc_mapgen_generate_giant(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,3); }
+void sc_mapgen_generate_colossal(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,4); }
 
 /* ── What is decompiled, and what the comparison says ──────────────────
  *

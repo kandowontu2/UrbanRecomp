@@ -22,16 +22,21 @@ is simply "the game".
 [blackerking/UrbanRecomp](https://github.com/blackerking/UrbanRecomp), preserving
 its history, credits and licenses. It adds F12 development speeds (Normal,
 2x, 5x, 10x, 50x), faster refresh of changed power networks, 64-bit population
-accounting up to 9,999,999,999, playable 240x200 and 480x400 maps, Journey mode
-with population-triggered border expansions, and full-canvas mouse
-construction with retained off-screen drags. Widescreen status and navigation
-controls now align with the wider city view.
+accounting up to 9,999,999,999,999, map choices through 1920x1600, Journey mode
+with population-triggered border expansions, Copy/Paste, zoom and mouse drag
+panning. Vulkan composition and native C simulation kernels accelerate large
+cities. Music runs on its own thread, with the restored 19-track set bundled
+in the portable release. Widescreen status and navigation controls align with
+the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) and
+[performance evidence and remaining limits](docs/GPU_PERFORMANCE.md).
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Extract it and open `UrbanRecomp.exe`, then select your own clean US ROM.
-The enhancements require the verified US ROM and the interpreter execution
-path. Enhanced releases are prereleases; see
+Beta 11 is one portable Windows EXE; run it and select your own clean US ROM.
+Bundled files unpack into a versioned private cache. Saves/settings stay beside
+the portable EXE. `--portable-docs` opens the bundled credits and licenses.
+The enhancements require the verified US ROM and the supported host execution
+path. Some game routines still use the interpreter. Enhanced releases are prereleases; see
 [features, controls, save compatibility and testing limits](docs/PC_ENHANCEMENTS.md).
 
 **Adaptive Widescreen, the default renderer:** the shared Mods launcher offers

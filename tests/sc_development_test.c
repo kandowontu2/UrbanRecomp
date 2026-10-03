@@ -15,7 +15,7 @@ static uint8_t rom[0x80000], ram[0x20000], baseline[0x20000];
 static uint8_t snapshot_ram[0x20000], expected_ram[0x20000];
 static uint16_t product, quotient, dividend;
 static uint8_t multiplicand;
-static bool large,huge,giant;
+static bool large,huge,giant,colossal;
 static bool growth_fixture, powered_fixture=true;
 static uint64_t grown_population;
 static ScWorld world,snapshot_world,expected_world;
@@ -51,9 +51,9 @@ static void put(unsigned p,unsigned v) { ram[p]=(uint8_t)v; ram[p+1]=(uint8_t)(v
 static unsigned word(unsigned p) { return ram[p]|((unsigned)ram[p+1]<<8); }
 static ScDevelopment run(uint16_t entry,unsigned tile,int speed,bool hook) {
     memset(ram,0,sizeof ram);
-    memset(&guest,0,sizeof guest); ScWorldReset(&world); world.active=large;world.huge=huge;world.giant=giant;
+    memset(&guest,0,sizeof guest); ScWorldReset(&world); world.active=large;world.huge=huge;world.giant=giant;world.colossal=colossal;
     /* Powered zone, centered away from map bounds. */
-    unsigned zx=giant?900:huge?300:large?200:60,zy=giant?750:huge?280:large?180:50;
+    unsigned zx=colossal?1800:giant?900:huge?300:large?200:60,zy=colossal?1500:giant?750:huge?280:large?180:50;
     unsigned cell=(zy*(large?ScWorldWidth(&world):120)+zx)*2;
     world.map_anchor=cell;
     world.coord[2][0]=zx;world.coord[2][1]=zy;
@@ -159,10 +159,202 @@ static ScDevelopment run(uint16_t entry,unsigned tile,int speed,bool hook) {
     }
     return s;
 }
+static void native_helpers(void) {
+    const unsigned entries[]={0x842f,0x8456,0x847a,0x907e,0x927b,0x9327,0x93e5,0x93d1};
+    Interp816 *cpu=interp816_init(NULL,read_bus,write_bus);assert(cpu);
+    unsigned cases=0;
+    for(unsigned routine=0;routine<8;++routine) for(unsigned sample=0;sample<(routine>=3?128:1024);++sample) {
+        memset(&guest,0,sizeof guest);memset(ram,0x5a,sizeof ram);
+        uint32_t random=sample*1664525u+1013904223u;
+        for(unsigned at=0xccf;at<0xcdd;++at) {random=random*1664525u+1013904223u;ram[at]=random>>24;}
+        put(0xb89,sample);interp816_reset(cpu);
+        cpu->k=cpu->db=3;cpu->pc=entries[routine];cpu->sp=sample&16?0x1ffc:0x01fc;cpu->dp=sample&32?0x0300:sample&1?0x1df6:0x1e02;
+        cpu->e=cpu->d=cpu->mf=cpu->xf=false;cpu->i=true;
+        cpu->a=random;cpu->x=random>>16;cpu->y=random>>8;
+        cpu->c=sample&1;cpu->v=sample&2;cpu->n=sample&4;cpu->z=sample&8;
+        Interp816 initial=*cpu;memcpy(snapshot_ram,ram,sizeof ram);
+        unsigned cycles=0,steps=0;
+        while(routine<4?read_bus(NULL,0x30000|cpu->pc)!=0x60:
+            cpu->pc!=(routine==4?0x9283:routine==5?0x932f:0x93ed) && cpu->pc!=(routine==4?0x92cc:routine==5?0x9378:0x9447)) {
+            assert(++steps<1000);cycles+=interp816_runOpcode(cpu);
+        }
+        Interp816 expected=*cpu;memcpy(expected_ram,ram,sizeof ram);
+        *cpu=initial;memcpy(ram,snapshot_ram,sizeof ram);
+        unsigned cost=ScDevelopmentNativeStep(cpu,ram);
+        if(cost!=cycles || memcmp(expected_ram,ram,sizeof ram))
+            fprintf(stderr,"native helper %x sample %u cycles %u/%u pc %x/%x\n",entries[routine],sample,cost,cycles,cpu->pc,expected.pc);
+        assert(cost==cycles && !memcmp(expected_ram,ram,sizeof ram));
+        assert(!memcmp(&cpu->a,&expected.a,(char *)&cpu->cyclesUsed-(char *)&cpu->a+1));++cases;
+    }
+    interp816_free(cpu);printf("PASS: %u native C capacity/random oracle cases\n",cases);
+}
+static void native_house_candidates(void) {
+    Interp816 *c=interp816_init(NULL,read_bus,write_bus);assert(c);unsigned cases=0;
+    const unsigned best[]={0,1,5,255};
+    for(unsigned map=0;map<4;++map) for(unsigned point=0;point<4;++point)
+    for(unsigned pattern=0;pattern<8;++pattern) for(unsigned start=0;start<4;++start) {
+        ScWorldReset(&world);world.active=true;world.huge=map>0;world.giant=map>=2;world.colossal=map==3;
+        unsigned x=point==0?0:point==1?ScWorldWidth(&world)/2:point==2?255:ScWorldWidth(&world)-1;
+        unsigned y=point==0?0:point==1?ScWorldHeight(&world)/2:point==2?255:ScWorldHeight(&world)-1;
+        if(y>=ScWorldHeight(&world)) y=ScWorldHeight(&world)-2;
+        const unsigned artwork[]={0,0x80,0x84,0x88,0x89,0x15,0x40,0x399};
+        for(int dy=-3;dy<=3;++dy) for(int dx=-3;dx<=3;++dx)
+            ScWorldPutCell(&world,x+dx,y+dy,artwork[(pattern+dx+dy+8)%8]|0x8000);
+        world.coord[2][0]=x;world.coord[2][1]=y;world.map_anchor=2*(y*ScWorldWidth(&world)+x);
+        memset(ram,0x5a,sizeof ram);memset(&guest,0,sizeof guest);interp816_reset(c);
+        c->k=c->db=3;c->pc=start==3?0x97c9:0x97db;c->dp=pattern&1?0x1e00:0x1ec7;c->sp=0x1f65;
+        c->e=c->d=c->xf=false;c->mf=c->i=true;c->a=0xfa37;c->x=0x3210;c->y=start?start==1?4:8:1;
+        c->c=pattern&1;c->n=pattern&2;c->z=pattern&4;c->v=point&1;
+        ram[0xb85]=x;ram[0xb86]=y;put(c->dp,0xab00|best[pattern%4]);put(c->dp+2,7);
+        uint32_t random=pattern*1664525u+point*1013904223u;
+        for(unsigned p=0xccf;p<0xcdd;++p) {random=random*1664525u+1013904223u;ram[p]=random>>24;}
+        snapshot_world=world;Interp816 initial=*c;memcpy(snapshot_ram,ram,sizeof ram);
+        unsigned total=0,steps=0;
+        while(c->pc!=0x980e) {
+            assert(++steps<20000);uint16_t pc=c->pc;ScWorldGuestStep(&world,c,ram);if(c->pc!=pc) continue;
+            ScWorldGuestBegin(&guest,&world,c,rom,sizeof rom);total+=interp816_runOpcode(c);
+        }
+        Interp816 expected=*c;expected_world=world;memcpy(expected_ram,ram,sizeof ram);
+        *c=initial;world=snapshot_world;memcpy(ram,snapshot_ram,sizeof ram);
+        ScDevelopment state={.repeating=true,.end=0xffff};
+        unsigned cost=ScDevelopmentNativeBatch(&state,&world,c,ram,rom,sizeof rom);
+        if(cost!=total || memcmp(ram,expected_ram,sizeof ram) || memcmp(&world,&expected_world,sizeof world) ||
+           memcmp(&c->a,&expected.a,(char *)&c->cyclesUsed-(char *)&c->a+1))
+            fprintf(stderr,"house candidates map=%u point=%u pattern=%u start=%u cycles=%u/%u pc=%x/%x A=%x/%x flags=%x/%x\n",
+                map,point,pattern,start,cost,total,c->pc,expected.pc,c->a,expected.a,interp816_getFlags(c),interp816_getFlags(&expected));
+        assert(cost==total && !memcmp(ram,expected_ram,sizeof ram) && !memcmp(&world,&expected_world,sizeof world));
+        assert(!memcmp(&c->a,&expected.a,(char *)&c->cyclesUsed-(char *)&c->a+1));++cases;
+    }
+    interp816_free(c);printf("PASS: %u complete native residential candidate searches match original ROM\n",cases);
+}
+static void native_house_mutations(void) {
+    Interp816 *c=interp816_init(NULL,read_bus,write_bus);assert(c);unsigned cases=0;
+    const unsigned deltas[]={0,1,7,8,32,64,126,127,128,129,192,247,248,249,254,255};
+    for(unsigned map=0;map<4;++map) for(unsigned point=0;point<4;++point)
+    for(unsigned pattern=0;pattern<16;++pattern) for(unsigned kind=0;kind<3;++kind)
+    for(unsigned start=0;start<(kind==1?3:1);++start) {
+        ScWorldReset(&world);world.active=true;world.huge=map>0;world.giant=map>=2;world.colossal=map==3;
+        unsigned x=point==0?0:point==1?ScWorldWidth(&world)/2:point==2?255:ScWorldWidth(&world)-1;
+        unsigned y=point==0?0:point==1?ScWorldHeight(&world)/2:point==2?255:ScWorldHeight(&world)-1;
+        if(x>=ScWorldWidth(&world)) x=ScWorldWidth(&world)-2;
+        if(y>=ScWorldHeight(&world)) y=ScWorldHeight(&world)-2;
+        world.coord[2][0]=x;world.coord[2][1]=y;world.map_anchor=2*(y*ScWorldWidth(&world)+x);
+        unsigned anchor=world.map_anchor;
+        for(unsigned i=0;i<9;++i) {
+            unsigned at=anchor+2*(i/3)*ScWorldWidth(&world)+2*(i%3);
+            const unsigned tiles[]={0x84,0x89,0x94,0x95,0x8089,0,0x40,0x3ff};
+            if(at+1<2*ScWorldCells(&world)) {world.tiles[at]=tiles[(pattern+i)%8];world.tiles[at+1]=tiles[(pattern+i)%8]>>8;}
+        }
+        if(kind==1 && point==3 && pattern&8) world.map_anchor=UINT32_MAX;
+        memset(ram,0x5a,sizeof ram);memset(&guest,0,sizeof guest);interp816_reset(c);
+        c->k=c->db=3;c->pc=kind==2?0x9659:kind?0x970b:0x961d;c->dp=pattern&1?0x1e00:0x1ec7;c->sp=0x1f65;
+        c->e=c->d=c->xf=false;c->mf=!kind && (pattern&1);c->i=true;
+        c->a=0xfa00|deltas[pattern];c->x=0x3210;c->y=kind?start*8:0xabcd;
+        c->c=pattern&1;c->n=pattern&2;c->z=pattern&4;c->v=point&1;
+        ram[0xb85]=x;ram[0xb86]=y;put(c->dp+8,world.map_anchor);put(c->sp+1,0x6fff);
+        if(kind==2) {put(0xb89,0x84);put(c->dp,pattern%15+1);}
+        unsigned field=2*((y/8)*(ScWorldWidth(&world)/8)+x/8);
+        const unsigned old[]={0,65535,32760,32768};
+        world.fields[7][field]=old[pattern%4];world.fields[7][field+1]=old[pattern%4]>>8;
+        snapshot_world=world;Interp816 initial=*c;memcpy(snapshot_ram,ram,sizeof ram);
+        const char *control=getenv("SC_ZONE_CONTROL_REFERENCE");
+        unsigned total=0,steps=0,end=(!control || *control!='1')?0x7000:kind?0x9732:0x7000;
+        while(c->pc!=end) {
+            assert(++steps<20000);uint16_t pc=c->pc;ScWorldGuestStep(&world,c,ram);if(c->pc!=pc) continue;
+            ScWorldGuestBegin(&guest,&world,c,rom,sizeof rom);total+=interp816_runOpcode(c);
+        }
+        Interp816 expected=*c;expected_world=world;memcpy(expected_ram,ram,sizeof ram);
+        *c=initial;world=snapshot_world;memcpy(ram,snapshot_ram,sizeof ram);
+        ScDevelopment state={.repeating=true,.end=0xffff};
+        unsigned cost=ScDevelopmentNativeBatch(&state,&world,c,ram,rom,sizeof rom);
+        if(cost!=total || memcmp(ram,expected_ram,sizeof ram) || memcmp(&world,&expected_world,sizeof world) ||
+           memcmp(&c->a,&expected.a,(char *)&c->cyclesUsed-(char *)&c->a+1))
+            fprintf(stderr,"house mutation map=%u point=%u pattern=%u kind=%u start=%u cycles=%u/%u pc=%x/%x A=%x/%x flags=%x/%x\n",
+                map,point,pattern,kind,start,cost,total,c->pc,expected.pc,c->a,expected.a,interp816_getFlags(c),interp816_getFlags(&expected));
+        assert(cost==total && !memcmp(ram,expected_ram,sizeof ram) && !memcmp(&world,&expected_world,sizeof world));
+        assert(!memcmp(&c->a,&expected.a,(char *)&c->cyclesUsed-(char *)&c->a+1));++cases;
+    }
+    interp816_free(c);printf("PASS: %u native residential density/removal calls match original ROM\n",cases);
+}
+static void native_batches(void) {
+    const unsigned entries[]={0x923d,0x92dc,0x9388},ends[]={0x92cc,0x9378,0x9447};
+    const unsigned skips[]={0x9242,0x92ee,0x93a4},attempts[]={0x926f,0x931b,0x93d1};
+    const unsigned zones[]={0x922f,0x92ce,0x937a},tiles[]={0x201,0x144,0x99};
+    Interp816 *c=interp816_init(NULL,read_bus,write_bus);assert(c);unsigned cases=0;
+    for(unsigned map=0;map<4;++map) for(unsigned kind=0;kind<3;++kind) for(unsigned sample=0;sample<128;++sample) {
+        ScWorldReset(&world);world.active=true;world.huge=map>0;world.giant=map>=2;world.colossal=map==3;
+        unsigned x=ScWorldWidth(&world)-40,y=ScWorldHeight(&world)-30;
+        memset(ram,0,sizeof ram);memset(&guest,0,sizeof guest);interp816_reset(c);
+        c->k=c->db=3;c->pc=entries[kind];c->dp=kind==2?0x1df4:0x1df6;c->sp=sample&16?0x1ffa:0x01fa;
+        c->e=c->d=c->mf=c->xf=false;c->i=true;
+        uint32_t random=sample*1664525u+1013904223u;
+        for(unsigned p=0xccf;p<0xcdd;++p) {random=random*1664525u+1013904223u;ram[p]=random>>24;}
+        unsigned tile=kind==2 && sample%2?0x84:sample%4==0?(kind==1?0x39a:kind==2?0x376:0x1fc):tiles[kind]+9*(sample%4);
+        unsigned neighbour=0;bool powered=tile==0x84?!(sample&8):!(sample&1);
+        for(int dy=-1;dy<=1;++dy) for(int dx=-1;dx<=1;++dx) {
+            unsigned artwork=tile+dy*3+dx;
+            if(tile==0x84 && (dx || dy) && neighbour++<(sample>>2)%9) artwork=0x89+(neighbour%12);
+            ScWorldPutCell(&world,x+dx,y+dy,(powered?0x8000:0)|artwork);
+        }
+        world.coord[2][0]=x;world.coord[2][1]=y;world.map_anchor=2*(y*ScWorldWidth(&world)+x);
+        ram[0xb85]=x;ram[0xb86]=y;put(0xb49,world.map_anchor);
+        put(0xb87,ScWorldCell(&world,x,y));put(0xb89,tile);put(c->dp+4,sample%7==0?65535:sample%2);
+        put(0xbad,sample&2?2500:65536-2000);put(0xbaf,word(0xbad));put(0xbb1,word(0xbad));
+        memset(world.fields[0],192,ScWorldFieldSizeWorld(&world,0));
+        memset(world.fields[3],80,ScWorldFieldSizeWorld(&world,3));
+        if(sample>=32) {
+            const unsigned demand_edges[]={0,349,350,65536-350,65536-500,32767,32768,65535};
+            unsigned value=demand_edges[sample%8];
+            put(0xbad,value);put(0xbaf,value);put(0xbb1,value);
+            memset(world.fields[0],(sample*37)&255,ScWorldFieldSizeWorld(&world,0));
+            memset(world.fields[2],(sample*19)&255,ScWorldFieldSizeWorld(&world,2));
+            unsigned field=2*((y/8)*(ScWorldWidth(&world)/8)+x/8);
+            world.fields[12][field]=random;world.fields[12][field+1]=random>>8;
+        }
+        ScDevelopment initial_state={.entry=zones[kind],.end=ends[kind],.capacity=entries[kind],.skip=skips[kind],
+            .attempt=attempts[kind],.cell=(uint16_t)world.map_anchor,.dp=c->dp+(kind==2?10:8),.sp=c->sp+2,
+            .remaining=sample<32?49:3,.repeating=true,.attempts=2,.extra_attempts=1};
+        snapshot_world=world;Interp816 initial=*c;memcpy(snapshot_ram,ram,sizeof ram);
+        ScDevelopment expected_state=initial_state;unsigned total=0,steps=0;
+        while(expected_state.remaining) {
+            assert(++steps<200000);
+            ScWorldGuestStep(&world,c,ram);
+            uint16_t pc=ScDevelopmentStepWorld(&expected_state,&world,ram,c->pc,c->dp,c->sp,1);
+            if(pc!=c->pc) {c->pc=pc;c->mf=c->xf=false;}
+            if(!expected_state.remaining) break;
+            ScWorldGuestBegin(&guest,&world,c,rom,sizeof rom);total+=interp816_runOpcode(c);
+        }
+        Interp816 expected=*c;expected_world=world;memcpy(expected_ram,ram,sizeof ram);
+        *c=initial;world=snapshot_world;memcpy(ram,snapshot_ram,sizeof ram);memset(&guest,0,sizeof guest);
+        ScDevelopment state=initial_state;unsigned cost=0,hits=0;steps=0;
+        while(state.remaining) {
+            assert(++steps<200000);
+            ScWorldGuestStep(&world,c,ram);
+            uint16_t pc=ScDevelopmentStepWorld(&state,&world,ram,c->pc,c->dp,c->sp,1);
+            if(pc!=c->pc) {c->pc=pc;c->mf=c->xf=false;}
+            if(!state.remaining) break;
+            unsigned fast=ScDevelopmentNativeBatch(&state,&world,c,ram,rom,sizeof rom);
+            if(!fast) fast=ScWorldGuestBatchStep(&world,c,ram,rom,sizeof rom,8000);
+            if(fast) {cost+=fast;++hits;continue;}
+            ScWorldGuestBegin(&guest,&world,c,rom,sizeof rom);cost+=interp816_runOpcode(c);
+        }
+        if(cost!=total || memcmp(ram,expected_ram,sizeof ram))
+            fprintf(stderr,"batch map %u kind %u sample %u cycles %u/%u hits %u\n",map,kind,sample,cost,total,hits);
+        assert(cost==total && hits && !memcmp(ram,expected_ram,sizeof ram));
+        assert(!memcmp(&world,&expected_world,sizeof world));
+        assert(state.entry==expected_state.entry && state.end==expected_state.end &&
+            state.capacity==expected_state.capacity && state.attempt==expected_state.attempt &&
+            state.remaining==expected_state.remaining && state.repeating==expected_state.repeating &&
+            state.attempts==expected_state.attempts && state.extra_attempts==expected_state.extra_attempts);
+        assert(!memcmp(&c->a,&expected.a,(char *)&c->cyclesUsed-(char *)&c->a+1));++cases;
+    }
+    interp816_free(c);printf("PASS: %u native C accelerated batches match complete zone execution\n",cases);
+}
 int main(int argc,char **argv) {
     assert(argc==2);
     FILE *f=fopen(argv[1],"rb"); assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom); fclose(f);
+    native_helpers();native_house_candidates();native_house_mutations();native_batches();if(getenv("SC_NATIVE_HELPER_TEST")) return 0;
     const uint16_t entries[]={0x937a,0x92ce,0x922f};
     const unsigned tiles[]={0x99,0x144,0x201};
     const int speeds[]={1,2,5,10,50};
@@ -184,8 +376,8 @@ int main(int argc,char **argv) {
     }
     growth_fixture=true;
     const unsigned empty[]={0x84,0x13b,0x1fc};
-    for(int size=0;size<4;++size) for (int z=0;z<3;++z) {
-        large=size>0;huge=size>=2;giant=size==3;powered_fixture=true;
+    for(int size=0;size<5;++size) for (int z=0;z<3;++z) {
+        large=size>0;huge=size>=2;giant=size>=3;colossal=size==4;powered_fixture=true;
         run(entries[z],empty[z],1,true);uint64_t normal=grown_population;
         run(entries[z],empty[z],50,true);assert(grown_population>normal);
         powered_fixture=false;

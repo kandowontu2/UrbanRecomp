@@ -265,6 +265,18 @@ int main(void) {
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(r.advisor_frame && r.view.core_x==0 && r.view.core_y==0);
     assert(!memcmp(before,p,sizeof(*p)));
+    {
+        int gx,gy;bool navigation;
+        ScVideoRect d={20,40,1368,896};
+        assert(ScRendererWindowToGuest(&r,d,704,488,1408,976,
+            10+214+84,20+112+140,&gx,&gy,&navigation));
+        assert(gx==84 && gy==140 && !navigation);
+        assert(!ScRendererWindowToGuest(&r,d,704,488,1408,976,
+            10+213,20+112+140,&gx,&gy,&navigation));
+        assert(ScRendererWindowToGuest(&r,d,704,488,1408,976,
+            10+214+255,20+112+223,&gx,&gy,&navigation));
+        assert(gx==255 && gy==223);
+    }
     assert(r.pixels[20*684+16]==0xff7b0000); /* HUD did not move */
     assert(r.pixels[20*684+40]==0xff007b00); /* no old page */
     assert(r.pixels[(112+20)*684+214+40]==0xff0000ff);
@@ -333,7 +345,40 @@ int main(void) {
         assert(wx==(160+gx)/8 && wy==(240+gy)/8);
         assert(!ScRendererWindowToGuest(&r,d,1000,500,1000*dpi,500*dpi,0,0,&gx,&gy,&navigation));
     }
-    r.view=(ScViewport){448,224,0,0,1,0};
+    /* Every direction is composed once at its resized border, including the
+     * rows outside the native 224-line frame. Mouse navigation uses the same
+     * placement with DPI/zoom scaling and a centered native core. */
+    const int arrow_views[][2]={{256,224},{256,492},{448,224},{730,492},{448,600}};
+    p->cgram[161]=0x7fe0;
+    const int axs[]={214,70,134,134},ays[]={118,118,62,174};
+    for(unsigned v=0;v<5;++v) for(unsigned center=0;center<2;++center) for(unsigned gpu=0;gpu<2;++gpu) {
+        int width=arrow_views[v][0],height=arrow_views[v][1];
+        ScViewport view={width,height,center?(width-256)/2:0,center?(height-224)/2:0,1,0};
+        assert(ScRendererResize(&r,view));ScRendererResetHistory(&r);assert(ScRendererDeferTerrain(&r,gpu!=0));
+        for(int a=0;a<4;++a) {p->oam[(49+a)*2]=(ays[a]<<8)|axs[a];p->oam[(49+a)*2+1]=0x3400;}
+        memcpy(before,p,sizeof *p);
+        for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+        assert(r.pan_frame && !memcmp(before,p,sizeof *p));
+        for(int a=0;a<4;++a) {
+            int dx=a==0?width-view.core_x-256:a==1?0:width>256?(width+view.core_x+56)/2-view.core_x-142:0;
+            int dy=a<2?(height-view.core_y-224)/2:a==3?height-view.core_y-224:0;
+            int tx=view.core_x+axs[a]+dx,ty=view.core_y+ays[a]+dy;
+            assert(ScRendererPixel(&r,tx,ty)==0xff00ffff);
+            ScVideoRect d={20,40,width*2,height*2};
+            assert(ScRendererWindowToGuest(&r,d,width+20,height+40,(width+20)*2,(height+40)*2,
+                10+tx+3,20+ty+3,&gx,&gy,&navigation));
+            assert(navigation && gx==axs[a]+3 && gy==ays[a]+3);
+            if(dx || dy) assert(ScRendererPixel(&r,view.core_x+axs[a],view.core_y+ays[a])!=0xff00ffff);
+        }
+        /* Hidden directions must stay hidden on tall canvases. */
+        p->oam[104]=(240<<8)|134;
+        for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+        int downx=view.core_x+(width>256?(width+view.core_x+56)/2-view.core_x-8:134);
+        assert(ScRendererPixel(&r,downx,height-50)!=0xff00ffff);
+    }
+    assert(ScRendererDeferTerrain(&r,false));
+    for(int a=0;a<4;++a) p->oam[(49+a)*2]=(240<<8)|128;
+    assert(ScRendererResize(&r,(ScViewport){448,224,0,0,1,0}));ScRendererResetHistory(&r);
     r.city_input=false;
     assert(!ScRendererWindowToGuest(&r,dest,1000,500,2000,1000,310,190,&gx,&gy,&navigation));
     r.city_input=true;
@@ -388,6 +433,10 @@ int main(void) {
         }
     }
     word(ram,0x20d,0);
+    r.clipboard_cursor=true;
+    for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+    for(int y=70;y<150;++y) for(int x=70;x<448;++x) assert(r.pixels[y*448+x]!=0xffff0000);
+    r.clipboard_cursor=false;
     /* The whole 16px hand crosses the HUD boundary at its relocated X.
      * Parked corners do not become artifacts when the next frame is land. */
     r.pointer_active=false;
@@ -413,6 +462,25 @@ int main(void) {
     assert(r.pixels[120*448+230]!=0xffff0000);
     assert(!memcmp(before,p,sizeof *p));
     r.pointer_active=false; memset(p->highOam,0,sizeof p->highOam);
+    /* A clipboard cursor in the city must still use the live desktop endpoint
+     * for the HUD hand, including the relocated right header. OAM can retain
+     * an old hand/corner position while the guest is busy with development. */
+    for(int tile=0;tile<4;++tile) for(int y=0;y<8;++y)
+        p->vram[(PPU_objTileAdr2(p)+(0xec+(tile%2)+(tile/2)*16)*16+y)&0x7fff]=0xff;
+    r.pointer_active=r.pointer_hud=r.clipboard_cursor=true;
+    const int hud_points[][2]={{20,70},{420,24},{440,43},{128,5}};
+    for(unsigned i=0;i<sizeof hud_points/sizeof *hud_points;++i) {
+        r.pointer_x=hud_points[i][0];r.pointer_y=hud_points[i][1];
+        memcpy(before,p,sizeof *p);
+        for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
+        r.clipboard_font_valid=true;
+        for(int y=0;y<10;++y) ScRendererClipboardRow(&r,p,r.view,2,true,5555,y,r.pixels+y*448);
+        ScRendererHudPointer(&r,p);
+        assert(r.pixels[r.pointer_y*448+r.pointer_x]==0xffff0000);
+        assert(r.pixels[(r.pointer_y+15)*448+r.pointer_x+7]==0xffff0000);
+        assert(!memcmp(before,p,sizeof *p));
+    }
+    r.pointer_active=r.pointer_hud=r.clipboard_cursor=false;
     for (int slot=0;slot<4;++slot) p->oam[slot*2]=(240<<8)|128;
     p->oam[80]=(46<<8)|190; p->oam[81]=0x3166;
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
@@ -449,7 +517,7 @@ int main(void) {
     assert(!ScRendererCityPoint(&r,ram,600,120,&wx,&wy)); /* actual map edge */
     r.scroll_x=160;r.scroll_y=240;r.view.width=256;
     free(large); r.world=NULL;
-    /* Ten-digit population uses the exact OBJ font used by native money.
+    /* Thirteen-digit population uses the exact OBJ font used by native money.
      * Its 5..9 glyphs live on a different tile row; assuming consecutive
      * tile IDs would render unrelated artwork instead of numbers. */
     const uint8_t digit_tiles[]={0x60,0x61,0x62,0x63,0x64,0x70,0x71,0x72,0x73,0x74};
@@ -463,9 +531,9 @@ int main(void) {
     assert(ScRendererResize(&r,(ScViewport){448,224,0,0,1,0}));
     memcpy(before,p,sizeof *p);
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
-    assert(r.pixels[22*448+323]==0xffff0000);
-    for (int digit=0;digit<10;++digit) for (int y=0;y<8;++y) for (int x=0;x<8;++x)
-        assert(r.pixels[(22+y)*448+323+digit*8+x]==r.pixels[(30+y)*448+387+x]);
+    assert(r.pixels[22*448+299]==0xffff0000);
+    for (int digit=0;digit<13;++digit) for (int y=0;y<8;++y) for (int x=0;x<8;++x)
+        assert(r.pixels[(22+y)*448+299+digit*8+x]==r.pixels[(30+y)*448+387+x]);
     assert(!memcmp(before,p,sizeof *p));
     /* Every digit follows the ROM table, not just the cap's repeated nines. */
     for (int digit=0;digit<10;++digit) {
@@ -491,9 +559,31 @@ int main(void) {
     pop.value=SC_POPULATION_MAX;
     assert(ScRendererResize(&r,(ScViewport){256,224,0,0,1,0}));
     for (int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
-    assert(r.pixels[10*256+131]==0xffff0000 && r.pixels[17*256+131]==0xffff0000);
+    assert(r.pixels[10*256+107]==0xffff0000 && r.pixels[17*256+107]==0xffff0000);
     assert(r.pixels[22*256+147]!=0xffff0000); /* no stale native counter */
     r.population=NULL;
+    /* Paste prices use the same OBJ digit table, pixels and palette as the
+     * stock counter. Controls use a separately supplied original body font;
+     * neither overlay changes OAM, VRAM or any other PPU state. */
+    uint8_t clip_font[128*16];memset(clip_font,255,sizeof clip_font);
+    ScRendererClipboardFont(&r,clip_font,sizeof clip_font);
+    ScViewport cv={448,224,0,0,1,0};
+    uint32_t reference_row[448],price_row[448];
+    memcpy(before,p,sizeof *p);
+    r.population=&pop;pop.live=true;
+    for(int g=0;g<10;++g) {
+        pop.value=9-g;
+        for(int y=0;y<8;++y) {
+            for(int x=0;x<448;++x) reference_row[x]=price_row[x]=0xff123456;
+            ScRendererPopulationRow(&r,p,cv,true,22+y,reference_row);
+            ScRendererClipboardRow(&r,p,cv,2,true,UINT64_C(9876543210),204+y,price_row);
+            for(int x=0;x<8;++x) assert(price_row[20+g*8+x]==reference_row[395+x]);
+            assert(price_row[100]==0xff123456);
+        }
+    }
+    ScVideoRect cb=ScRendererClipboardButton((ScViewport){448,224,80,0,1,0},0);
+    assert(cb.x==192 && cb.y==0 && cb.w==36 && cb.h==10);
+    assert(!memcmp(before,p,sizeof *p));r.population=NULL;
     /* A stale cached lightning tile must clear without a camera pan. Keep
      * the same glyph when its real building is still unpowered. */
     memset(p,0,sizeof *p); memset(ram,0,0x20000);
@@ -533,7 +623,7 @@ int main(void) {
     for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(r.pixels[87*448+128]==0xff00ff00 && r.pixels[87*448+328]==0xff00ff00);
     for(int y=0;y<8;++y) p->vram[0x376*16+y]=0xff;
-    word(large->tiles,2*(370*480+435),0x813b);word(large->tiles,2*(370*480+460),0x27c);
+    ScWorldPutCell(large,435,370,0x813b);ScWorldPutCell(large,460,370,0x27c);
     for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(r.pixels[87*448+128]==0xff00ff00 && r.pixels[87*448+328]==0xff00ff00);
     free(large);r.world=NULL;

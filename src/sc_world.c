@@ -26,24 +26,85 @@ const ScWorldField ScWorldFields[SC_WORLD_FIELDS] = {
     {0xd1e4,5001,1,20001,1,1}, /* power traversal X, one-based */
     {0xe56c,5001,1,20001,1,1}  /* power traversal Y, one-based */
 };
+static const ScWorld *tracked_world;
+static uint64_t state_epoch;
+uint64_t ScWorldStateEpoch(void) {return state_epoch;}
+static uint64_t tile_revision,tile_revisions[SC_WORLD_TILE_CHUNKS];
+void ScWorldTilesTouch(const ScWorld *w,unsigned offset,unsigned bytes) {
+    if(w!=tracked_world || !bytes || offset>=SC_WORLD_MAX_TILE_BYTES) return;
+    unsigned end=bytes>SC_WORLD_MAX_TILE_BYTES-offset?SC_WORLD_MAX_TILE_BYTES:offset+bytes;
+    uint64_t revision=++tile_revision;
+    for(unsigned i=offset/SC_WORLD_TILE_CHUNK_BYTES;i<=(end-1)/SC_WORLD_TILE_CHUNK_BYTES;++i)
+        tile_revisions[i]=revision;
+}
+/* Apply packed electrical state without touching tile IDs or other metadata.
+ * A publication is atomic to scanout; one revision per changed chunk preserves
+ * render invalidation without millions of redundant per-cell notifications. */
+void ScWorldPublishPower(ScWorld *w,uint8_t *tiles,const uint8_t *bitmap,unsigned first,unsigned end) {
+    if(!tiles || !bitmap || first>=end || end>SC_WORLD_MAX_CELLS) return;
+#if !defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_BIG_ENDIAN__
+    static const uint64_t flags[16]={
+        0,UINT64_C(0x8000000000000000),UINT64_C(0x0000800000000000),UINT64_C(0x8000800000000000),
+        UINT64_C(0x0000000080000000),UINT64_C(0x8000000080000000),UINT64_C(0x0000800080000000),UINT64_C(0x8000800080000000),
+        UINT64_C(0x0000000000008000),UINT64_C(0x8000000000008000),UINT64_C(0x0000800000008000),UINT64_C(0x8000800000008000),
+        UINT64_C(0x0000000080008000),UINT64_C(0x8000000080008000),UINT64_C(0x0000800080008000),UINT64_C(0x8000800080008000)
+    };
+#endif
+    unsigned i=first;
+    while(i<end) {
+        unsigned begin=i,limit=(i/(SC_WORLD_TILE_CHUNK_BYTES/2)+1)*(SC_WORLD_TILE_CHUNK_BYTES/2);
+        if(limit>end) limit=end;
+        bool changed=false;
+#if !defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_BIG_ENDIAN__
+        while(i<limit && (i&7)) {
+            unsigned value=(tiles[2*i+1]&127)|(bitmap[i/8]&(128>>(i&7))?128:0);
+            if(value!=tiles[2*i+1]) {tiles[2*i+1]=(uint8_t)value;changed=true;}++i;
+        }
+        for(;i+8<=limit;i+=8) {
+            unsigned bits=bitmap[i/8];uint64_t old_a,old_b;
+            memcpy(&old_a,tiles+2*i,8);memcpy(&old_b,tiles+2*i+8,8);
+            uint64_t a=(old_a&UINT64_C(0x7fff7fff7fff7fff))|flags[bits>>4];
+            uint64_t b=(old_b&UINT64_C(0x7fff7fff7fff7fff))|flags[bits&15];
+            if(a!=old_a || b!=old_b) {
+                memcpy(tiles+2*i,&a,8);memcpy(tiles+2*i+8,&b,8);changed=true;
+            }
+        }
+#endif
+        for(;i<limit;++i) {
+            unsigned value=(tiles[2*i+1]&127)|(bitmap[i/8]&(128>>(i&7))?128:0);
+            if(value!=tiles[2*i+1]) {tiles[2*i+1]=(uint8_t)value;changed=true;}
+        }
+        if(w && changed) ScWorldTilesTouch(w,2*begin,2*(limit-begin));
+    }
+}
+const uint64_t *ScWorldTileRevisions(const ScWorld *w) {
+    if(w!=tracked_world) {
+        tracked_world=w;
+        ScWorldTilesTouch(w,0,SC_WORLD_MAX_TILE_BYTES);
+    }
+    return tile_revisions;
+}
 static unsigned word(const uint8_t *p) { return p[0] | ((unsigned)p[1]<<8); }
 static void put(uint8_t *p,unsigned v) { p[0]=(uint8_t)v; p[1]=(uint8_t)(v>>8); }
 static void put32(uint8_t *p,uint32_t v) { put(p,v); put(p+2,v>>16); }
 static uint32_t get32(const uint8_t *p) { return word(p)|((uint32_t)word(p+2)<<16); }
-void ScWorldReset(ScWorld *w) { memset(w,0,sizeof *w); }
+void ScWorldReset(ScWorld *w) { ++state_epoch;memset(w,0,sizeof *w);ScWorldTilesTouch(w,0,SC_WORLD_MAX_TILE_BYTES); }
 bool ScWorldBounds(int x,int y) { return x>=0 && y>=0 && x<SC_WORLD_WIDTH && y<SC_WORLD_HEIGHT; }
 uint16_t ScWorldCell(const ScWorld *w,int x,int y) {
     return ScWorldContains(w,x,y)?(uint16_t)word(w->tiles+2*(y*ScWorldWidth(w)+x)):0;
 }
 bool ScWorldPutCell(ScWorld *w,int x,int y,uint16_t v) {
     if (!ScWorldContains(w,x,y)) return false;
-    put(w->tiles+2*(y*ScWorldWidth(w)+x),v); return true;
+    unsigned at=2*(y*ScWorldWidth(w)+x);
+    if(word(w->tiles+at)!=v) {put(w->tiles+at,v);ScWorldTilesTouch(w,at,2);}
+    return true;
 }
 static void generate(ScWorld *w,ScMapGenPrng *prng,unsigned size) {
     ScMapGenState *state=calloc(1,sizeof *state);
     if(!state) return;
-    ScWorldReset(w); w->huge=size>=2;w->giant=size==3;
-    if(size==3) sc_mapgen_generate_giant(prng,state);
+    ScWorldReset(w); w->huge=size>=2;w->giant=size>=3;w->colossal=size==4;
+    if(size==4) sc_mapgen_generate_colossal(prng,state);
+    else if(size==3) sc_mapgen_generate_giant(prng,state);
     else if(size==2) sc_mapgen_generate_huge(prng,state);
     else sc_mapgen_generate_large(prng,state);
     for (unsigned i=0;i<ScWorldCells(w);++i) put(w->tiles+i*2,state->map[i]);
@@ -52,6 +113,7 @@ static void generate(ScWorld *w,ScMapGenPrng *prng,unsigned size) {
 void ScWorldGenerate(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,1); }
 void ScWorldGenerateHuge(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,2); }
 void ScWorldGenerateGiant(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,3); }
+void ScWorldGenerateColossal(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,4); }
 unsigned ScWorldFieldWidth(const ScWorld *w,unsigned f) {
     return f<SC_WORLD_FIELDS?(w && w->giant && f>=17?65535:ScWorldFields[f].width*(f<17?ScWorldScale(w):1)):0;
 }
@@ -82,20 +144,20 @@ bool ScWorldFieldResolve(uint16_t base,unsigned *field,int *offset) {
     return false;
 }
 static unsigned encoded_field_size(unsigned version,unsigned f) {
-    if(version==4 && f>=17) return 65535*2;
-    return ScWorldFieldSize(f)*(version==2?1:f<17?(version==3?4:16):2);
+    if(version>=4 && f>=17) return 65535*2;
+    return ScWorldFieldSize(f)*(version==2?1:f<17?(version==3?4:version==4?16:64):2);
 }
 static size_t encoded_size(unsigned version) {
-    size_t n=version==2?48+SC_WORLD_TILE_BYTES:(version==3?64:80)+(version==3?384000:SC_WORLD_MAX_TILE_BYTES);
+    size_t n=version==2?48+SC_WORLD_TILE_BYTES:(version==3?64:80)+(version==3?384000:version==4?1536000:SC_WORLD_MAX_TILE_BYTES);
     for(unsigned i=0;i<SC_WORLD_FIELDS;++i) n+=encoded_field_size(version,i);
     return n;
 }
-size_t ScWorldEncodedSize(void) { return encoded_size(4); }
+size_t ScWorldEncodedSize(void) { return encoded_size(5); }
 bool ScWorldEncode(const ScWorld *w,uint8_t *p,size_t size) {
     if (size!=ScWorldEncodedSize()) return false;
-    memset(p,0,80); memcpy(p,"SCWORLD",7); p[7]=4;
+    memset(p,0,80); memcpy(p,"SCWORLD",7); p[7]=5;
     put(p+8,ScWorldWidth(w)); put(p+10,ScWorldHeight(w));
-    p[12]=w->active; p[13]=w->giant?2:w->huge?1:0; put32(p+16,w->map_anchor);
+    p[12]=w->active; p[13]=w->colossal?3:w->giant?2:w->huge?1:0; put32(p+16,w->map_anchor);
     put32(p+20,(uint32_t)size); put32(p+24,SC_WORLD_FIELDS);
     for(unsigned i=0;i<3;++i) put32(p+28+i*4,w->bank_anchor[i]);
     put(p+40,w->scan_x); put(p+42,w->scan_y);
@@ -107,23 +169,23 @@ bool ScWorldEncode(const ScWorld *w,uint8_t *p,size_t size) {
     memcpy(p+80,w->tiles,SC_WORLD_MAX_TILE_BYTES);
     size_t at=80+SC_WORLD_MAX_TILE_BYTES;
     for(unsigned i=0;i<SC_WORLD_FIELDS;++i) {
-        unsigned n=encoded_field_size(4,i);memcpy(p+at,w->fields[i],n);at+=n;
+        unsigned n=encoded_field_size(5,i);memcpy(p+at,w->fields[i],n);at+=n;
     }
     return true;
 }
 bool ScWorldDecode(ScWorld *w,const uint8_t *p,size_t size) {
-    if(size<48 || memcmp(p,"SCWORLD",7) || (p[7]<2 || p[7]>4)) return false;
-    bool legacy=p[7]==2,huge=!legacy && p[13]!=0,giant=p[7]==4 && p[13]==2;
-    unsigned width=giant?960:huge?480:240,height=giant?800:huge?400:200,bytes=width*height*2;
+    if(size<48 || memcmp(p,"SCWORLD",7) || (p[7]<2 || p[7]>5)) return false;
+    bool legacy=p[7]==2,huge=!legacy && p[13]!=0,giant=p[7]>=4 && p[13]>=2,colossal=p[7]==5 && p[13]==3;
+    unsigned width=colossal?1920:giant?960:huge?480:240,height=colossal?1600:giant?800:huge?400:200,bytes=width*height*2;
     if(size!=encoded_size(p[7]) || word(p+8)!=width || word(p+10)!=height ||
-        p[12]>1 || (!legacy && p[13]>(p[7]==4?2:1)) ||
+        p[12]>1 || (!legacy && p[13]>(p[7]==5?3:p[7]==4?2:1)) ||
         (get32(p+16)>=bytes && get32(p+16)!=UINT32_MAX) ||
         get32(p+20)!=size || get32(p+24)!=SC_WORLD_FIELDS) return false;
     for(unsigned i=0;i<3;++i) if(get32(p+28+i*4)>=bytes && get32(p+28+i*4)!=UINT32_MAX) return false;
     if(!legacy && (word(p+40)>width || word(p+42)>height)) return false;
     if(!legacy && (p[60]>1 || (p[60] && (word(p+56)>=width || word(p+58)>=height)))) return false;
     if(!legacy && (p[61]>1 || p[62]>2 || p[63]>5 || (!p[61] && (p[62] || p[63])))) return false;
-    ScWorldReset(w);w->active=p[12]!=0;w->huge=huge;w->giant=giant;w->map_anchor=get32(p+16);
+    ScWorldReset(w);w->active=p[12]!=0;w->huge=huge;w->giant=giant;w->colossal=colossal;w->map_anchor=get32(p+16);
     for(unsigned i=0;i<3;++i) w->bank_anchor[i]=get32(p+28+i*4);
     if(!legacy) {
         w->scan_x=word(p+40);w->scan_y=word(p+42);
@@ -132,8 +194,8 @@ bool ScWorldDecode(ScWorld *w,const uint8_t *p,size_t size) {
         w->journey=p[61]!=0;w->journey_notice=p[62];w->journey_announcing=(p[63]&1)!=0;
         w->journey_target=p[63]>>1;
     }
-    if(p[7]==4) {for(unsigned i=0;i<3;++i) w->field_anchor[i]=get32(p+64+4*i);w->field_scan=get32(p+76);}
-    size_t at=legacy?48:p[7]==3?64:80,n=legacy?SC_WORLD_TILE_BYTES:p[7]==3?384000:SC_WORLD_MAX_TILE_BYTES;
+    if(p[7]>=4) {for(unsigned i=0;i<3;++i) w->field_anchor[i]=get32(p+64+4*i);w->field_scan=get32(p+76);}
+    size_t at=legacy?48:p[7]==3?64:80,n=legacy?SC_WORLD_TILE_BYTES:p[7]==3?384000:p[7]==4?1536000:SC_WORLD_MAX_TILE_BYTES;
     memcpy(w->tiles,p+at,n);at+=n;
     for(unsigned i=0;i<SC_WORLD_FIELDS;++i) {
         n=encoded_field_size(p[7],i);memcpy(w->fields[i],p+at,n);at+=n;
@@ -147,11 +209,11 @@ void ScWorldMirror(const ScWorld *w,uint8_t *r) {
 }
 size_t ScWorldCitiesSize(void) { return 24+2*(16+ScWorldEncodedSize()); }
 void ScWorldCitiesInit(uint8_t *p) {
-    memset(p,0,ScWorldCitiesSize()); memcpy(p,"SCWCITY",7); p[7]=4;
+    memset(p,0,ScWorldCitiesSize()); memcpy(p,"SCWCITY",7); p[7]=5;
     put32(p+8,(uint32_t)ScWorldEncodedSize()); put32(p+12,(uint32_t)ScWorldCitiesSize()); put32(p+16,2);
 }
 bool ScWorldCitiesValid(const uint8_t *p,size_t size) {
-    return size==ScWorldCitiesSize() && !memcmp(p,"SCWCITY",7) && p[7]==4 &&
+    return size==ScWorldCitiesSize() && !memcmp(p,"SCWCITY",7) && p[7]==5 &&
         get32(p+8)==ScWorldEncodedSize() && get32(p+12)==size && get32(p+16)==2;
 }
 static uint32_t city_hash(const uint8_t *r,unsigned slot) {
@@ -187,7 +249,7 @@ bool ScWorldCitiesUpgrade(uint8_t *out,const uint8_t *p,size_t size) {
     if(ScWorldCitiesValid(p,size)) {memcpy(out,p,size);return true;}
     if(size<24) return false;
     size_t old=encoded_size(p[7]);
-    if(size!=24+2*(16+old) || memcmp(p,"SCWCITY",7) || (p[7]!=2 && p[7]!=3) || get32(p+8)!=old || get32(p+12)!=size || get32(p+16)!=2) return false;
+    if(size!=24+2*(16+old) || memcmp(p,"SCWCITY",7) || (p[7]<2 || p[7]>4) || get32(p+8)!=old || get32(p+12)!=size || get32(p+16)!=2) return false;
     ScWorld *w=malloc(sizeof *w);if(!w) return false;
     ScWorldCitiesInit(out);
     for(unsigned slot=0;slot<2;++slot) {

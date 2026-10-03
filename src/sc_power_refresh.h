@@ -7,9 +7,16 @@ typedef struct {
     ScRefreshClock clock;
     uint8_t bitmap[SC_WORLD_MAX_CELLS/8];
     uint8_t topology_tiles[SC_WORLD_MAX_TILE_BYTES];
+    uint64_t topology_revisions[SC_WORLD_TILE_CHUNKS];
+    uint64_t publication_revisions[SC_WORLD_TILE_CHUNKS];
+    uint8_t topology_different[SC_WORLD_TILE_CHUNKS];
+    uint8_t ids_different[SC_WORLD_TILE_CHUNKS];
+    unsigned different_chunks;
+    unsigned different_id_chunks;
     unsigned clock_cells;
     int game_speed;
     bool ready, large, huge;
+    bool traversal_allowed;
 } ScPowerRefresh;
 void ScPowerRefreshReset(ScPowerRefresh *s);
 void ScPowerRefreshObserve(ScPowerRefresh *s, uint64_t frame, int game_speed);

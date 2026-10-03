@@ -25,6 +25,7 @@ import argparse
 import glob
 import hashlib
 import os
+import struct
 import sys
 import zipfile
 
@@ -46,6 +47,7 @@ def main():
     parser.add_argument("version")
     parser.add_argument("--build-dir", default=BUILD)
     parser.add_argument("--runtime-dir", help="MinGW runtime DLL directory; otherwise use MSVC CRT")
+    parser.add_argument("--restored-music-dir", help="Include the credited local 19-track restored PCM set")
     args = parser.parse_args()
     version = args.version
     build = os.path.abspath(args.build_dir)
@@ -75,10 +77,13 @@ def main():
         (os.path.join(ROOT, "tools", "release_readme.txt"), "README.txt"),
         (os.path.join(ROOT, "LICENSE"), "LICENSE.txt"),
         (os.path.join(ROOT, "THIRD_PARTY_NOTICES.md"), "THIRD_PARTY_NOTICES.md"),
+        (os.path.join(ROOT, "CREDITS.md"), "CREDITS.md"),
+        (os.path.join(ROOT, "CHANGELOG.md"), "CHANGELOG.md"),
         (os.path.join(ROOT, "docs", "PC_ENHANCEMENTS.md"), "PC_ENHANCEMENTS.md"),
         (os.path.join(ROOT, "docs", "GPU_PERFORMANCE.md"), "GPU_PERFORMANCE.md"),
         (os.path.join(ROOT, "tools", "start_release.cmd"), "Start-UrbanRecomp.cmd"),
         (os.path.join(ROOT, "snesrecomp", "LICENSE"), "licenses/snesrecomp-LICENSE.txt"),
+        (os.path.join(ROOT, "snesrecomp", "THIRD_PARTY_ATTRIBUTION.md"), "licenses/snesrecomp-THIRD_PARTY_ATTRIBUTION.md"),
         (os.path.join(ROOT, "recomp-ui", "LICENSE"), "licenses/recomp-ui-LICENSE.txt"),
         (os.path.join(ROOT, "recomp-ui", "src", "third_party", "imgui", "LICENSE.txt"),
          "licenses/imgui-LICENSE.txt"),
@@ -92,7 +97,7 @@ def main():
     ]
     # tools/make_translations.py and what it runs, so a player can build the
     # German or French files from their own cartridges.
-    for n in ("make_translations.py", "text_tool.py", "extract_graphics.py", "find_rom.py"):
+    for n in ("make_translations.py", "text_tool.py", "extract_graphics.py", "find_rom.py", "import_restored_music.py"):
         files.append((os.path.join(ROOT, "tools", n), "tools/" + n))
     if args.runtime_dir:
         runtime_files = ("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll")
@@ -101,9 +106,22 @@ def main():
         files += [(os.path.join(crt_dir(), n), n) for n in CRT_FILES]
     for path in sorted(glob.glob(os.path.join(ROOT, "licenses", "*.txt"))):
         files.append((path, "licenses/" + os.path.basename(path)))
+    for path in sorted(glob.glob(os.path.join(ROOT, "snesrecomp", "third_party", "psxrecomp_color_lut", "*"))):
+        if os.path.isfile(path):
+            files.append((path, "licenses/psxrecomp_color_lut/" + os.path.basename(path)))
     for path in sorted(glob.glob(os.path.join(build, "assets", "**", "*"), recursive=True)):
         if os.path.isfile(path):
             files.append((path, os.path.relpath(path, build).replace(os.sep, "/")))
+    if args.restored_music_dir:
+        for number in range(1, 20):
+            name = "scity-msu1-%d.pcm" % number
+            path = os.path.join(args.restored_music_dir, name)
+            with open(path, "rb") as track:
+                header = track.read(8)
+            size = os.path.getsize(path)
+            if len(header) != 8 or header[:4] != b"MSU1" or size < 12 or (size-8) % 4 or struct.unpack_from("<I", header, 4)[0] >= (size-8)//4:
+                sys.exit("invalid restored track: " + path)
+            files.append((path, "music/restored/" + name))
 
     missing = [src for src, _ in files if not os.path.isfile(src)]
     if missing:

@@ -1,5 +1,31 @@
 #include "sc_mouse_ui.h"
 
+static double pan_remaining(double pending,int moved) {
+  if(!((pending>0 && moved>0) || (pending<0 && moved<0))) return pending;
+  double left=pending-moved;
+  /* Ctrl's extra native scroll passes can overshoot a small request. Do not
+   * reverse the gesture to undo that movement on the following frame. */
+  if((pending>0 && moved>0 && left<0) || (pending<0 && moved<0 && left>0)) return 0;
+  return left;
+}
+ScMousePanDirection ScMousePanUpdate(ScMousePan *p,bool allowed,bool held,bool on_land,
+    double x,double y,double scale_x,double scale_y,int camera_x,int camera_y) {
+  ScMousePanDirection direction={0,0};
+  if(!allowed || !held || (!p->active && !on_land) || scale_x<=0 || scale_y<=0) {
+    *p=(ScMousePan){0};return direction;
+  }
+  if(!p->active) {
+    *p=(ScMousePan){.active=true,.x=x,.y=y,.camera_x=camera_x,.camera_y=camera_y};
+    return direction;
+  }
+  p->pending_x=pan_remaining(p->pending_x,camera_x-p->camera_x)-(x-p->x)*scale_x*SC_MOUSE_PAN_SPEED;
+  p->pending_y=pan_remaining(p->pending_y,camera_y-p->camera_y)-(y-p->y)*scale_y*SC_MOUSE_PAN_SPEED;
+  p->x=x;p->y=y;p->camera_x=camera_x;p->camera_y=camera_y;
+  direction.x=p->pending_x<=-8?-1:p->pending_x>=8?1:0;
+  direction.y=p->pending_y<=-8?-1:p->pending_y>=8?1:0;
+  return direction;
+}
+
 static unsigned word(const uint8_t *r, unsigned a) {
   return r[a] | (r[a + 1] << 8);
 }
@@ -27,10 +53,12 @@ ScMouseUiResult ScMouseUiDialogPoint(ScMouseDialog dialog, uint8_t *r,
   ScMouseUiResult result={dialog!=SC_MOUSE_DIALOG_NONE,false};
   int choice=-1;
   if(dialog==SC_MOUSE_DIALOG_GIFTS) {
-    /* 01:cca0's four icon positions, 2 by 2. Empty inventory slots cannot
+    /* The four 32-pixel images use 40-pixel spacing on both axes.
+     * 01:cca0 positions the hand nine pixels below each image's top.
+     * Empty inventory slots cannot
      * become a selected/confirmed gift. */
     for(int i=0;i<4;++i)
-      if(r[0x3f5+i] && box(x,y,64+(i&1)*40,128+(i/2)*32,24,24)) choice=i;
+      if(r[0x3f5+i] && box(x,y,64+(i&1)*40,128+(i/2)*40,32,32)) choice=i;
     if(choice>=0 && select) put(r,0x3f3,choice);
   } else if(dialog==SC_MOUSE_DIALOG_SLOTS || dialog==SC_MOUSE_DIALOG_SAVE_CONFIRM) {
     /* The slot buttons and Save? Yes/No use the same native button layout. */
@@ -64,9 +92,13 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
      * Gift 0d is the amusement-park/casino choice, including when it opens
      * automatically outside a toolbar modal. $039b identifies the displayed
      * message so a queued or dismissed gift cannot take over city input. */
-    if (r[0x0391] && word(r, 0x0397) == 0x0d && word(r, 0x039b) == 0x0d) {
+    if (r[0x0391] && word(r, 0x0397) == word(r, 0x039b)) {
+      if (word(r, 0x039b) != 0x0d) {
+        result.hit=box(x,y,0,0,256,224); /* Native B dismisses the message. */
+        break;
+      }
       for (int i = 0; i < 2; ++i) {
-        if (!box(x, y, 30 + i * 40, 132, 28, 28)) continue;
+        if (!box(x, y, 32 + i * 40, 135, 32, 32)) continue;
         result.hit = true;
         if (select) put(r, 0x037f, i);
       }

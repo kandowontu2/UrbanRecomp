@@ -18,3 +18,11 @@ uint16_t ScDevelopmentStep(ScDevelopment *state, uint8_t *ram,
 uint16_t ScDevelopmentStepWorld(ScDevelopment *state, const ScWorld *world, uint8_t *ram,
                            uint16_t pc, uint16_t dp, uint16_t sp, int speed);
 void ScDevelopmentReset(ScDevelopment *state);
+typedef struct Interp816 Interp816;
+/* Native C zone-capacity and simulation random kernels. Return the original
+ * cycle cost at the compatibility boundary, or zero for an unhandled entry. */
+unsigned ScDevelopmentNativeStep(Interp816 *cpu,uint8_t *ram);
+/* Ordered capacity, growth/decline decisions and empty-house control for
+ * extra attempts; yield before unmigrated map mutations. */
+unsigned ScDevelopmentNativeBatch(ScDevelopment *state,ScWorld *world,
+                                 Interp816 *cpu,uint8_t *ram,const uint8_t *rom,size_t rom_size);
