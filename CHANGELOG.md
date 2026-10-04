@@ -1,6 +1,6 @@
 # Enhanced fork changelog
 
-## Unreleased — city setup, larger maps and camera controls
+## 1.2.0 Enhanced Beta 16 — 2026-10-04
 
 - Add a native-font DEVELOPMENT SPEED page after map-size selection: 1x, 3x,
   5x, 10x, 20x and 50x. Store each city's default with its map metadata and
@@ -18,8 +18,6 @@
 - Show the original-size navigation minimap while middle/right-button drag
   panning. Project the viewport marker from the free camera and selected zoom,
   preserving native tool captions and avoiding changes to guest OAM.
-
-
 - Route physical X + arrow keys through the free host camera. Reach the full
   map after mouse panning, retain zoom and stop on stationary holds. Consume
   the shortcut until X is released so releasing arrows cannot place a tool.

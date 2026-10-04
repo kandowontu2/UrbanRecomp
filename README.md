@@ -20,9 +20,10 @@ is simply "the game".
 
 **Enhanced fork:** this repository builds on
 [blackerking/UrbanRecomp](https://github.com/blackerking/UrbanRecomp), preserving
-its history, credits and licenses. It adds F12 development speeds (Normal,
-2x, 5x, 10x, 50x), faster refresh of changed power networks, 64-bit population
-accounting up to 9,999,999,999,999, map choices through 1920x1600, Journey mode
+its history, credits and licenses. It adds per-city development speeds (1x,
+3x, 5x, 10x, 20x, 50x) with an optional F12 override, faster refresh of changed
+power networks, 64-bit population accounting up to 9,999,999,999,999, map
+choices through 3840x3200, Journey mode
 with population-triggered border expansions, Copy/Paste, zoom and mouse drag
 panning. Vulkan composition and native C simulation kernels accelerate large
 cities. Music runs on its own thread, with the restored 19-track set bundled
@@ -32,11 +33,11 @@ the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) an
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 15 is one portable Windows EXE; run it and select your own clean US ROM.
+Beta 16 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution
-path. Native C simulation kernels retain compatibility fallbacks. Beta 15
+path. Native C simulation kernels retain compatibility fallbacks. Beta 16
 distributes development across city districts at Normal
 speed as well; its time allowance keeps development work bounded per frame.
 See the enhancement notes for current behavior and performance limits.

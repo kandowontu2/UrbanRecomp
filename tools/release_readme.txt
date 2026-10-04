@@ -1,5 +1,5 @@
-URBAN RECOMP ENHANCED BETA 15 - LOCAL CITY SETUP FOLLOW-UP
-===========================================
+URBAN RECOMP ENHANCED BETA 16 - CITY SETUP AND LARGER MAPS
+======================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
 The runtime, assets, documentation, credits and all 19 restored songs are
@@ -10,7 +10,7 @@ not replaced. No ROM or personal saves/settings are included.
 Enhanced fork: https://github.com/kandowontu2/UrbanRecomp
 Original project: https://github.com/blackerking/UrbanRecomp
 
-Local follow-up: X + arrow keys uses the free camera over the full map,
+Beta 16: X + arrow keys uses the free camera over the full map,
 including after mouse panning. Zoom stays unchanged; movement stops when the
 arrows stop. Ctrl scrolls at 3x; Ctrl+Shift scrolls at 10x. Both also apply to
 mouse edge scrolling and drag panning. Test City 3 now stays black during
