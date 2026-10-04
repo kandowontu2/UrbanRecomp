@@ -197,10 +197,16 @@ keeps its last valid endpoint/preview while outside the window, over the HUD,
 or outside the map. Re-entry resumes it; releasing outside commits the retained
 plan. Right-click cancels it. Camera/tool changes and opening a modal cancel it.
 
-Hold **Ctrl** for **3x scrolling**, including keyboard panning and
-edge scrolling. Mouse drag sensitivity is set by PAN SPEED and MOUSE SPEED. The extra passes execute only the original scroll routines,
-including terrain staging and object shifts, without advancing city time.
-Native boundary checks still clamp the camera to the current map.
+Hold physical **X + arrow keys** to pan the free host camera over the full
+map, including after mouse dragging. This retains zoom and stops when the
+arrows stop. Releasing the arrows while X remains held cannot place a tool.
+Standalone X and gamepad bindings retain their normal behavior.
+
+Hold **Ctrl** for **3x scrolling**, or **Ctrl+Shift** for **10x scrolling**,
+including keyboard camera movement, edge scrolling and mouse drag panning.
+PAN SPEED and MOUSE SPEED also set drag sensitivity. Ordinary keyboard cursor
+movement retains native scroll routines and boundary checks. These movement
+modifiers do not fast-forward the city clock or change the chosen zoom.
 
 Adaptive widescreen now keeps the date and tools on the left and places
 population, money and RCI demand at the far right, on a continuous header.
@@ -608,8 +614,8 @@ drags the land right/down, moving the camera in the opposite direction. The
 host camera applies exact world-pixel displacement each display frame,
 including fractional motion. Stationary holds and releases stop immediately;
 there is no scroll queue or inertia. Zoom is preserved. PAN SPEED and MOUSE
-SPEED adjust sensitivity; the defaults track the drag one-to-one. Ctrl's
-native keyboard scroll boost does not multiply mouse motion.
+SPEED adjust sensitivity; the defaults track the drag one-to-one. Hold Ctrl
+for 3x drag displacement or Ctrl+Shift for 10x drag displacement.
 Middle-button panning hides the pointer and uses centered relative
 mouse capture, so repeated movements continue beyond the screen edge.
 Right-button dragging over land uses the same camera when no clipboard tool
@@ -714,3 +720,9 @@ SRM, together with the normal .world and .population sidecars for Cities 1/2.
 Zoom changes terrain scale while HUD, minimap, overview panels and menus keep
 their normal size. Expanded-city scans distribute zone visits around the map,
 and save/load preserves the scan order and position.
+
+Test City 3 entry keeps the city preparation frames black until the native
+entry fade starts and has reached black, including palette-based fades.
+The completed view then fades in at the selected zoom with fixed-size HUD.
+Both generated and saved City 3 use this presentation gate; save-state loads
+reset it. The normal menu exit fade remains visible.

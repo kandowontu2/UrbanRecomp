@@ -139,6 +139,7 @@ static bool s_journey_arming;
 static unsigned s_journey_menu_selection;
 static unsigned s_loading_slot;
 static bool s_city_loading;
+static bool s_test_city_present_pending,s_test_city_fade_started,s_test_city_black_seen;
 static bool s_test_revealed,s_test_load_pending,s_test_generate_pending,s_test_saving,s_test_swap;
 static bool s_test_menu_pending;
 static uint8_t s_test_native_backup[0x8000],s_test_names_backup[32];
@@ -154,6 +155,11 @@ static bool s_size_selecting, s_practice_size_pending;
 static unsigned s_size_game_choice;
 static void save_large_map_setting(void);
 static int s_scroll_multiplier=1;
+static bool s_keyboard_pan_latched;
+static unsigned scroll_key_multiplier(const uint8_t *keys) {
+  if(!keys[SDL_SCANCODE_LCTRL] && !keys[SDL_SCANCODE_RCTRL])return 1;
+  return keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]?10:3;
+}
 static struct {unsigned extra;uint16_t sp;bool repeating;} s_scroll_pass[2];
 static char s_world_path[1100];
 static void world_saved_city(bool save);
@@ -2655,12 +2661,18 @@ static void test_city_restore_sram(void) {
 }
 static bool test_city_begin_load(void) {
   uint32_t n;const uint8_t *record=ScSram_Extra(&n);
-  if(!n) {s_test_generate_pending=true;return true;}
+  if(!n) {
+    s_test_generate_pending=true;
+    s_test_city_present_pending=true;s_test_city_fade_started=s_test_city_black_seen=false;
+    return true;
+  }
   ScWorld *world=malloc(sizeof *world);ScPopulation population;
   bool valid=world && ScTestCityDecode(record,n,world,&population);free(world);
   if(!valid) {fprintf(stderr,"[test city] City 3 record is invalid; saved file preserved\n");return false;}
   if(!test_city_private_sram(ScTestCityNativeSave(record,n)))return false;
-  s_test_load_pending=true;ram_set_w(0x421,1);return true;
+  s_test_load_pending=true;ram_set_w(0x421,1);
+  s_test_city_present_pending=true;s_test_city_fade_started=s_test_city_black_seen=false;
+  return true;
 }
 static void test_city_finish_save(void) {
   size_t n=ScTestCityRecordSize();uint8_t *record=malloc(n);
@@ -3659,6 +3671,7 @@ static bool sc_program_host_boundary(const Interp816 *cpu) {
     if(s_save_dialog_active && cpu->pc==0xad54) return true;
     if(ScTileLookupOwns(cpu->pc)) return true;
     switch(cpu->pc) {
+    case 0x8948: /* city entry fade-in / prepared Test City reveal */
     case 0xf1ed: /* map generation */
     case 0x8976:case 0x897f: /* warnings, construction, paste, census, power */
     case 0xe59b:case 0xa63c: /* Journey messages */
@@ -4318,6 +4331,10 @@ static bool run_one_frame(void) {
      * 03:ce61 is the scenario equivalent -- map in place, about to return. */
     if (s_ninth_scenario) ninth_scenario_hook(cpu->k, cpu->pc);
     if (s_rom_is_us) {
+      /* The city setup enables terrain before HUD uploads and the original
+       * fade-in task are ready. Keep this transient view behind black. */
+      if(s_test_city_present_pending && cpu->k==1 && cpu->pc==0x8948)
+        s_test_city_fade_started=true;
       if(s_test_revealed && cpu->k==2 && cpu->pc==0xbec6) {
         unsigned direction=ram_w(0xca)&12,choice=ram_w(0x421)%3;
         if(direction) {
@@ -4765,7 +4782,7 @@ static bool run_one_frame(void) {
         s_test_generate_pending=false;s_practice_size_pending=false;s_journey_arming=false;
         reset_refresh_clocks();ScDevelopmentReset(&s_development);memset(&s_world_guest,0,sizeof s_world_guest);
         ScRendererResetHistory(&s_custom_renderer);
-        if(!ok)fprintf(stderr,"[test city] generation failed\n");
+        if(!ok) {s_test_city_present_pending=false;fprintf(stderr,"[test city] generation failed\n");}
       }
       if(cpu->pc==0xc63c && s_world.test_city)ram_set_w(0x38,0);
       if(cpu->pc==0xc633 && s_practice_size_pending) {
@@ -7463,6 +7480,7 @@ static bool load_state(const char *path) {
   reset_refresh_clocks();
   s_journey_arming=false;
   s_city_loading=s_size_selecting=s_practice_size_pending=false;
+  s_test_city_present_pending=s_test_city_fade_started=s_test_city_black_seen=false;
   ScMapSizeMenuSet(false);
   ScWorldReset(&s_world); memset(&s_world_guest,0,sizeof s_world_guest);
   ScPopulationImport(&s_population, g_ram);
@@ -7498,7 +7516,7 @@ static bool load_state(const char *path) {
   ScRendererResetCamera(&s_custom_renderer);
   ScRendererResetHistory(&s_custom_renderer);
   memset(s_scroll_pass,0,sizeof s_scroll_pass);
-  s_scroll_multiplier=1;
+  s_scroll_multiplier=1;s_keyboard_pan_latched=false;
   s_middle_pan=(ScMousePan){0};
   s_journey_menu_selection=ram_w(0x3e);
   ScSram_Release();
@@ -11295,6 +11313,20 @@ int main(int argc, char **argv) {
     bool scripted_input = getenv("SC_SCRIPTED_INPUT") != NULL;
     static const uint8_t empty_keys[512] = {0};
     if (scripted_input) keys = empty_keys;
+    /* Owned UI replays: start-guest-frame:duration:SDL-scancode. These
+     * held states exercise normal keyboard paths without touching Windows. */
+    uint8_t held_keys[512]={0};
+    const char *holds=getenv("SC_KEY_HOLDS");
+    if(holds) {
+      unsigned long long start,duration;unsigned code;int used;
+      while(*holds && sscanf(holds,"%llu:%llu:%u%n",&start,&duration,&code,&used)==3) {
+        if(code<sizeof held_keys && s_frames>=start && s_frames-start<duration)held_keys[code]=1;
+        holds+=used;if(*holds++!=',')break;
+      }
+      keys=held_keys;
+    }
+    static SDL_Scancode pan_key=SDL_SCANCODE_UNKNOWN;
+    if(pan_key==SDL_SCANCODE_UNKNOWN)pan_key=sc_scancode_from_key(SDLK_x);
     /* Absolute SDL pointer coordinates are mapped through the rendered view. */
     const uint8_t cursor_before_mouse_x = g_ram[0x01eb];
     const uint8_t cursor_before_mouse_y = g_ram[0x01ed];
@@ -11407,7 +11439,7 @@ int main(int argc, char **argv) {
       const bool pan_land=inside && !mouse_navigation_hit && !mouse_clip_hit &&
           (s_custom_video.enabled?mouse_city_hit:(!ram_w(0x1d7) || (mouse_target_x>=56 && mouse_target_y>=48)));
       const bool pan_held=middle || (right && !s_clip_tool);
-      double sensitivity=(double)s_mouse_sensitivity/100*s_pan_max_tiles;
+      double sensitivity=(double)s_mouse_sensitivity/100*s_pan_max_tiles*scroll_key_multiplier(keys);
       double zoom=s_custom_renderer.map_zoom>0?s_custom_renderer.map_zoom:1;
       ScMousePanDelta pan_delta=ScMousePanUpdate(&s_middle_pan,pan_allowed,pan_held,pan_land,mx,my,
           ww>0 && s_destination.w>0?(double)drawable_w/ww*pointer_view.width/s_destination.w/zoom*sensitivity:0,
@@ -11473,7 +11505,7 @@ int main(int argc, char **argv) {
           } else {
             edge_clock = 0;
           }
-          if (buttons_up && !middle_was_active && host_map_screen_live()) {
+          if (buttons_up && !middle_was_active && !keys[pan_key] && host_map_screen_live()) {
             /* The visible HUD occupies the top and left edges. */
             const bool hud_hidden = !(g_ram[0x01d7] | g_ram[0x01d8]);
             int canvas_x=mouse_target_x+pointer_view.core_x;
@@ -11485,7 +11517,7 @@ int main(int argc, char **argv) {
             if(mouse_edge_input && s_custom_video.enabled) {
               if(s_custom_renderer.city_input && !s_custom_renderer.map_hold) {
                 double zoom=s_custom_renderer.map_zoom>0?s_custom_renderer.map_zoom:1;
-                double speed=2/zoom*((keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL])?3:1);
+                double speed=2/zoom*scroll_key_multiplier(keys);
                 int ex=((mouse_edge_input&kPad_Right)!=0)-((mouse_edge_input&kPad_Left)!=0);
                 int ey=((mouse_edge_input&kPad_Down)!=0)-((mouse_edge_input&kPad_Up)!=0);
                 ScRendererPan(&s_custom_renderer,ex*speed,ey*speed);
@@ -11605,6 +11637,32 @@ int main(int argc, char **argv) {
      * Select press into the game every time a state is saved/loaded. */
     if (keys[sc_select]) input |= kPad_Select;
     }   /* fixed bindings */
+    unsigned keyboard_pan_dirs=(keys[SDL_SCANCODE_RIGHT]?kPad_Right:0) |
+        (keys[SDL_SCANCODE_LEFT]?kPad_Left:0) | (keys[SDL_SCANCODE_DOWN]?kPad_Down:0) |
+        (keys[SDL_SCANCODE_UP]?kPad_Up:0);
+    bool pan_was_latched=s_keyboard_pan_latched;
+    bool keyboard_pan_allowed=s_rom_is_us && s_custom_video.enabled &&
+        s_custom_renderer.city_input && !s_custom_renderer.advisor_frame &&
+        !s_custom_renderer.map_hold && !s_test_city_present_pending && !s_menu_open &&
+        !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3] &&
+        !s_middle_pan.active && !s_build_active && !s_build_pending &&
+        !s_clip_drag && !s_clip_pending && !mouse_raw_left;
+    s_keyboard_pan_latched=keyboard_pan_allowed && keys[pan_key] &&
+        (s_keyboard_pan_latched || keyboard_pan_dirs);
+    if(s_keyboard_pan_latched) {
+      /* Consume the physical shortcut's bindings only. Keep standalone X
+       * and controller buttons unchanged. Holding X after releasing arrows
+       * remains a pan hold, so it cannot accidentally place a building. */
+      uint8_t other_keys[512];memcpy(other_keys,keys,sizeof other_keys);
+      other_keys[pan_key]=other_keys[SDL_SCANCODE_UP]=other_keys[SDL_SCANCODE_DOWN]=
+          other_keys[SDL_SCANCODE_LEFT]=other_keys[SDL_SCANCODE_RIGHT]=0;
+      uint16_t consumed=s_keybinds?(uint16_t)(ScKeybindsRead((const unsigned char *)keys) &
+          ~ScKeybindsRead(other_keys)):(kPad_B|kPad_Up|kPad_Down|kPad_Left|kPad_Right);
+      input&=~consumed;
+      if(!pan_was_latched) {
+        ram_set_w(0x1f5,0);ram_set_w(0x1ff,0);ram_set_w(0x1c1,0);ram_set_w(0x1f7,0);
+      }
+    }
     /* Mouse buttons: LEFT = SNES B, RIGHT = SNES A.
      *
      * Lets host-mouse cursor control (F3) actually select and interact, not
@@ -11627,7 +11685,7 @@ int main(int argc, char **argv) {
     }
     /* A keyboard direction owns the guest cursor while held. Do not reset
      * its movement to the desktop pointer at the start of the next frame. */
-    if (input & (kPad_Left | kPad_Right | kPad_Up | kPad_Down)) {
+    if ((input & (kPad_Left | kPad_Right | kPad_Up | kPad_Down)) || s_keyboard_pan_latched) {
       g_ram[0x01eb] = cursor_before_mouse_x;
       g_ram[0x01ed] = cursor_before_mouse_y;
       mouse_target_valid = false;
@@ -11821,11 +11879,21 @@ int main(int argc, char **argv) {
      * ordinary play. Only explicit held gestures remain. */
     bool fast_forward = keys[SDL_SCANCODE_TAB] || test_fast_forward;
     s_wait_lane_enabled=fast_forward;
-    /* Ctrl accelerates keyboard/native scroll. Mouse drag uses the host camera. */
-    s_scroll_multiplier=(keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL]) &&
-        host_map_screen_live() && !s_menu_open?3:1;
+    /* Ctrl accelerates scrolling 3x; Ctrl+Shift uses 10x. */
+    s_scroll_multiplier=host_map_screen_live() && !s_menu_open?(int)scroll_key_multiplier(keys):1;
     /* Deterministic equivalent of Ctrl for mouse/keyboard scroll replays. */
-    {const char *e=getenv("SC_SCROLL_MULTIPLIER");if(e && !s_menu_open) s_scroll_multiplier=atoi(e)==3?3:1;}
+    {const char *e=getenv("SC_SCROLL_MULTIPLIER");if(e && !s_menu_open) s_scroll_multiplier=atoi(e)==10?10:atoi(e)==3?3:1;}
+    if(s_keyboard_pan_latched) {
+      double zoom=s_custom_renderer.map_zoom>0?s_custom_renderer.map_zoom:1;
+      double speed=2/zoom*s_scroll_multiplier;
+      int dx=((keyboard_pan_dirs&kPad_Right)!=0)-((keyboard_pan_dirs&kPad_Left)!=0);
+      int dy=((keyboard_pan_dirs&kPad_Down)!=0)-((keyboard_pan_dirs&kPad_Up)!=0);
+      ScRendererPan(&s_custom_renderer,dx*speed,dy*speed);
+      if(getenv("SC_MOUSE_PAN_DIAG"))fprintf(stderr,
+          "[keyboard pan] frame %llu camera %d,%d zoom %.6f native %d,%d directions %u\n",
+          (unsigned long long)s_frames,s_custom_renderer.scroll_x,s_custom_renderer.scroll_y,zoom,
+          (int16_t)ram_w(0x1bd)*8,(int16_t)ram_w(0x1bf)*8,keyboard_pan_dirs);
+    }
     ScVehicles_FullView(s_custom_renderer.camera_x || s_custom_renderer.camera_y);
     s_measure_custom_frame=fast_forward || perf_on;
     if(s_gpu_terrain_enabled && s_custom_video.enabled && !gpu_terrain && !gpu_failed) {
@@ -12132,7 +12200,20 @@ int main(int argc, char **argv) {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     ScRect dest = SC_RECT(s_destination.x, s_destination.y, s_destination.w, s_destination.h);
-    bool _cok = SDL_RenderCopy(renderer, present_texture, NULL, &dest) SC_SDL_OK;
+    bool hide_city_setup=s_test_city_present_pending && g_ram[0x14]==0;
+    if(hide_city_setup && s_test_city_fade_started) {
+      bool dark=PPU_forcedBlank(g_ppu) || !PPU_brightness(g_ppu);
+      /* The native city fade also darkens CGRAM with INIDISP at full
+       * brightness. Wait for that black frame, not just forced blank. */
+      bool palette_dark=true;
+      for(unsigned i=0;i<256;++i) if(g_ppu->cgram[i]&32767) {palette_dark=false;break;}
+      dark|=palette_dark;
+      if(dark) s_test_city_black_seen=true;
+      else if(s_test_city_black_seen) {
+        s_test_city_present_pending=false;hide_city_setup=false;
+      }
+    }
+    bool _cok = hide_city_setup || (SDL_RenderCopy(renderer, present_texture, NULL, &dest) SC_SDL_OK);
     if ((s_build_active || s_build_pending) && host_map_screen_live() && !s_menu_open) {
       ScViewport v = s_custom_video.enabled ? s_custom_renderer.view : viewport;
       double sx = (double)s_destination.w / v.width;
@@ -12267,7 +12348,7 @@ int main(int argc, char **argv) {
         if (iv && cap_frame % iv == 0) {
           char pth[512];
           snprintf(pth, sizeof pth, "%s/frame_%010llu.ppm", dd, cap_frame);
-          if (!write_ppm(pth))
+          if (!(getenv("SC_DUMP_RENDERER")?write_renderer_ppm(renderer,pth):write_ppm(pth)))
             fprintf(stderr, "SC_DUMP_DIR: cannot write %s\n", pth);
         }
         cap_frame++;

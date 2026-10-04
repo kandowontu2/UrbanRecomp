@@ -238,6 +238,8 @@ Keys that are not SNES buttons:
 
 | Action | Key |
 |---|---|
+| Pan the free city camera | X + arrow keys |
+| Scroll faster (hold) | Ctrl: 3x; Ctrl+Shift: 10x |
 | Fast-forward (hold) | Tab |
 | Open Save City during play; Back/Close in menus | Escape |
 | Reveal hidden 1920x1600 test City 3 on Load City | Ctrl+Shift+tilde |

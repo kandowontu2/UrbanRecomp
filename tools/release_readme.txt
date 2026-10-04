@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 15
+URBAN RECOMP ENHANCED BETA 15 - LOCAL FOLLOW-UP
 ===========================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -10,7 +10,13 @@ not replaced. No ROM or personal saves/settings are included.
 Enhanced fork: https://github.com/kandowontu2/UrbanRecomp
 Original project: https://github.com/blackerking/UrbanRecomp
 
-Latest additions: city development now runs in bounded batches distributed
+Local follow-up: X + arrow keys uses the free camera over the full map,
+including after mouse panning. Zoom stays unchanged; movement stops when the
+arrows stop. Ctrl scrolls at 3x; Ctrl+Shift scrolls at 10x. Both also apply to
+mouse edge scrolling and drag panning. Test City 3 now stays black during
+preparation and fades in with the sharp finished view and fixed-size HUD.
+
+Beta 15 additions: city development now runs in bounded batches distributed
 across districts at every development speed, including Normal. Large cities
 no longer wait for a row-by-row sweep to reach their neighborhoods. Original
 growth, demand, power and land-value rules remain active; calendar and budget
@@ -87,7 +93,9 @@ Select       B
 Tab          fast-forward (hold)
 Escape       Save City during play; Back/Close in menus
 Ctrl+Shift+tilde  reveal hidden test City 3 on the load-city page
-Ctrl         3x keyboard/edge scrolling (hold)
+X + arrows   pan the free city camera
+Ctrl         3x scrolling/panning (hold)
+Ctrl+Shift   10x scrolling/panning (hold)
 + / -        zoom the map in the city view
 Ctrl+wheel   zoom (touchpad pinch events also supported)
 Middle mouse hold and drag to pan; pointer is hidden and captured

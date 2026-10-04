@@ -1,5 +1,17 @@
 # Enhanced fork changelog
 
+## Unreleased — free keyboard pan and city entry
+
+- Route physical X + arrow keys through the free host camera. Reach the full
+  map after mouse panning, retain zoom and stop on stationary holds. Consume
+  the shortcut until X is released so releasing arrows cannot place a tool.
+  Standalone X, menus and gamepad bindings retain their existing behavior.
+- Hold Ctrl for 3x scrolling or Ctrl+Shift for 10x scrolling, including keyboard
+  camera movement, mouse edge scrolling and middle/right-button drag panning.
+- Keep generated and saved Test City 3's preparation frames black until the
+  original entry fade begins. Reveal the completed sharp view with its HUD
+  during that fade, avoiding a transient blurry city before the blackout.
+
 ## 1.2.0 Enhanced Beta 15 — 2026-10-04
 
 - Update RCI zones in batches distributed throughout the city, including
