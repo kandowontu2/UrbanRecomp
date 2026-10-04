@@ -82,8 +82,8 @@ void ScNativePpuCapture(ScTerrainFrame *f,const Ppu *p,unsigned y,unsigned line)
 }
 void ScNativePpuCaptureRaw(ScTerrainFrame *f,const Ppu *p,unsigned y,unsigned line) {
     unsigned snapshot=f->rows[y].chr_snapshot;
-    bool raw=f->resources && snapshot>=2048 && (snapshot-2048)%16384==0 &&
-        (snapshot-2048)/16384<f->snapshots && snapshot<=f->resource_capacity &&
+    bool raw=f->resources && snapshot>=SC_RESOURCE_VRAM && (snapshot-SC_RESOURCE_VRAM)%16384==0 &&
+        (snapshot-SC_RESOURCE_VRAM)/16384<f->snapshots && snapshot<=f->resource_capacity &&
         f->resource_capacity-snapshot>=16384;
     capture(f,p,y,line,raw);
 }

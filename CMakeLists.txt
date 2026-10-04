@@ -90,6 +90,7 @@ add_executable(UrbanRecomp
     src/sc_icon.c
     src/sc_mapview.c
     src/sc_vehicles.c
+    src/sc_fleet.c
     src/sc_selector.c
     src/sc_titlesign.c
     src/sc_mapgen.c
@@ -509,6 +510,7 @@ if(SC_GEN_SOURCES)
         src/sc_icon.c
         src/sc_mapview.c
         src/sc_vehicles.c
+        src/sc_fleet.c
         src/sc_selector.c
         src/sc_titlesign.c
         ${SC_GEN_SOURCES}
@@ -817,3 +819,6 @@ add_executable(UrbanRecompInfrastructureTest EXCLUDE_FROM_ALL
     tests/sc_infrastructure_test.c ${SC_INFRASTRUCTURE_TEST_SOURCES} src/sc_program.c)
 target_include_directories(UrbanRecompInfrastructureTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+
+add_executable(UrbanRecompFleetTest EXCLUDE_FROM_ALL tests/sc_fleet_test.c src/sc_fleet.c src/sc_world.c src/sc_mapgen.c)
+target_include_directories(UrbanRecompFleetTest PRIVATE src)

@@ -23,11 +23,11 @@ static void sharp_zoom_test(void) {
     ScTerrainFrame *f=&r->terrain;
     f->deferred=256;
     r->pixels=calloc(256,4);assert(r->pixels);
-    f->resource_capacity=2048+16384;f->snapshots=1;
+    f->resource_capacity=SC_RESOURCE_VRAM+16384;f->snapshots=1;
     f->resources=calloc(f->resource_capacity,4);f->city_capacity=f->city_words=512;
     f->city=calloc(512,4);assert(f->resources && f->city);
     f->resources[0]=0x23000000; /* alternating original CHR; transparent roof */
-    for(unsigned y=0;y<8;++y) f->resources[2048+y/2]|=(y&1?0x55u:0xaau)<<((y&1)*16);
+    for(unsigned y=0;y<8;++y) f->resources[SC_RESOURCE_VRAM+y/2]|=(y&1?0x55u:0xaau)<<((y&1)*16);
     const unsigned steps[]={262144,327680,131072,73728,58254,32768,16384};
     const int origins[]={-40000,0,40000};
     for(unsigned origin=0;origin<3;++origin)
@@ -36,7 +36,7 @@ static void sharp_zoom_test(void) {
         for(unsigned y=0;y<16;++y) {
             ScTerrainRow *row=f->rows+y;memset(row,0,sizeof *row);
             row->math=SC_ROW_CITY_ZOOM|SC_ROW_CITY_SPANS|SC_ROW_RAW_TERRAIN;
-            row->main=2;row->zoom_step=step;row->chr_snapshot=2048;
+            row->main=2;row->zoom_step=step;row->chr_snapshot=SC_RESOURCE_VRAM;
             unsigned vy=y*step>>16;row->world_y=(vy&7)|((uint32_t)(origins[origin]+(int)vy)<<8);
             for(unsigned i=0;i<32;++i) row->brightness[i]=(i<<3)|(i>>2);
             f->palette[y*256+1]=32767;
@@ -69,9 +69,9 @@ static void large_object_coordinates_test(void) {
     ScRenderer *r=calloc(1,sizeof *r);assert(r);r->view=(ScViewport){16,16,0,0,1,0};r->zoom_frame=true;
     assert(ScTerrainResize(&r->terrain,16,16));ScTerrainFrame *f=&r->terrain;
     f->deferred=256;r->pixels=calloc(256,4);assert(r->pixels);
-    f->resource_capacity=2048+16384;f->snapshots=1;f->resources=calloc(f->resource_capacity,4);
+    f->resource_capacity=SC_RESOURCE_VRAM+16384;f->snapshots=1;f->resources=calloc(f->resource_capacity,4);
     f->city_capacity=f->city_words=64;f->city=calloc(64,4);assert(f->resources && f->city);
-    for(unsigned y=0;y<8;++y)f->resources[2048+y/2]|=0xffu<<((y&1)*16);
+    for(unsigned y=0;y<8;++y)f->resources[SC_RESOURCE_VRAM+y/2]|=0xffu<<((y&1)*16);
     f->city[0]=1;for(unsigned bucket=0;bucket<8;++bucket){f->city[1+bucket*2]=17;f->city[2+bucket*2]=1;}
     f->city[17]=0;f->city[18]=8;f->city[20]=0x3000;f->city[21]=0;f->city[22]=0;
     const int origins[]={-40000,40000};
@@ -80,7 +80,7 @@ static void large_object_coordinates_test(void) {
         for(unsigned y=0;y<16;++y) {
             ScTerrainRow *row=f->rows+y;row->math=SC_ROW_CITY_ZOOM|SC_ROW_GPU_OBJECTS|SC_ROW_OBJECT_GRID;
             row->world_y=(y&7)|((uint32_t)(origins[test]+(int)y)<<8);row->main=16;
-            row->zoom_step=65536;row->chr_snapshot=2048;row->reserved=0;
+            row->zoom_step=65536;row->chr_snapshot=SC_RESOURCE_VRAM;row->reserved=0;
             for(unsigned i=0;i<32;++i)row->brightness[i]=(i<<3)|(i>>2);
             f->palette[y*256+129]=31<<5;
             for(unsigned x=0;x<16;++x){r->pixels[y*16+x]=SC_TERRAIN_PIXEL;
@@ -92,6 +92,45 @@ static void large_object_coordinates_test(void) {
     }
     free(r->pixels);ScTerrainDestroy(f);free(r);
     puts("PASS: signed 24-bit zoom object coordinates beyond both 16-bit boundaries");
+}
+static void independent_vehicle_chr_test(void) {
+    ScRenderer *r=calloc(1,sizeof *r);assert(r);r->view=(ScViewport){16,16,0,0,1,0};
+    assert(ScTerrainResize(&r->terrain,16,16));ScTerrainFrame *f=&r->terrain;
+    f->deferred=256;r->pixels=calloc(256,4);assert(r->pixels);
+    f->resource_capacity=SC_RESOURCE_VRAM+16384;f->snapshots=1;f->resources=calloc(f->resource_capacity,4);
+    f->city_capacity=f->city_words=64;f->city=calloc(64,4);assert(f->resources && f->city);
+    f->city[0]=1;for(unsigned bucket=0;bucket<8;++bucket){f->city[1+bucket*2]=17;f->city[2+bucket*2]=1;}
+    f->city[17]=0;f->city[18]=16;f->city[19]=0;f->city[22]=0;
+    const uint32_t colors[]={0xffff0000,0xff00ff00,0xff0000ff,0xffffffff};
+    for(unsigned stride=2;stride<=4;stride+=2)for(unsigned flip=0;flip<4;++flip) {
+        memset(f->resources,0,f->resource_capacity*4);
+        /* Four distinct cartridge quadrants; live VRAM deliberately blank.
+         * A train/ship must retain its own graphics without guest DMA. */
+        for(unsigned q=0;q<4;++q)for(unsigned y=0;y<8;++y) {
+            unsigned tile=q/2*stride+q%2,at=tile*16+y;
+            unsigned ci=q+1,a=(ci&1?255:0)|(ci&2?0xff00:0),b=ci&4?255:0;
+            f->resources[SC_RESOURCE_ROM+at/2]|=a<<((at&1)*16);
+            f->resources[SC_RESOURCE_ROM+(at+8)/2]|=b<<((at&1)*16);
+        }
+        f->city[20]=0x3000|(flip<<14);f->city[21]=0x80000000u|(stride==4?0x40000000u:0);
+        for(unsigned y=0;y<16;++y) {
+            ScTerrainRow *row=f->rows+y;row->math=SC_ROW_GPU_OBJECTS|SC_ROW_OBJECT_GRID;
+            row->world_y=y<<8;row->main=16;row->chr_snapshot=SC_RESOURCE_VRAM;row->reserved=0;
+            for(unsigned i=0;i<32;++i)row->brightness[i]=(i<<3)|(i>>2);
+            f->palette[y*256+129]=31;f->palette[y*256+130]=31<<5;
+            f->palette[y*256+131]=31<<10;f->palette[y*256+132]=32767;
+            for(unsigned x=0;x<16;++x) {
+                r->pixels[y*16+x]=SC_TERRAIN_PIXEL;
+                unsigned sx=flip&1?15-x:x,sy=flip&2?15-y:y;
+                assert(ScTerrainPixel(f,x,y)==colors[(sy/8)*2+sx/8]);
+            }
+        }
+#ifdef SC_TEST_GPU
+        assert(ScGpuTerrainDraw(sharp_gpu,r));
+#endif
+    }
+    free(r->pixels);ScTerrainDestroy(f);free(r);
+    puts("PASS: independent cartridge vehicle CHR, train/ship row strides and all flips without native DMA");
 }
 #if defined(SC_TEST_GPU) && SNESRECOMP_SDL3
 static void presentation_test(SDL_Renderer *renderer,SDL_Texture *computed,const ScRenderer *cpu,bool linear) {
@@ -152,6 +191,7 @@ int main(void) {
 #endif
     sharp_zoom_test();
     large_object_coordinates_test();
+    independent_vehicle_chr_test();
     if(getenv("SC_TEST_SHARP_ONLY")) {
 #ifdef SC_TEST_GPU
         ScGpuTerrainDestroy(gpu);SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();
@@ -324,8 +364,8 @@ int main(void) {
                         r->object_x[n]=lefts[n%6];
                         r->object_y[n]=(n%5==0)?250:16+(n%5)*35;
                     }
-                    r->vehicles[0]=(ScVehicleSprite){61,250,55,true};
-                    r->vehicles[1]=(ScVehicleSprite){62,282,65,false};r->vehicle_count=2;
+                    r->vehicles[0]=(ScVehicleSprite){.slot=61,.x=250,.y=55,.large=true};
+                    r->vehicles[1]=(ScVehicleSprite){.slot=62,.x=282,.y=65,.large=false};r->vehicle_count=2;
                     r->pan_frame=(size&2)!=0;r->pointer_active=(size&4)!=0;
                     r->pointer_x=310;r->pointer_y=95;
                 }
@@ -397,8 +437,8 @@ int main(void) {
         assert(ScRendererResize(cpu,views[v]) && ScRendererResize(deferred,views[v]));
         assert(ScRendererDeferTerrain(deferred,true));
         ScTerrainFrame *f=&deferred->terrain;f->deferred=0;
-        if(raw && f->resource_capacity<2048+f->height*16384) {
-            f->resource_capacity=2048+f->height*16384;
+        if(raw && f->resource_capacity<SC_RESOURCE_VRAM+f->height*16384) {
+            f->resource_capacity=SC_RESOURCE_VRAM+f->height*16384;
             f->resources=realloc(f->resources,(size_t)f->resource_capacity*sizeof *f->resources);
             assert(f->resources);
         }
@@ -464,8 +504,8 @@ int main(void) {
                 assert(ScRendererPixel(deferred,ax,ay)==cpu->pixels[at]);
             }
             if(raw) {
-                f->rows[ay].chr_snapshot=2048+ay*16384;
-                memcpy(f->resources+2048+ay*16384,p->vram,65536);
+                f->rows[ay].chr_snapshot=SC_RESOURCE_VRAM+ay*16384;
+                memcpy(f->resources+SC_RESOURCE_VRAM+ay*16384,p->vram,65536);
                 ScNativePpuCaptureRaw(f,p,ay,y+1);
                 assert(f->native[ay].flags&SC_NATIVE_RAW_BG);
                 assert(!!(f->native[ay].flags&SC_NATIVE_RAW_OBJ)==(slivers<=SC_OBJ_GPU_SLIVERS));

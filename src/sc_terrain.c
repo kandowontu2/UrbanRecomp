@@ -35,7 +35,8 @@ static unsigned decode(uint32_t planes,unsigned bit) {
         (((planes>>(bit+16))&1)<<2)|(((planes>>(bit+24))&1)<<3);
 }
 static unsigned resource_word(const ScTerrainFrame *f,const ScTerrainRow *row,unsigned at) {
-    unsigned pair=f->resources[row->chr_snapshot+((at&0x7fff)>>1)];
+    unsigned base=at&0x80000000u?SC_RESOURCE_ROM:row->chr_snapshot;
+    unsigned pair=f->resources[base+((at&(at&0x80000000u?0x3fff:0x7fff))>>1)];
     return (pair>>((at&1)*16))&65535;
 }
 static unsigned city_cell(const ScTerrainFrame *f,unsigned at) {
@@ -73,6 +74,7 @@ static unsigned captured_object(const ScTerrainFrame *f,const ScTerrainRow *row,
         if(attr&0x8000) y=size-1-y;
         unsigned tile=(((attr&0xf0)+(y/8)*16)&255)|(((attr&15)+(unsigned)dx/8)&15);
         unsigned adr=r[4]+tile*16+(y&7),bit=7-((unsigned)dx&7);
+        if(r[4]&0x80000000u)adr=r[4]+((y/8)*(r[4]&0x40000000u?4:2)+(unsigned)dx/8)*16+(y&7);
         unsigned ci=decode(resource_word(f,row,adr)|(uint32_t)resource_word(f,row,adr+8)<<16,bit);
         if(ci) result=(ci+128+((attr>>9)&7)*16)|(((attr>>12)&3)<<8);
     }

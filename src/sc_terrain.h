@@ -1,6 +1,8 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+/* Cell descriptors, original bank-06 vehicle CHR, then live VRAM versions. */
+enum { SC_RESOURCE_ROM=2048,SC_RESOURCE_VRAM=2048+8192 };
 
 /* A deferred pixel is distinct from both the native PPU's zero alpha and
  * the compositor's opaque alpha. Later HUD/cursor writes override it. */
@@ -74,7 +76,7 @@ typedef struct {
     unsigned deferred;
     ScTerrainOverlay *overlays;
     ScNativeRow *native;
-    /* ROM cell descriptors followed by immutable packed VRAM versions. A row
+    /* ROM cell descriptors and bank-06 vehicle art, then packed VRAM versions. A row
      * names its live version; later DMA cannot change earlier scanlines. */
     uint32_t *resources;
     unsigned resource_capacity,snapshots;
@@ -82,6 +84,8 @@ typedef struct {
      * bytes change. City offsets count cells. OBJ offsets count uint32 words:
      * bucket count, then (record offset, count) per 32px bucket, then six-word
      * records (signed left, size, row, attributes, CHR base, signed clip left).
+     * CHR base bit 31 selects bank-06 ROM art, bit 30 a four-tile row stride;
+     * low 14 bits give its word offset. Native records name live VRAM instead.
      * OBJECT_GRID stores eight wrapped Y bands after the column-count word;
      * records store signed top instead of row, and attribute bit 16 selects
      * native wrapped Y. Scanline world_y supplies the signed target row.

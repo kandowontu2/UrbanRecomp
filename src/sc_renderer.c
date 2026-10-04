@@ -135,6 +135,17 @@ static unsigned sprite_pixel(const Ppu *p,int slot,int x,int y) {
     int index=slot*2, size=sprite_sizes[PPU_objSize(p)][(p->highOam[index/8]>>(index%8+1))&1];
     return sprite_word_pixel(p,p->oam[index+1],size,x,y);
 }
+static unsigned vehicle_pixel(const ScRenderer *r,const Ppu *p,const ScVehicleSprite *v,int size,int x,int y) {
+    if(!v->rom_chr)return sprite_word_pixel(p,v->attr,size,x,y);
+    if(x<0 || y<0 || x>=size || y>=size)return 0;
+    if(v->attr&0x4000)x=size-1-x;
+    if(v->attr&0x8000)y=size-1-y;
+    unsigned word=(v->rom_chr&0x3fff)+((y/8)*(v->rom_chr&0x40000000u?4:2)+x/8)*16+(y&7);
+    unsigned at=0x30000+word*2;if(at+17>=r->rom_size)return 0;
+    unsigned a=u16(r->rom,at),b=u16(r->rom,at+16),bit=7-(x&7);
+    unsigned ci=((a>>bit)&1)|(((a>>(bit+8))&1)<<1)|(((b>>bit)&1)<<2)|(((b>>(bit+8))&1)<<3);
+    return ci?ci+128+((v->attr>>9)&7)*16:0;
+}
 /* The ROM through the cart image (LoROM), for src/sc_selector.c. */
 static uint8_t rom_read(void *ctx,uint32_t adr) {
     const ScRenderer *r=(const ScRenderer *)ctx;
@@ -311,16 +322,16 @@ static void object_row(const ScRenderer *r,const Ppu *p,int y,uint16_t *pixels) 
      * guest's half of an object crossing the edge also follows. */
     for (int k=0;k<r->vehicle_count;++k) {
         const ScVehicleSprite *v=&r->vehicles[k];
-        int size=sprite_sizes[PPU_objSize(p)][v->large ? 1 : 0];
+        int size=v->host?(v->large?16:8):sprite_sizes[PPU_objSize(p)][v->large ? 1 : 0];
         int row=y-v->y;
         if (row<0 || row>=size) continue;
-        unsigned attr=p->oam[v->slot*2+1];
+        unsigned attr=v->host?v->attr:p->oam[v->slot*2+1];
         for (int dx=0;dx<size;++dx) {
             int local=v->x+dx;
-            if (local<256) continue;   /* the authentic columns are the core's */
+            if (local<256 && !v->host) continue;   /* the authentic columns are the core's */
             int x=local+r->view.core_x;
             if (x<0 || x>=r->view.width) continue;
-            unsigned ci=sprite_word_pixel(p,attr,size,dx,row);
+            unsigned ci=v->host?vehicle_pixel(r,p,v,size,dx,row):sprite_word_pixel(p,attr,size,dx,row);
             if (ci) pixels[x]=(uint16_t)(ci|(((attr>>12)&3)<<8));
         }
     }
@@ -741,7 +752,7 @@ static bool terrain_resources(ScRenderer *r,const Ppu *p,unsigned *snapshot) {
     if(!r->rom || r->rom_size<0x184eb+CELL_TYPES) return false;
     uint64_t revision=r->vram_revision && !r->map_hold?r->vram_revision(p):0;
     if(f->snapshots) {
-        unsigned at=2048+(f->snapshots-1)*16384;
+        unsigned at=SC_RESOURCE_VRAM+(f->snapshots-1)*16384;
         bool same=r->vram_revision && !r->map_hold && r->captured_vram_source==p?
             revision==r->captured_vram_revision:!memcmp(f->resources+at,p->vram,65536);
         static int validate=-1;
@@ -751,10 +762,10 @@ static bool terrain_resources(ScRenderer *r,const Ppu *p,unsigned *snapshot) {
         }
         if(same) {*snapshot=at;return true;}
     }
-    unsigned required=2048+(f->snapshots+1)*16384;
+    unsigned required=SC_RESOURCE_VRAM+(f->snapshots+1)*16384;
     if(required>f->resource_capacity) {
-        unsigned versions=f->resource_capacity>2048?(f->resource_capacity-2048)/16384:1;
-        unsigned capacity=2048+versions*2*16384;
+        unsigned versions=f->resource_capacity>SC_RESOURCE_VRAM?(f->resource_capacity-SC_RESOURCE_VRAM)/16384:1;
+        unsigned capacity=SC_RESOURCE_VRAM+versions*2*16384;
         uint32_t *resources=realloc(f->resources,(size_t)capacity*sizeof *resources);
         if(!resources) return false;
         memset(resources+f->resource_capacity,0,(capacity-f->resource_capacity)*sizeof *resources);
@@ -764,7 +775,11 @@ static bool terrain_resources(ScRenderer *r,const Ppu *p,unsigned *snapshot) {
         f->resources[i]=i<CELL_TYPES?u16(r->rom,TILES+2*i)|(u16(r->rom,OVERLAYS+2*i)<<16):0x23000000;
         f->resources[1024+i]=i<CELL_TYPES?r->rom[0x184eb+i]:0;
     }
-    *snapshot=2048+f->snapshots*16384;
+    if(!f->snapshots) {
+        memset(f->resources+SC_RESOURCE_ROM,0,8192*4);
+        if(r->rom_size>=0x38000)memcpy(f->resources+SC_RESOURCE_ROM,r->rom+0x30000,32768);
+    }
+    *snapshot=SC_RESOURCE_VRAM+f->snapshots*16384;
     memcpy(f->resources+*snapshot,p->vram,65536);++f->snapshots;
     r->captured_vram_revision=revision;r->captured_vram_source=p;return true;
 }
@@ -839,15 +854,16 @@ static bool terrain_objects_grid(ScRenderer *r,const Ppu *p,int y) {
        memcmp(r->object_y,r->object_grid_y,sizeof r->object_y) ||
        memcmp(r->object_grace,r->object_grid_grace,sizeof r->object_grace) ||
        memcmp(r->vehicles,r->object_grid_vehicles,r->vehicle_count*sizeof *r->vehicles)) {
-        uint32_t records[147][6];unsigned count=0,columns=(object_width+31)/32;
+        uint32_t records[128+SC_VEHICLE_SPRITES][6];unsigned count=0,columns=(object_width+31)/32;
         unsigned sizes[SC_MAX_MAP_SPAN/4]={0}; /* eight wrapped Y buckets */
         int first=PPU_objPriority(p)?(p->oamaddl&0xfe)/2:0;
         for(int k=-r->vehicle_count;k<128;++k) {
-            int left,top,size,clip=0;unsigned attr;
+            int left,top,size,clip=0;unsigned attr,chr=0;
             if(k<0) {
                 const ScVehicleSprite *v=&r->vehicles[k+r->vehicle_count];
                 left=v->x+r->view.core_x;top=v->y;clip=r->view.core_x+256;
-                size=sprite_sizes[PPU_objSize(p)][v->large?1:0];attr=p->oam[v->slot*2+1];
+                size=v->host?(v->large?16:8):sprite_sizes[PPU_objSize(p)][v->large?1:0];attr=v->host?v->attr:p->oam[v->slot*2+1];
+                if(v->host) {clip=0;chr=v->rom_chr;}
             } else {
                 int slot=(first+127-k)&127,index=slot*2;
                 if(((key[5]&4) && (slot<4 || ((key[5]&8) && (slot<=38 || (slot>=64 && slot<=108))))) || ((key[5]&1) && slot<4) || ((key[5]&2) && slot>=39 && slot<=52) || !r->object_grace[slot]) continue;
@@ -869,7 +885,7 @@ static bool terrain_objects_grid(ScRenderer *r,const Ppu *p,int y) {
             if(begin>=end) continue;
             uint32_t *record=records[count++];
             record[0]=(uint32_t)left;record[1]=size;record[2]=(uint32_t)top;record[3]=attr;
-            record[4]=attr&0x100?PPU_objTileAdr2(p):PPU_objTileAdr1(p);record[5]=(uint32_t)clip;
+            record[4]=chr?chr:(unsigned)(attr&0x100?PPU_objTileAdr2(p):PPU_objTileAdr1(p));record[5]=(uint32_t)clip;
             unsigned vfirst=((unsigned)top&255)/32,vcount=(((unsigned)top&31)+size+31)/32;
             for(unsigned v=0;v<vcount;++v) for(unsigned b=(unsigned)begin/32;b<=(unsigned)(end-1)/32;++b)
                 ++sizes[((vfirst+v)&7)*columns+b];
@@ -887,15 +903,21 @@ static bool terrain_objects_grid(ScRenderer *r,const Ppu *p,int y) {
                 f->city=city;f->city_capacity=capacity;
             }
             header=f->city_words;unsigned cursor=header+1+buckets*2;f->city[header]=columns;
+            unsigned positions[SC_MAX_MAP_SPAN/4];
             for(unsigned b=0;b<buckets;++b) {
-                f->city[header+1+b*2]=cursor;f->city[header+2+b*2]=sizes[b];
-                for(unsigned i=0;i<count;++i) {
-                    const uint32_t *record=records[i];int left=(int32_t)record[0],clip=(int32_t)record[5];
-                    int begin=left>clip?left:clip,end=left+(int)record[1];
-                    if(end<=(int)((b%columns)*32) || begin>=(int)((b%columns)*32+32)) continue;
-                    unsigned top=record[2]&255,vfirst=top/32,vcount=((top&31)+record[1]+31)/32;
-                    if(((b/columns-vfirst)&7)>=vcount) continue;
-                    memcpy(f->city+cursor,record,6*sizeof *record);cursor+=6;
+                f->city[header+1+b*2]=positions[b]=cursor;f->city[header+2+b*2]=sizes[b];cursor+=sizes[b]*6;
+            }
+            /* Scatter each immutable sprite only into the buckets it touches.
+             * Avoid scanning the whole fleet again for every viewport bucket. */
+            for(unsigned i=0;i<count;++i) {
+                const uint32_t *record=records[i];int left=(int32_t)record[0],clip=(int32_t)record[5];
+                int begin=left>clip?left:clip,end=left+(int)record[1];
+                if(begin<0)begin=0;
+                if(end>(int)object_width)end=object_width;
+                unsigned top=record[2]&255,vfirst=top/32,vcount=((top&31)+record[1]+31)/32;
+                for(unsigned v=0;v<vcount;++v)for(unsigned x=begin/32;x<=(unsigned)(end-1)/32;++x) {
+                    unsigned bucket=((vfirst+v)&7)*columns+x;
+                    memcpy(f->city+positions[bucket],record,6*sizeof *record);positions[bucket]+=6;
                 }
             }
             f->city_words=required;
@@ -916,17 +938,17 @@ static bool terrain_objects(ScRenderer *r,const Ppu *p,int y) {
     if(grid_reference<0) {const char *e=getenv("SC_GPU_OBJECT_GRID_REFERENCE");grid_reference=e && *e=='1';}
     if(!grid_reference) return terrain_objects_grid(r,p,y);
     ScTerrainFrame *f=&r->terrain;ScTerrainRow *row=f->rows+y+r->view.core_y;
-    uint32_t records[147][6];unsigned count=0,buckets=(f->width+31)/32;
+    uint32_t records[128+SC_VEHICLE_SPRITES][6];unsigned count=0,buckets=(f->width+31)/32;
     unsigned sizes[128]={0}; /* maximum canvas width 4096 / bucket width 32 */
     bool core=y>=0 && y<224;
     int first=PPU_objPriority(p)?(p->oamaddl&0xfe)/2:0;
     for(int k=-r->vehicle_count;k<128;++k) {
-        int left,size,dy,clip=0;unsigned attr;
+        int left,size,dy,clip=0;unsigned attr,chr=0;
         if(k<0) {
             const ScVehicleSprite *v=&r->vehicles[k+r->vehicle_count];
             left=v->x+r->view.core_x;clip=r->view.core_x+256;
-            size=sprite_sizes[PPU_objSize(p)][v->large?1:0];dy=y-v->y;
-            attr=p->oam[v->slot*2+1];
+            size=v->host?(v->large?16:8):sprite_sizes[PPU_objSize(p)][v->large?1:0];dy=y-v->y;
+            attr=v->host?v->attr:p->oam[v->slot*2+1];if(v->host) {clip=0;chr=v->rom_chr;}
         } else {
             int slot=(first+127-k)&127,index=slot*2;
             if((r->city_input && (r->pointer_active || r->pointer_hidden || r->split_hud) && slot<4) ||
@@ -942,7 +964,7 @@ static bool terrain_objects(ScRenderer *r,const Ppu *p,int y) {
         if(begin>=end || (core && begin>=r->view.core_x && end<=r->view.core_x+256)) continue;
         uint32_t *record=records[count++];
         record[0]=(uint32_t)left;record[1]=size;record[2]=dy;record[3]=attr;
-        record[4]=attr&0x100?PPU_objTileAdr2(p):PPU_objTileAdr1(p);record[5]=(uint32_t)clip;
+        record[4]=chr?chr:(unsigned)(attr&0x100?PPU_objTileAdr2(p):PPU_objTileAdr1(p));record[5]=(uint32_t)clip;
         for(unsigned b=(unsigned)begin/32;b<=(unsigned)(end-1)/32;++b) ++sizes[b];
     }
     row->reserved=UINT32_MAX;
@@ -1179,10 +1201,11 @@ void ScRendererPan(ScRenderer *r,double dx,double dy) {
     double top=r->zoom_hud && !r->view.core_y?oy:oy+(-r->view.core_y-oy)/zoom;
     double right=ox+(r->view.width-r->view.core_x-ox)/zoom;
     double bottom=oy+(r->view.height-r->view.core_y-oy)/zoom;
-    double min_x=fmin(-left,width*8-right),max_x=fmax(-left,width*8-right);
-    /* Keep 64 canvas pixels of vertical overscan at either edge, including
-     * when zoomed out. This lets edge tiles move clear of the fixed HUD. */
-    double slack_y=64/zoom;
+    /* Equal overscan on all four sides lets the far-right tiles move clear
+     * of the viewport just like the far-left ones, at every map size. */
+    double slack_x=64/zoom,slack_y=64/zoom;
+    double min_x=fmin(-left,width*8-right)-slack_x;
+    double max_x=fmax(-left,width*8-right)+slack_x;
     double min_y=fmin(-top,height*8-bottom)-slack_y;
     double max_y=fmax(-top,height*8-bottom)+slack_y;
     /* A zoom change or loaded native camera may already lie beyond these
@@ -2013,6 +2036,36 @@ uint32_t ScRendererHandPixel(const Ppu *p,int x,int y) {
     unsigned ci=sprite_word_pixel(p,0x3f9e,16,x,y);
     return ci?color(p,ci):0;
 }
+static void map_number_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
+    if(!r->map_preview.active || (u16(ram,0x14)!=5 && u16(ram,0x14)!=6) ||
+       y<140 || y>=192 || !(p->screenEnabled[0]&2))return;
+    uint32_t *row=r->pixels+(size_t)(y+r->view.core_y)*r->view.width;
+    uint32_t paper=color(p,bg_sample(p,1,176,136,NULL)),black=color(p,0);
+    if(y<174)for(int x=176;x<240;++x)row[r->view.core_x+x]=paper;
+    /* Native 8x8 digit graphics, fixed UI scale; five editable places fit
+     * between the preview frame and the right side of the original panel. */
+    if(y>=156 && y<164)for(unsigned i=0,place=10000;i<5;++i,place/=10)
+        for(int x=0;x<8;++x) {
+            unsigned ink=sprite_word_pixel(p,0x940+r->map_number/place%10,8,x,y-156);
+            row[r->view.core_x+184+i*8+x]=ink?color(p,ink):black;
+        }
+    if(y>=140 && y<148)for(unsigned i=0;i<7;++i)for(int x=0;x<8;++x) {
+        bool ink=i==1?(y==144 && x>=2 && x<=5):
+            sprite_word_pixel(p,0x940+(i?9:0),8,x,y-140)!=0;
+        if(ink)row[r->view.core_x+180+i*8+x]=black;
+    }
+    if(y>=176)for(int x=184;x<224;++x)
+        row[r->view.core_x+x]=color(p,bg_sample(p,1,216+(x&7),y+1,NULL));
+    for(int slot=0;slot<=127;slot+=127) {
+        if(p->oam[slot*2+1]!=0x3f9e)continue;
+        int ox=sprite_x(p,slot),dy=y-(p->oam[slot*2]>>8);
+        if(dy<0 || dy>=16)continue;
+        for(int x=176;x<240;++x) {
+            unsigned ink=sprite_word_pixel(p,0x3f9e,16,x-ox,dy);
+            if(ink)row[r->view.core_x+x]=color(p,ink);
+        }
+    }
+}
 void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const uint32_t *native) {
     if (!r->pixels || !p || !ram || !native || line<0 || line>=224) return;
     if (line==0) {
@@ -2052,7 +2105,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         /* Input/modal gates do not change the terrain's selected zoom.
          * Retain its pivot while overlays temporarily hide the HUD. */
         if(r->city_input || !city_live(r,p,ram))r->zoom_hud=hud;
-        r->zoom_frame=city_live(r,p,ram) && !r->map_hold && r->map_zoom>0 && (fabs(r->map_zoom-1)>1e-9 || r->camera_x || r->camera_y);
+        r->zoom_frame=city_live(r,p,ram) && !r->map_hold && r->map_zoom>0 && (fabs(r->map_zoom-1)>1e-9 || r->camera_x || r->camera_y || (r->vehicle_count && r->vehicles[r->vehicle_count-1].host));
         r->city_overlay_frame=r->zoom_frame && !r->city_input && !r->advisor_frame && !r->pan_frame;
         if(getenv("SC_CITY_VIEW_DIAG"))fprintf(stderr,
             "[city view] input=%d adviser=%d pan=%d zoom=%g applied=%d hud=%d masks=%u/%u modal=%u/%u/%u/%u\n",
@@ -2116,6 +2169,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         ScRendererPopulationRow(r,p,r->view,r->split_hud,line,
             r->pixels+(size_t)(line+r->view.core_y)*r->view.width);
     map_preview_row(r,p,ram,line);
+    map_number_row(r,p,ram,line);
     MEASURE_END(r,SC_RENDER_HUD,measured);
     if (line==223) {
         measured=MEASURE_BEGIN(r);

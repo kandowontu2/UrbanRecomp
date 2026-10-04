@@ -35,7 +35,7 @@ static void native_pixels(Ppu *full,Ppu *skip,uint8_t *image,uint8_t *scratch) {
      * reference behavior, never point the shader at missing memory. */
     ppu_reset(skip);ScNativePpuCaptureRaw(&raw,skip,0,1);
     assert(!(raw.native[0].flags&SC_NATIVE_RAW_BG));
-    raw.resource_capacity=2048+224*16384;raw.snapshots=224;
+    raw.resource_capacity=SC_RESOURCE_VRAM+224*16384;raw.snapshots=224;
     raw.resources=calloc(raw.resource_capacity,sizeof *raw.resources);assert(raw.resources);
     for(unsigned id=0;id<256;++id) {
         ppu_reset(full);PpuSetExtraSpace(full,0);
@@ -78,8 +78,8 @@ static void native_pixels(Ppu *full,Ppu *skip,uint8_t *image,uint8_t *scratch) {
             assert(ScNativePpuSupported(skip));
             if(!line) continue;
             ScNativePpuCapture(&captured,full,line-1,line);
-            raw.rows[line-1].chr_snapshot=2048+(line-1)*16384;
-            memcpy(raw.resources+2048+(line-1)*16384,skip->vram,65536);
+            raw.rows[line-1].chr_snapshot=SC_RESOURCE_VRAM+(line-1)*16384;
+            memcpy(raw.resources+SC_RESOURCE_VRAM+(line-1)*16384,skip->vram,65536);
             ScNativePpuCaptureRaw(&raw,skip,line-1,line);
             assert(raw.native[line-1].flags&SC_NATIVE_RAW_BG);
             unsigned obj_count=0;assert(ScObjSnapshot(skip,NULL,&obj_count));

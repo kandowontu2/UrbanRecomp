@@ -120,7 +120,7 @@ SDL_Texture *ScGpuTerrainDraw(ScGpuTerrain *g,const ScRenderer *r) {
             f->rows[y].core_x+256<=f->width;
     const void *data[]={r->pixels,f->tiles,f->palette,f->rows,f->overlays,f->native,f->resources?f->resources:&empty,f->city?f->city:&empty};
     unsigned upload_bytes[8];memcpy(upload_bytes,g->bytes,sizeof upload_bytes);
-    upload_bytes[6]=(f->snapshots?2048+f->snapshots*16384:1)*4;
+    upload_bytes[6]=(f->snapshots?SC_RESOURCE_VRAM+f->snapshots*16384:1)*4;
     upload_bytes[7]=(f->city_words?f->city_words:1)*4;
     if(compact) upload_bytes[1]=f->height*34*sizeof(ScTerrainTile);
     if(compact_objects) upload_bytes[4]=f->height*256*sizeof(ScTerrainOverlay);

@@ -29,7 +29,15 @@ void ScVehicles_FullView(bool enabled);
  * the screen position (x from 240 up), and the size c019 gives it. Highest
  * slot first, so drawing in order lets the lower slot win, as on the PPU.
  * Returns the count. */
-typedef struct { int slot, x, y; bool large; } ScVehicleSprite;
+enum { SC_VEHICLE_SPRITES=12288+19 };
+typedef struct {
+  int slot,x,y;
+  bool large,host;
+  uint16_t attr;
+  /* Optional original bank-06 CHR: bit 31 selects ROM, bit 30 a four-tile
+   * row stride; low 14 bits are a word offset into that ROM bank. */
+  uint32_t rom_chr;
+} ScVehicleSprite;
 int ScVehicles_Shown(ScVehicleSprite *out, int max);
 
 /* Paint the margin sprites the frame shows into `pixels` (0xAARRGGBB rows,

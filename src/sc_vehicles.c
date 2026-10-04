@@ -200,6 +200,7 @@ int ScVehicles_Shown(ScVehicleSprite *out, int max) {
   int n = 0;
   for (int s = 127; s >= kFirstSlot && n < max; s--) {
     if (!s_shown[s].on) continue;
+    out[n].host=false;out[n].attr=0;out[n].rom_chr=0;
     out[n].slot = s;
     out[n].x = s_shown[s].x;
     out[n].y = s_shown[s].y;

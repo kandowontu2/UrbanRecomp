@@ -114,11 +114,11 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
       result.hit = true;
     } else result.handled = false;
     break;
-  case 5: { /* Map preview: buttons and the three pairs of digit arrows. */
+  case 5: { /* Map preview: buttons and five pairs of digit arrows. */
     int choice = -1;
     if (box(x, y, 192, 88, 32, 16)) choice = 0;
     if (box(x, y, 192, 112, 32, 16)) choice = 1;
-    for (int digit = 0; digit < 3; ++digit) {
+    for (int digit = 0; digit < 5; ++digit) {
       if (box(x, y, 216 - digit * 8, 176, 8, 8)) choice = 2 + digit * 2;
       if (box(x, y, 216 - digit * 8, 184, 8, 8)) choice = 3 + digit * 2;
     }

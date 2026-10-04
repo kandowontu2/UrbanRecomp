@@ -2,6 +2,21 @@
 
 ## Unreleased — local terrain, mouse, placement and city-entry fixes
 
+- Scale extra trains, aircraft, ships and helicopters with expanded-map area:
+  one eligible vehicle of each kind per 120x100 district, up to 1,024 of each
+  on 3840x3200. Trains follow rails; aircraft require powered airports; ships
+  require powered seaports and a clear water footprint. Use independent world
+  positions and original cartridge artwork, including per-vehicle train/ship
+  headings. Cull outside the viewport and bucket sprites for CPU/GPU rendering.
+- Extend map selection to five editable digits, 00000 through 99999. NEXT
+  wraps after 99999; digit arrows work with mouse, keyboard and controller.
+  Each number supplies a deterministic distinct geographic seed on all sizes.
+- Add native-scale clusters of small islands inside irregular lakes and bays.
+  Fit shore tiles after removing unsupported narrow water gaps to convergence,
+  including those between nearby islands. Existing saved terrain is preserved.
+- Give the far-right map boundary the same 64-canvas-pixel scrolling slack
+  as the other edges, including the largest map and zoomed/centered layouts.
+
 - Compose tool-window artwork over the projected city instead of copying
   full-size building pixels from the native backdrop. Keep menu shadows on
   the zoomed terrain and preserve CPU/GPU rendering, budget and adviser pages.

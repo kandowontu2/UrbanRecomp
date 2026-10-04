@@ -34,9 +34,10 @@ typedef struct ScRenderer {
     uint16_t object_grid_oam[256];
     uint8_t object_grid_high[32],object_grid_y[128],object_grid_grace[128];
     int16_t object_grid_x[128];
-    ScVehicleSprite object_grid_vehicles[19];
+    ScVehicleSprite object_grid_vehicles[SC_VEHICLE_SPRITES];
     ScMapPreview map_preview;
     uint32_t preview_colors[38];
+    unsigned map_number;
     ScViewport view;
     ScViewport gameplay_view; /* configured HUD anchor; menus are centered */
     double map_zoom;
@@ -88,7 +89,7 @@ typedef struct ScRenderer {
     bool sylt;                   /* the ninth scenario card is on */
     /* The vehicles kept for the margin (src/sc_vehicles.c), handed in by the
      * host before each frame's first line. */
-    ScVehicleSprite vehicles[19];
+    ScVehicleSprite vehicles[SC_VEHICLE_SPRITES];
     int vehicle_count;
     ScSelSprite selector[SC_SEL_MAX_SPRITES]; /* pins and marks, this frame */
     int selector_count;

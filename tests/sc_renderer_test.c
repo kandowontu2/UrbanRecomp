@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 static void word(uint8_t *data,unsigned at,unsigned value) { data[at]=value; data[at+1]=value>>8; }
 static void free_camera_test(void) {
     ScRenderer *r=calloc(1,sizeof *r);ScWorld *world=calloc(1,sizeof *world);
@@ -19,16 +20,34 @@ static void free_camera_test(void) {
     for(unsigned n=0;n<1000;++n) ScRendererPan(r,0,0);
     assert(r->camera_x==x && r->camera_y==y);
     ScRendererPan(r,100000,100000);
-    assert(r->scroll_x==12608 && r->scroll_y==11226); /* full-map viewport bounds */
+    assert(r->scroll_x==12864 && r->scroll_y==11226); /* full-map viewport bounds plus overscan */
     assert(r->native_scroll_x==2400 && r->native_scroll_y==2400 && r->map_zoom==.25);
     ScRendererPan(r,-100000,-100000);
-    assert(r->scroll_x==-56 && r->scroll_y==-302); /* 64 screen pixels beyond top */
+    assert(r->scroll_x==-312 && r->scroll_y==-302); /* 64 screen pixels beyond left/top */
     ScRendererResetCamera(r);assert(!r->camera_x && !r->camera_y);
     assert(r->scroll_x==2400 && r->scroll_y==2400 && r->map_zoom==.25);
     world->mega=true;
     ScRendererPan(r,100000,100000);
-    assert(r->scroll_x==27968 && r->scroll_y==24026);
+    assert(r->scroll_x==28224 && r->scroll_y==24026);
     assert(r->map_zoom==.25 && r->native_scroll_x==2400 && r->native_scroll_y==2400);
+    /* At every zoom, the far-right/bottom map edge can move a full 64
+     * canvas pixels inside the viewport, including centered Fit layouts. */
+    const double zooms[]={1,.25,.015625};
+    for(unsigned layout=0;layout<2;++layout)for(unsigned z=0;z<3;++z) {
+        int width=z==2?448:730,height=z==2?224:492;
+        r->view=(ScViewport){width,height,layout?(width-256)/2:0,layout?(height-224)/2:0,1,0};
+        r->map_zoom=zooms[z];ScRendererResetCamera(r);
+        ScRendererPan(r,10000000,10000000);
+        double edge_x=r->view.core_x+56+(ScWorldWidth(world)*8-r->scroll_x-56)*r->map_zoom;
+        double edge_y=r->view.core_y+46+(ScWorldHeight(world)*8-r->scroll_y-46)*r->map_zoom;
+        assert(fabs(edge_x-(width-64))<1e-8 && fabs(edge_y-(height-64))<1e-8);
+        assert(r->map_zoom==zooms[z] && r->native_scroll_x==2400 && r->native_scroll_y==2400);
+        ScRendererPan(r,-10000000,-10000000);
+        double left=r->zoom_hud && !r->view.core_x?56:56+(-r->view.core_x-56)/r->map_zoom;
+        double top=r->zoom_hud && !r->view.core_y?46:46+(-r->view.core_y-46)/r->map_zoom;
+        assert(fabs((r->scroll_x+left)*r->map_zoom+64)<1e-8);
+        assert(fabs((r->scroll_y+top)*r->map_zoom+64)<1e-8);
+    }
     free(r);free(world);
     puts("PASS: fractional host camera, no idle drift, preserved zoom/native camera and full 1920x1600/3840x3200 bounds");
 }

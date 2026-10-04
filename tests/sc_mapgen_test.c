@@ -16,7 +16,7 @@ static uint64_t hash(const uint16_t *map,unsigned cells) {
     }
     return h;
 }
-static void geographic_check(ScMapGenState *st,unsigned seed,unsigned size) {
+static unsigned geographic_check(ScMapGenState *st,unsigned seed,unsigned size) {
     unsigned w=st->width,h=st->height,n=w*h,counts[3]={0},quadrants[4]={0};
     uint8_t *seen=calloc(n,1);unsigned *queue=malloc(n*sizeof *queue);assert(seen && queue);
     bool crossing=false;
@@ -51,6 +51,22 @@ static void geographic_check(ScMapGenState *st,unsigned seed,unsigned size) {
         }
         assert(mask!=5 && mask!=10 && mask!=7 && mask!=11 && mask!=13 && mask!=14 && mask!=15);
     }
+    memset(seen,0,n);unsigned islands=0;
+    for(unsigned i=0;i<n;++i) {
+        unsigned v=st->map[i];if((v && v<20) || seen[i])continue;
+        unsigned head=0,tail=0;bool edge=false;queue[tail++]=i;seen[i]=1;
+        while(head<tail) {
+            unsigned at=queue[head++],x=at%w,y=at/w;
+            edge|=!x || !y || x==w-1 || y==h-1;
+            const int dx[]={-1,1,0,0},dy[]={0,0,-1,1};
+            for(unsigned d=0;d<4;++d) {
+                int px=x+dx[d],py=y+dy[d];if(px<0 || py<0 || px>=(int)w || py>=(int)h)continue;
+                unsigned next=py*w+px,v=st->map[next];
+                if(!seen[next] && (!v || v>=20)) {seen[next]=1;queue[tail++]=next;}
+            }
+        }
+        islands+=!edge && tail>=16 && tail<=1200;
+    }
     ScMapPreview preview;sc_mapgen_preview_build(&preview,st->map,w,h,seed);
     preview.frame=0;
     for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x)assert(!sc_mapgen_preview_cell(&preview,x,y));
@@ -76,8 +92,22 @@ static void geographic_check(ScMapGenState *st,unsigned seed,unsigned size) {
     free(queue);free(seen);
     printf("geography seed %u size %u: land %.1f%% water %.1f%% trees %.1f%%\n",seed,size,
         counts[0]*100.0/n,counts[1]*100.0/n,counts[2]*100.0/n);
+    return islands;
+}
+static int compare_keys(const void *a,const void *b) {
+    uint32_t x=*(const uint32_t *)a,y=*(const uint32_t *)b;return (x>y)-(x<y);
 }
 int main(void) {
+    uint32_t *keys=malloc(100000*sizeof *keys);assert(keys);
+    for(unsigned n=0;n<100000;++n)keys[n]=sc_mapgen_number_key(n);
+    qsort(keys,100000,sizeof *keys,compare_keys);
+    for(unsigned n=1;n<100000;++n)assert(keys[n]!=keys[n-1]);free(keys);
+    assert(sc_mapgen_number_digit(0,4,-1)==90000);
+    assert(sc_mapgen_number_digit(99999,4,1)==9999);
+    assert(sc_mapgen_number_digit(99999,0,1)==99990);
+    assert(sc_mapgen_number_nav(9,2)==11 && sc_mapgen_number_nav(11,1)==9);
+    assert(sc_mapgen_number_nav(10,4)==11 && sc_mapgen_number_nav(10,8)==1);
+    assert(sc_mapgen_number_nav(0,4)==1 && sc_mapgen_number_nav(1,4)==2);
     /* Captured before making geometry configurable: both generator branches. */
     const uint64_t stock[]={
         UINT64_C(0x10f44bf362cfb8d0), UINT64_C(0xc28eaef5a4198d7a), UINT64_C(0xfacbce6031f24840), UINT64_C(0xd9c432a61de84d0c),
@@ -155,7 +185,7 @@ int main(void) {
       unsigned first=g->state.map[0];sc_mapgen_write_cell(&g->state,1919,1599,0xc123);
       assert(g->state.map[3071999]==0xc123 && g->state.map[0]==first && g->before==g->after);
     }
-    uint64_t last=0;
+    uint64_t last=0;unsigned island_counts[6]={0};
     for(unsigned size=0;size<6;++size)for(unsigned seed=0;seed<(size<2?16:2);++seed) {
         ScMapGenPrng p,q;sc_mapgen_seed(&p,0x5c00,seed,0,0,2,0);q=p;
         sc_mapgen_generate_geographic(&p,&g->state,size);
@@ -164,7 +194,7 @@ int main(void) {
         assert(!memcmp(g->state.map,again->map,cells*2));
         uint64_t current=hash(g->state.map,cells);assert(current!=last);last=current;
         assert(g->before==g->after && g->after==UINT64_C(0xfacedeed98765432));
-        geographic_check(&g->state,seed,size);
+        island_counts[size]+=geographic_check(&g->state,seed,size);
         /* Growing the map adds native-scale reaches, not map-sized channels.
          * Most horizontal/vertical water spans remain under 40 cells wide. */
         if(size) {
@@ -179,6 +209,13 @@ int main(void) {
             }
             assert(total && small*4>total*3);
         }
+    }
+    for(unsigned size=0;size<6;++size)assert(island_counts[size]>0);
+    const unsigned numbers[]={0,1,999,1000,10000,99999};last=0;
+    for(unsigned i=0;i<6;++i) {
+        sc_mapgen_generate_numbered(&g->state,0,numbers[i]);sc_mapgen_generate_numbered(again,0,numbers[i]);
+        assert(!memcmp(g->state.map,again->map,12000*2));
+        uint64_t current=hash(g->state.map,12000);assert(current!=last);last=current;
     }
     /* A narrow river between the old point samples remains visible in both
      * the native overview and the sharper display-sized preview. */

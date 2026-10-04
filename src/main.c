@@ -99,6 +99,8 @@ uint8_t    g_ram[0x20000];
 #include "sc_sram.h"
 #include "sc_icon.h"
 #include "sc_vehicles.h"
+#include "sc_fleet.h"
+static ScFleet *s_fleet;
 #include "sc_selector.h"
 #include "sc_titlesign.h"
 #include "sc_mapgen.h"
@@ -141,6 +143,8 @@ static unsigned s_loading_slot;
 static bool s_city_loading;
 static ScMouseUiPointer s_ui_mouse_pointer;
 static uint64_t s_preview_started;
+static unsigned s_map_number_high;
+static bool s_map_number_dirty;
 static bool s_preview_expanded,s_preview_complete,s_preview_left_down,s_preview_click_owned,s_preview_input_blocked;
 static double s_preview_anchor_x=.5,s_preview_anchor_y=.5,s_preview_cursor_x,s_preview_cursor_y;
 static bool s_city_present_pending,s_city_fade_started,s_city_black_seen;
@@ -1170,9 +1174,22 @@ static void handle_pos_stuff(void) {
         ScPpuSkipPixels(skipped);
         g_ppu->screenWindowed[1]=saved;
       }
-      if (s_custom_video.enabled && !s_skip_custom_frame && snes->vPos == 1)
-        s_custom_renderer.vehicle_count = s_ws_vehicles
-            ? ScVehicles_Shown(s_custom_renderer.vehicles, 19) : 0;
+      if (s_custom_video.enabled && !s_skip_custom_frame && snes->vPos == 1) {
+        s_custom_renderer.vehicle_count = s_ws_vehicles?ScVehicles_Shown(s_custom_renderer.vehicles,19):0;
+        if(s_ws_vehicles && s_world.active && host_map_screen_live()) {
+          if(!s_fleet)s_fleet=ScFleetCreate();
+          ScFleetStep(s_fleet,&s_world,s_frames,g_ram[0x193]!=0);
+          int nx=(int16_t)ram_w(0x1bd)*8+(g_ppu->hScroll[1]&7),ny=(int16_t)ram_w(0x1bf)*8+(g_ppu->vScroll[1]&7);
+          double zoom=s_custom_renderer.map_zoom>0?s_custom_renderer.map_zoom:1;
+          int left=nx+s_custom_renderer.camera_x-s_custom_renderer.gameplay_view.core_x/zoom-64;
+          int top=ny+s_custom_renderer.camera_y-s_custom_renderer.gameplay_view.core_y/zoom-64;
+          s_custom_renderer.vehicle_count+=ScFleetShown(s_fleet,&s_world,g_snes->cart->rom,nx,ny,left,top,
+            left+s_custom_renderer.gameplay_view.width/zoom+128,top+s_custom_renderer.gameplay_view.height/zoom+128,
+            s_custom_renderer.vehicles+s_custom_renderer.vehicle_count,SC_VEHICLE_SPRITES-s_custom_renderer.vehicle_count);
+          if(getenv("SC_FLEET_DIAG") && !(s_frames%60))fprintf(stderr,"[fleet] frame %llu trains=%u planes=%u ships=%u helicopters=%u shown=%d\n",
+            (unsigned long long)s_frames,ScFleetCount(s_fleet,0),ScFleetCount(s_fleet,1),ScFleetCount(s_fleet,2),ScFleetCount(s_fleet,3),s_custom_renderer.vehicle_count);
+        }
+      }
       if (s_custom_video.enabled && !s_skip_custom_frame && snes->vPos > 0 && snes->vPos <= 224) {
         uint64_t custom_t0=s_measure_custom_frame?SDL_GetPerformanceCounter():0;
         ScRendererLine(&s_custom_renderer, g_ppu, g_ram, snes->vPos - 1,
@@ -4301,12 +4318,13 @@ static bool run_one_frame(void) {
         pr.s0 = (uint16_t)(g_ram[0x59] | (g_ram[0x5a] << 8));
         pr.s1 = (uint16_t)(g_ram[0x5b] | (g_ram[0x5c] << 8));
         pr.t  = (uint16_t)(g_ram[0x5d] | (g_ram[0x5e] << 8));
+        unsigned number=g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000;
         if (s_large_maps && !s_journey_arming && s_rom_fnv==SC_ROM_FNV_US) {
-          if(s_large_maps==5) ScWorldGenerateMega(&s_world,&pr); else if(s_large_maps==4) ScWorldGenerateColossal(&s_world,&pr); else if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr); else if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr); else ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
+          ScWorldGenerateNumbered(&s_world,s_large_maps,number);ScWorldMirror(&s_world,g_ram);
         } else {
           ScWorldReset(&s_world);
           if(getenv("SC_MAPGEN_ORIGINAL"))sc_mapgen_generate(&pr,&gs);
-          else sc_mapgen_generate_geographic(&pr,&gs,0);
+          else sc_mapgen_generate_numbered(&gs,0,number);
           s_world.journey=s_journey_arming;
         }
         /* The map is at $7F0200 -- bank 7F, so 0x10200 into WRAM. */
@@ -4320,12 +4338,13 @@ static bool run_one_frame(void) {
         sc_mapgen_preview_build(&s_custom_renderer.map_preview,gs.map,
             s_world.active?ScWorldWidth(&s_world):120,s_world.active?ScWorldHeight(&s_world):100,pr.s0);
         s_preview_expanded=s_preview_complete=false;
+        s_map_number_dirty=false;
         /* Generation precedes the native Please wait panel. Start the reveal
          * only when map selection is visible, so that panel cannot consume it. */
         s_preview_started=0;
-        if(getenv("SC_MAP_PREVIEW_DIAG")) fprintf(stderr,"[map preview] started frame %llu mode %u geometry %u,%u\n",
+        if(getenv("SC_MAP_PREVIEW_DIAG")) fprintf(stderr,"[map preview] started frame %llu mode %u geometry %u,%u number %05u\n",
             (unsigned long long)s_frames,ram_w(0x14),s_world.active?ScWorldWidth(&s_world):120,
-            s_world.active?ScWorldHeight(&s_world):100);
+            s_world.active?ScWorldHeight(&s_world):100,number);
         g_ram[0x59] = (uint8_t)(pr.s0 & 0xff); g_ram[0x5a] = (uint8_t)(pr.s0 >> 8);
         g_ram[0x5b] = (uint8_t)(pr.s1 & 0xff); g_ram[0x5c] = (uint8_t)(pr.s1 >> 8);
         g_ram[0x5d] = (uint8_t)(pr.t  & 0xff); g_ram[0x5e] = (uint8_t)(pr.t  >> 8);
@@ -4559,6 +4578,31 @@ static bool run_one_frame(void) {
     if (s_development_speed>1 && s_rom_is_us && cpu->k==1 && cpu->pc==0x897f &&
         cpu->dp==0 && cpu->db==0 && host_map_screen_live() && !ram_w(0xd7))
       refresh_fast_power(true);
+    if(s_rom_is_us && cpu->k==3) {
+      if(cpu->pc==0xd3b7) {s_map_number_high=0;s_map_number_dirty=true;}
+      if(cpu->pc==0xd81c && s_map_number_dirty)cpu->pc=0xd834;
+      if(cpu->pc==0xd625) {
+        unsigned choice=sc_mapgen_number_nav(ram_w(0xb2d),g_ram[0xca]);
+        ram_set_w(0xb2d,choice);g_ram[6]=7;
+        cpu->pc=choice==1 && ram_w(0xb31)?0xd695:0xd65d;
+      }
+      if(cpu->pc==0xd3e0 && (g_ram[0xca]&128) && ram_w(0xb2d)>=2) {
+        unsigned choice=ram_w(0xb2d),number=g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000;
+        number=sc_mapgen_number_digit(number,(choice-2)/2,choice&1?-1:1);
+        s_map_number_high=number/1000;g_ram[0xb27]=number%10;g_ram[0xb28]=number/10%10;g_ram[0xb29]=number/100%10;
+        ram_set_w(0xb31,128);s_map_number_dirty=true;g_ram[6]=8;cpu->pc=0xd459;
+      }
+      if(cpu->pc==0xd4f7) {
+        unsigned number=(g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000+1)%100000;
+        s_map_number_high=number/1000;g_ram[0xb27]=number%10;g_ram[0xb28]=number/10%10;g_ram[0xb29]=number/100%10;
+        s_map_number_dirty=true;cpu->pc=0xd51c;
+      }
+      if(cpu->pc==0xd7dd && ram_w(0xb2d)>=2) {
+        unsigned choice=ram_w(0xb2d);
+        ram_set_w(0x2000,220-(choice-2)/2*8+((178+(choice&1)*8)<<8));
+        ram_set_w(0x2002,0x3f9e);g_ram[0x2200]=2;cpu->pc=0xd7fc;
+      }
+    }
     if (s_rom_is_us && cpu->k == 3 && cpu->pc == 0xd3e0 &&
         (s_map_mouse_refresh_pending || s_map_mouse_accept_pending)) {
       if (g_ram[0x0b31]) {
@@ -7554,6 +7598,7 @@ static bool load_state(const char *path) {
   s_ui_mouse_pointer=(ScMouseUiPointer){0};
   s_custom_renderer.menu_pointer_active=false;
   s_custom_renderer.map_preview.active=0;s_preview_started=0;
+  s_map_number_high=0;s_map_number_dirty=false;
   s_preview_expanded=s_preview_complete=s_preview_left_down=s_preview_click_owned=s_preview_input_blocked=false;
   ScConstructionFree(s_build_work);s_build_work=NULL;
   FileSli fs;
@@ -11958,6 +12003,7 @@ int main(int argc, char **argv) {
     s_custom_renderer.menu_pointer_active=s_ui_mouse_pointer.active;
     s_custom_renderer.menu_pointer_x=s_ui_mouse_pointer.x;
     s_custom_renderer.menu_pointer_y=s_ui_mouse_pointer.y;
+    s_custom_renderer.map_number=g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000;
     if(s_custom_renderer.map_preview.active && !ram_w(0xb31) &&
        (ram_w(0x14)==5 || ram_w(0x14)==6)) {
       uint64_t now=SDL_GetPerformanceCounter();
@@ -12828,6 +12874,7 @@ int main(int argc, char **argv) {
       s_pc_profile_ops[best]=0;
     }
   }
+  ScFleetFree(s_fleet);
   SDL_DestroyTexture(texture);
   if(s_preview_texture)SDL_DestroyTexture(s_preview_texture);
   free(s_preview_cells);free(s_preview_reveal);

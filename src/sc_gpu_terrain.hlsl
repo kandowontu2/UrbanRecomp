@@ -24,7 +24,9 @@ uint decode(uint p,uint bit) {
  return ((p>>bit)&1)|(((p>>(bit+8))&1)<<1)|(((p>>(bit+16))&1)<<2)|(((p>>(bit+24))&1)<<3);
 }
 uint resource_word(uint snapshot,uint at) {
- return (resources[snapshot+((at&32767)>>1)]>>((at&1)*16))&65535;
+ uint base=(at&0x80000000)?2048:snapshot;
+ uint mask=(at&0x80000000)?16383:32767;
+ return (resources[base+((at&mask)>>1)]>>((at&1)*16))&65535;
 }
 uint city_cell(uint at) {
  uint raw=(city[at/2]>>((at&1)*16))&65535;
@@ -62,6 +64,8 @@ uint captured_object(uint at,uint x,uint world_y) {
   if(attr&0x8000) y=size-1-y;
   uint tile=(((attr&240)+(y/8)*16)&255)|(((attr&15)+uint(dx)/8)&15);
   uint adr=city[record+4]+tile*16+(y&7),snapshot=rows[at+300];
+  uint chr=city[record+4];
+  if(chr&0x80000000)adr=chr+((y/8)*((chr&0x40000000)?4:2)+uint(dx)/8)*16+(y&7);
   uint ci=decode(resource_word(snapshot,adr)|(resource_word(snapshot,adr+8)<<16),7-(uint(dx)&7));
   if(ci) result=(ci+128+((attr>>9)&7)*16)|(((attr>>12)&3)<<8);
  }

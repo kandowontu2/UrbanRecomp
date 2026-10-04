@@ -116,6 +116,13 @@ void ScWorldGenerateHuge(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,2); }
 void ScWorldGenerateGiant(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,3); }
 void ScWorldGenerateMega(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,5); }
 void ScWorldGenerateColossal(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,4); }
+void ScWorldGenerateNumbered(ScWorld *w,unsigned size,unsigned number) {
+    ScMapGenState *state=calloc(1,sizeof *state);if(!state)return;
+    ScWorldReset(w);w->huge=size>=2;w->giant=size>=3;w->colossal=size>=4;w->mega=size==5;
+    sc_mapgen_generate_numbered(state,size,number);
+    for(unsigned i=0;i<ScWorldCells(w);++i)put(w->tiles+2*i,state->map[i]);
+    free(state);w->active=true;
+}
 unsigned ScWorldFieldWidth(const ScWorld *w,unsigned f) {
     return f<SC_WORLD_FIELDS?(w && w->giant && f>=17?65535:ScWorldFields[f].width*(f<17?ScWorldScale(w):1)):0;
 }

@@ -64,6 +64,7 @@ void ScWorldGenerateHuge(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateGiant(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateMega(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateColossal(ScWorld *world, ScMapGenPrng *prng);
+void ScWorldGenerateNumbered(ScWorld *world,unsigned size,unsigned number);
 bool ScWorldBounds(int x, int y);
 uint16_t ScWorldCell(const ScWorld *world, int x, int y);
 bool ScWorldPutCell(ScWorld *world, int x, int y, uint16_t tile);

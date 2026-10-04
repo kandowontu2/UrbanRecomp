@@ -1604,13 +1604,40 @@ static void geo_rivers(uint8_t *classes,unsigned width,unsigned height,uint32_t 
         }
     }
 }
-void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned size) {
+/* Native-sized island groups sit in irregular bays/lakes, rather than making
+ * the complete enlarged map one giant island with a thin perimeter moat. */
+static void geo_islands(uint8_t *classes,unsigned width,unsigned height,uint32_t seed,unsigned style) {
+    for(unsigned gy=0;gy<(height+159)/160;++gy)for(unsigned gx=0;gx<(width+179)/180;++gx) {
+        uint32_t rng=geo_hash(seed^0xa7c913u^gx*374761393u^gy*668265263u);
+        if(geo_next(&rng)%(style==2?2:7))continue;
+        int cx=gx*180+50+geo_next(&rng)%80,cy=gy*160+45+geo_next(&rng)%70;
+        int rx=25+geo_next(&rng)%16,ry=22+geo_next(&rng)%14;
+        if(width==120) {cx=88;cy=50;rx=25;ry=29;}
+        for(int dy=-ry-4;dy<=ry+4;++dy)for(int dx=-rx-4;dx<=rx+4;++dx) {
+            int x=cx+dx,y=cy+dy;if(x<0 || y<0 || x>=(int)width || y>=(int)height)continue;
+            unsigned rough=geo_noise((unsigned)(x+64)*2048,(unsigned)(y+64)*2048,1,rng);
+            if(((int64_t)dx*dx*ry*ry+(int64_t)dy*dy*rx*rx)*65536<
+               (int64_t)rx*rx*ry*ry*(54000+rough/3))classes[y*width+x]=1;
+        }
+        unsigned count=2+geo_next(&rng)%4;
+        for(unsigned k=0;k<count;++k) {
+            int ix=cx+(int)(geo_next(&rng)%(rx+1))-rx/2;
+            int iy=cy+(int)(geo_next(&rng)%(ry+1))-ry/2;
+            int radius=3+geo_next(&rng)%6;
+            for(int dy=-radius;dy<=radius;++dy)for(int dx=-radius;dx<=radius;++dx) {
+                int x=ix+dx,y=iy+dy;
+                if(x<1 || y<1 || x+1>=(int)width || y+1>=(int)height)continue;
+                if(dx*dx+dy*dy<=radius*radius)classes[y*width+x]=(geo_hash(rng+x/4+y/4*374761393u)&3)?0:2;
+            }
+        }
+    }
+}
+static void generate_geographic_seed(ScMapGenState *st,unsigned size,uint32_t seed) {
     if(size>5)size=0;
     unsigned width=120u<<size,height=100u<<size,cells=width*height;
     st->width=width;st->height=height;
     memset(st->map,0,sizeof st->map);
-    uint32_t seed=(uint32_t)sc_mapgen_prng_step(p)<<16;
-    seed|=sc_mapgen_prng_step(p);uint32_t rng=seed;
+    uint32_t rng=seed;
     unsigned style=geo_next(&rng)%4,vertical=geo_next(&rng)&1,coast_side=geo_next(&rng)&1;
     int river[9],branch[9],coast[9];
     int center=21000+geo_next(&rng)%23000;
@@ -1676,20 +1703,24 @@ void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned si
         }
     }
     if(classes) {
+        geo_islands(classes,width,height,seed,style);
         if(size)geo_rivers(classes,width,height,seed,vertical);
         /* A one-cell water spur cannot be represented by the cartridge's
          * shoreline tiles (opposite/three land edges map to open water).
          * Prune these nubs before fitting the coast, using a stable snapshot. */
-        for(unsigned pass=0;pass<2;++pass) {
+        for(;;) {
+            unsigned changed=0;
             for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
                 unsigned at=y*width+x;st->map[at]=classes[at];
                 if(classes[at]!=1 || !x || !y || x+1==width || y+1==height)continue;
                 unsigned mask=(classes[at-1]!=1)|((classes[at+width]!=1)<<1)|
                     ((classes[at+1]!=1)<<2)|((classes[at-width]!=1)<<3);
-                if(mask==5 || mask==10 || mask==7 || mask==11 || mask==13 || mask==14 || mask==15)
-                    st->map[at]=0;
+                if(mask==5 || mask==10 || mask==7 || mask==11 || mask==13 || mask==14 || mask==15) {
+                    st->map[at]=0;++changed;
+                }
             }
             for(unsigned at=0;at<cells;++at)classes[at]=(uint8_t)st->map[at];
+            if(!changed)break;
         }
         static const uint8_t shore[16]={1,7,10,9,8,1,11,1,5,4,1,1,6,1,1,1};
         static const uint8_t trees[16]={0,0,0,0x16,0,0,0x14,0x15,0,0x1c,0,0x19,0x1a,0x1b,0x17,0x18};
@@ -1711,6 +1742,28 @@ void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned si
         free(classes);
     }
     g_sc_mapgen_cur=st;
+}
+void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned size) {
+    uint32_t seed=(uint32_t)sc_mapgen_prng_step(p)<<16;
+    seed|=sc_mapgen_prng_step(p);generate_geographic_seed(st,size,seed);
+}
+uint32_t sc_mapgen_number_key(unsigned number) {return geo_hash((number%100000)^0x51c17a9u);}
+unsigned sc_mapgen_number_digit(unsigned number,unsigned digit,int direction) {
+    static const unsigned place[]={1,10,100,1000,10000};number%=100000;
+    if(digit>=5)return number;
+    unsigned old=number/place[digit]%10,value=(old+(direction<0?9:1))%10;
+    return number-old*place[digit]+value*place[digit];
+}
+unsigned sc_mapgen_number_nav(unsigned choice,unsigned directions) {
+    if(choice>11)choice=1;
+    if(directions&1) return choice>=4?choice-2:choice;
+    if(directions&2) return choice>=2 && choice<10?choice+2:choice;
+    if(directions&4) return choice<2 || !(choice&1)?choice+1:choice;
+    if(directions&8) return choice==0?0:choice==1 || (choice>=2 && !(choice&1))?1:choice-1;
+    return choice;
+}
+void sc_mapgen_generate_numbered(ScMapGenState *st,unsigned size,unsigned number) {
+    generate_geographic_seed(st,size,sc_mapgen_number_key(number));
 }
 void sc_mapgen_preview_build(ScMapPreview *p,const uint16_t *map,
                              unsigned width,unsigned height,unsigned seed) {

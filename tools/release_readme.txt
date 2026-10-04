@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 16 - LOCAL PREVIEW / TOOL WINDOW FIXES
+URBAN RECOMP ENHANCED BETA 16 - LOCAL MAP EXPANSION / VEHICLE FLEET
 ======================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -12,6 +12,14 @@ districts on every size, with staged map-select previews. Expanded maps add
 more terrain features at original tile scale instead of stretching them.
 Rivers use curved reaches with varied headings instead of parallel bands,
 and narrow water nubs are removed before native shoreline fitting.
+Small island clusters now appear inside irregular lakes and bays; narrow water
+gaps are cleaned until native shore tiles fit. Five map-number digits offer
+00000 through 99999, with mouse/pad arrows and NEXT wrapping after 99999.
+The far-right edge now has the same extra panning space as the other borders.
+Larger maps add trains, aircraft, ships and helicopters by 120x100 districts,
+up to 1,024 extra vehicles of each kind on 3840x3200. Rails, powered airports,
+and powered seaports with navigable water determine where they can appear.
+Their independent positions and headings use your cartridge's original art.
 Map previews draw sharply at display resolution. Ctrl+wheel zooms toward
 the mouse; middle mouse drags. Click the preview to expand it across the
 window, then click again or press Esc to return to map selection.

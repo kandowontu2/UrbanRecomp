@@ -21,6 +21,30 @@ Expanded river reaches use varied directions, lengths and bends instead of
 equally spaced parallel bands. Round brushes and removal of narrow water
 nubs give the cartridge shoreline tiles a matching edge.
 
+Small island clusters appear inside irregular lakes and bays throughout larger
+maps, with native-scale island diameters. Shore fitting removes narrow water
+gaps until every interior boundary has a supported cartridge shoreline tile.
+Map selection now offers five editable digits, 00000 through 99999. All five
+up/down arrow pairs support mouse and keyboard/controller navigation; NEXT
+advances the whole number and wraps after 99999. Numbers choose deterministic
+geographic seeds for each size.
+
+Expanded maps add a visual vehicle fleet by 120x100 districts: Big supports
+up to 4 extra vehicles of each kind, Huge 16, Giant 64, Colossal 256 and Mega
+1,024. Each district needs rails for a train, a powered airport for aircraft
+and helicopters, or a powered seaport with a clear 32-pixel water footprint
+for a ship. Trains and ships follow their rail/water routes; aircraft fly
+around their airport. Movement pauses with the simulation. These additional
+vehicles rebuild from saved infrastructure and use independent world positions
+and original ROM artwork. Train and ship headings have their own cartridge
+CHR source, independent of the original game's shared vehicle DMA. The fleet
+adds visual activity; the existing transport-demand and disaster rules remain.
+Only visible sprites reach the compositor, using shared CPU/GPU spatial buckets.
+
+The camera allows 64 canvas pixels of overscan on all four edges. Far-right
+tiles on Mega maps can move clear of the viewport at the same distance as the
+left edge, including centered layouts and city zoom.
+
 The map-select preview keeps its original 120x100 box while drawing at the
 display's pixel resolution. Coverage-aware sampling preserves thin rivers
 between the old single-tile samples. It reveals water first, then forest patches over roughly
@@ -56,6 +80,15 @@ wide scenario pointers and PPU immutability. Local native-ROM replays verify
 water/forest animation, the largest map preview, menu/name/scenario pointers,
 annual and toolbar budget mouse controls, and keyboard takeover. Tests use
 private scratch saves.
+
+Additional validation covers all 100,000 number keys, deterministic numbered
+samples, all five arrow pairs in the live menu, 99999-to-00000 NEXT wrapping,
+island components and supported shoreline masks. Fleet tests cover every
+expanded size, infrastructure removal, paused positions and viewport culling.
+Native-ROM Mega replays verify up to 1,024 vehicles of each kind and thousands
+of visible sprite pieces across zoom levels, with CPU/GPU pixel parity. Dedicated
+CHR checks cover train/ship row strides and all flips with blank native VRAM.
+Largest-map panning checks verify both horizontal limits without changing zoom.
 
 Large drag selections use a clipped grid preview and resumable private placement
 batches. Rendering, window events and music continue while the transaction runs;

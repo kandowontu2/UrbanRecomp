@@ -164,5 +164,10 @@ void sc_mapgen_preview_raster(const ScMapPreview *preview,uint8_t *cells,uint8_t
                               unsigned width,unsigned height);
 void sc_mapgen_preview_zoom(ScMapPreview *preview,double factor,double x,double y);
 void sc_mapgen_preview_pan(ScMapPreview *preview,double x,double y);
+/* 00000..99999 have distinct, visit-independent geography seeds. */
+uint32_t sc_mapgen_number_key(unsigned number);
+void sc_mapgen_generate_numbered(ScMapGenState *state,unsigned size,unsigned number);
+unsigned sc_mapgen_number_digit(unsigned number,unsigned digit,int direction);
+unsigned sc_mapgen_number_nav(unsigned choice,unsigned directions);
 
 #endif
