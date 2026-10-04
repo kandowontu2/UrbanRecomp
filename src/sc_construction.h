@@ -21,6 +21,14 @@ ScBuildResult ScConstructionCommit(uint8_t *ram, const uint8_t *rom, size_t size
                                   const ScBuildPlan *plan, unsigned *cost);
 ScBuildResult ScConstructionCommitWorld(uint8_t *ram, ScWorld *world,
     const uint8_t *rom, size_t size, const ScBuildPlan *plan, unsigned *cost);
+/* Resumable atomic placement. The plan remains immutable until Free.
+ * Step bounds private CPU work; Finish publishes only a successful transaction. */
+typedef struct ScBuildWork ScBuildWork;
+ScBuildWork *ScConstructionBegin(const uint8_t *ram,const ScWorld *world,const uint8_t *rom,size_t size,const ScBuildPlan *plan);
+bool ScConstructionStep(ScBuildWork *work,unsigned max_operations);
+unsigned ScConstructionCompleted(const ScBuildWork *work);
+ScBuildResult ScConstructionFinish(ScBuildWork *work,uint8_t *ram,ScWorld *world,unsigned *cost);
+void ScConstructionFree(ScBuildWork *work);
 /* Original ordered power rules in C; commits power bits only. */
 bool ScConstructionRefreshPower(uint8_t *ram, ScWorld *world,
                                const uint8_t *rom, size_t size);

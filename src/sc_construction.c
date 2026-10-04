@@ -1,9 +1,12 @@
 #include "sc_construction.h"
 #include "snes/interp816.h"
 #include "sc_world_guest.h"
+#include "sc_tile_lookup.h"
+#include "sc_program.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 
 typedef struct {
   uint8_t ram[0x20000];
@@ -79,63 +82,132 @@ ScBuildResult ScConstructionCommit(uint8_t *ram,const uint8_t *rom,size_t size,
                                   const ScBuildPlan *p,unsigned *cost) {
   return ScConstructionCommitWorld(ram,NULL,rom,size,p,cost);
 }
-ScBuildResult ScConstructionCommitWorld(uint8_t *ram,ScWorld *w,const uint8_t *rom,size_t size,
-                                  const ScBuildPlan *p,unsigned *cost) {
-  if (cost) *cost=0;
+struct ScBuildWork {
+  BuildBus *bus;
+  Interp816 *cpu;
+  const ScBuildPlan *plan;
+  unsigned available,index,steps;
+  bool placing,done,fault,reference;
+  unsigned batch_operations,batch_limit;
+};
+ScBuildWork *ScConstructionBegin(const uint8_t *ram,const ScWorld *w,const uint8_t *rom,size_t size,const ScBuildPlan *p) {
   if (!rom || size!=0x80000 || p->tool>15 || !p->count || p->count>SC_BUILD_MAX ||
       (p->tool>=10 && p->tool!=13 && p->tool!=14 && p->count!=1))
-    return SC_BUILD_INVALID;
+    return NULL;
   int width=w && w->active?ScWorldWidth(w):120,height=w && w->active?ScWorldHeight(w):100;
   for (unsigned i=0;i<p->count;++i)
     if (p->cells[i].x<0 || p->cells[i].x>=width || p->cells[i].y<0 || p->cells[i].y>=height)
-      return SC_BUILD_INVALID;
+      return NULL;
   BuildBus *b=calloc(1,sizeof *b);
-  if (!b) return SC_BUILD_FAULT;
+  if (!b) return NULL;
   b->rom=rom; b->size=size; memcpy(b->ram,ram,sizeof b->ram);
   if (w && w->active) {
     b->world=malloc(sizeof *w);
-    if (!b->world) { free(b); return SC_BUILD_FAULT; }
+    if (!b->world) { free(b); return NULL; }
     memcpy(b->world,w,sizeof *w);
   }
   unsigned available=funds(ram);
-  /* Preflight all eligible cells even if the actual treasury is too small. */
+  /* Private preflight uses a full treasury; bounded interactive steps stop
+   * as soon as the real treasury cannot afford the selection. */
   money(b->ram,0xffffff);
   Interp816 *cpu=interp816_init(b,read_bus,write_bus);
-  if (!cpu) { free(b->world); free(b); return SC_BUILD_FAULT; }
-  bool fault=false;
-  for (unsigned i=0;i<p->count && !fault;++i) {
-    int x=p->cells[i].x, y=p->cells[i].y;
-    /* Native input derives coordinates from an 8-bit on-screen pointer.
-     * Give each private placement a camera containing its cell, so a long
-     * drag cannot wrap the cursor and build elsewhere in the world. */
-    put(b->ram,0x01bd,x-16); put(b->ram,0x01bf,y-16);
-    if(b->world) {b->world->coord[1][0]=x;b->world->coord[1][1]=y;}
-    put(b->ram,0x0205,x); put(b->ram,0x0207,y); put(b->ram,0x020d,p->tool);
-    put(b->ram,0x01eb,128); put(b->ram,0x01ed,128);
-    put(b->ram,0x1ffe,0x6fff);
-    interp816_reset(cpu);
-    cpu->k=1; cpu->db=0; cpu->pc=0x8e28; cpu->sp=0x1ffd; cpu->dp=0;
-    cpu->mf=false; cpu->xf=false; cpu->e=false; cpu->i=true;
-    unsigned steps=0;
-    memset(&b->guest,0,sizeof b->guest);
+  if (!cpu) { free(b->world); free(b); return NULL; }
+  ScBuildWork *job=calloc(1,sizeof *job);
+  if(!job) {interp816_free(cpu);free(b->world);free(b);return NULL;}
+  job->bus=b;job->cpu=cpu;job->plan=p;job->available=available;
+  const char *reference=getenv("SC_CONSTRUCTION_REFERENCE");
+  job->reference=reference && *reference=='1';return job;
+}
+
+/* Connected native C placement uses the same mapped world hooks as the
+ * interpreter oracle, yielding on COP, return, fault or the private budget. */
+static bool build_before(void *context,Interp816 *cpu) {
+  ScBuildWork *job=context;BuildBus *b=job->bus;
+  if(job->batch_operations>=job->batch_limit || b->fault || cpu->stopped || cpu->waiting ||
+      (cpu->k==1 && (cpu->pc==0x7000 || ScTileLookupOwns(cpu->pc))))return false;
+  if(++job->steps>200000) {job->fault=true;return false;}
+  if(b->world) {
+    ScWorldGuestStepPrepared(b->world,cpu,b->ram);
+    ScWorldGuestBeginPrepared(&b->guest,b->world,cpu,b->rom,b->size);
+  }
+  size_t at=(size_t)cpu->k*32768+cpu->pc-0x8000;
+  return at<b->size && b->rom[at]!=0x02;
+}
+static bool build_after(void *context,Interp816 *cpu,unsigned clocks) {
+  ScBuildWork *job=context;(void)cpu;(void)clocks;
+  return ++job->batch_operations<job->batch_limit;
+}
+static unsigned build_fallback(void *context,Interp816 *cpu) {
+  (void)context;return interp816_runOpcode(cpu);
+}
+bool ScConstructionStep(ScBuildWork *job,unsigned max_operations) {
+  if(!job || job->done)return true;
+  if(!max_operations)return false;
+  BuildBus *b=job->bus;Interp816 *cpu=job->cpu;
+  const ScBuildPlan *p=job->plan;const uint8_t *rom=b->rom;size_t size=b->size;
+  unsigned operations=0;
+  while(job->index<p->count && !job->fault) {
+    if(!job->placing) {
+      unsigned i=job->index;
+      int x=p->cells[i].x, y=p->cells[i].y;
+      /* Native input derives coordinates from an 8-bit on-screen pointer.
+       * Give each private placement a camera containing its cell, so a long
+       * drag cannot wrap the cursor and build elsewhere in the world. */
+      put(b->ram,0x01bd,x-16); put(b->ram,0x01bf,y-16);
+      if(b->world) {b->world->coord[1][0]=x;b->world->coord[1][1]=y;}
+      put(b->ram,0x0205,x); put(b->ram,0x0207,y); put(b->ram,0x020d,p->tool);
+      put(b->ram,0x01eb,128); put(b->ram,0x01ed,128);
+      put(b->ram,0x1ffe,0x6fff);
+      interp816_reset(cpu);
+      cpu->k=1; cpu->db=0; cpu->pc=0x8e28; cpu->sp=0x1ffd; cpu->dp=0;
+      cpu->mf=false; cpu->xf=false; cpu->e=false; cpu->i=true;
+      job->steps=0;memset(&b->guest,0,sizeof b->guest);job->placing=true;
+    }
     while (!(cpu->k==1 && cpu->pc==0x7000)) {
-      if (++steps>200000 || b->fault || cpu->stopped || cpu->waiting) { fault=true; break; }
+      if(!job->reference) {
+        job->batch_operations=0;job->batch_limit=max_operations-operations;
+        unsigned edges=ScProgramRun(cpu,job,build_before,build_after,build_fallback);
+        operations+=edges;
+        if(operations>=max_operations)return false;
+        if(job->fault)break;
+        if(edges)continue;
+      }
+      if (++job->steps>200000 || b->fault || cpu->stopped || cpu->waiting) { job->fault=true; break; }
       if (b->world) {
-        ScWorldGuestStep(b->world,cpu,b->ram);
-        ScWorldGuestBegin(&b->guest,b->world,cpu,rom,size);
+        if(job->reference) {ScWorldGuestStep(b->world,cpu,b->ram);ScWorldGuestBegin(&b->guest,b->world,cpu,rom,size);}
+        else {ScWorldGuestStepPrepared(b->world,cpu,b->ram);ScWorldGuestBeginPrepared(&b->guest,b->world,cpu,rom,size);}
       }
       /* COP calls here emit sprite records. Map tiles are regular WRAM writes;
        * the live renderer emits the cursor/HUD on its next normal pass. */
       if (read_bus(b,((uint32_t)cpu->k<<16)|cpu->pc)==0x02) cpu->pc+=2;
-      else interp816_runOpcode(cpu);
+      else {
+        unsigned remaining=max_operations-operations,budget=remaining>2048?4096:remaining*2;
+        unsigned fast=job->reference || !b->world?0:ScTileLookupStep(b->world,cpu,b->ram,rom,size,budget);
+        if(!fast && !job->reference && b->world && cpu->k==3)fast=ScWorldGuestBatchStep(b->world,cpu,b->ram,rom,size,budget);
+        if(fast) operations+=fast/2;
+        else interp816_runOpcode(cpu);
+      }
+      if(++operations>=max_operations) return false;
     }
-    if (b->fault || cpu->sp!=0x1fff || cpu->dp!=0) fault=true;
+
+    if (b->fault || cpu->sp!=0x1fff || cpu->dp!=0)job->fault=true;
+    job->placing=false;++job->index;
+    /* Interactive preflight can reject as soon as its cost exceeds funds.
+     * No live tile or money has changed; the synchronous oracle totals all. */
+    if(max_operations!=UINT_MAX && 0xffffff-funds(b->ram)>job->available)break;
   }
+  job->done=true;return true;
+}
+unsigned ScConstructionCompleted(const ScBuildWork *job) {return job?job->index:0;}
+ScBuildResult ScConstructionFinish(ScBuildWork *job,uint8_t *ram,ScWorld *w,unsigned *cost) {
+  if(cost)*cost=0;
+  if(!job || !job->done)return SC_BUILD_INVALID;
+  BuildBus *b=job->bus;
   unsigned price=0xffffff-funds(b->ram);
   if (cost) *cost=price;
-  ScBuildResult result=fault?SC_BUILD_FAULT:price>available?SC_BUILD_FUNDS:SC_BUILD_OK;
+  ScBuildResult result=job->fault?SC_BUILD_FAULT:price>job->available?SC_BUILD_FUNDS:SC_BUILD_OK;
   if (result==SC_BUILD_OK) {
-    money(b->ram,available-price);
+    money(b->ram,job->available-price);
     /* Preserve the live CPU's stacks, scheduler context, pointer and tool.
      * Commit all original placement side effects, including joins and DMA
      * staging, rather than reimplementing the ROM's tile classifications. */
@@ -143,6 +215,9 @@ ScBuildResult ScConstructionCommitWorld(uint8_t *ram,ScWorld *w,const uint8_t *r
     memcpy(b->ram+0x01eb,ram+0x01eb,4);
     memcpy(b->ram+0x01bd,ram+0x01bd,4);
     memcpy(b->ram+0x0205,ram+0x0205,10);
+    /* F12 remains usable during a long job. Publish its current cheat flags,
+     * while the transaction itself uses the flags captured at Begin. */
+    memcpy(b->ram+0x425,ram+0x425,2);
     memcpy(ram,b->ram,sizeof b->ram);
     if (b->world) {
       b->world->map_anchor=w->map_anchor;
@@ -159,7 +234,23 @@ ScBuildResult ScConstructionCommitWorld(uint8_t *ram,ScWorld *w,const uint8_t *r
       memcpy(w,b->world,sizeof *w);
     }
   }
-  interp816_free(cpu); free(b->world); free(b); return result;
+  return result;
+}
+
+void ScConstructionFree(ScBuildWork *job) {
+  if(!job)return;
+  interp816_free(job->cpu);free(job->bus->world);free(job->bus);free(job);
+}
+ScBuildResult ScConstructionCommitWorld(uint8_t *ram,ScWorld *w,const uint8_t *rom,size_t size,const ScBuildPlan *p,unsigned *cost) {
+  if(cost)*cost=0;
+  /* Retain the existing invalid-plan result for synchronous callers. */
+  int width=w && w->active?ScWorldWidth(w):120,height=w && w->active?ScWorldHeight(w):100;
+  if(!rom || size!=0x80000 || p->tool>15 || !p->count || p->count>SC_BUILD_MAX ||
+      (p->tool>=10 && p->tool!=13 && p->tool!=14 && p->count!=1))return SC_BUILD_INVALID;
+  for(unsigned i=0;i<p->count;++i)if(p->cells[i].x<0 || p->cells[i].x>=width || p->cells[i].y<0 || p->cells[i].y>=height)return SC_BUILD_INVALID;
+  ScBuildWork *job=ScConstructionBegin(ram,w,rom,size,p);if(!job)return SC_BUILD_FAULT;
+  while(!ScConstructionStep(job,UINT_MAX)) {}
+  ScBuildResult result=ScConstructionFinish(job,ram,w,cost);ScConstructionFree(job);return result;
 }
 bool ScConstructionPowerBitmapReference(const uint8_t *ram,const ScWorld *w,const uint8_t *rom,size_t size,
                                uint8_t *bitmap,size_t bitmap_size) {

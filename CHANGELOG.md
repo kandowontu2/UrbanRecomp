@@ -1,5 +1,24 @@
 # Enhanced fork changelog
 
+## Unreleased — local placement and city-entry fixes
+
+- Replace per-zone drag-preview rectangles with a clipped shared grid; at
+  very distant zoom, show an outline instead of a solid subpixel fill. Cache
+  stationary selections so large drags do not rebuild or redraw every zone.
+- Run mouse construction in resumable private batches at the safe city-input
+  boundary, using compiled native C control flow and mapped world helpers.
+  Keep window events, rendering and music responsive and use spare frame-pacing
+  time to finish sooner. Publish the complete transaction once, preserving
+  original placement rules, costs, joins, gifts and the money cheat.
+- Reject unaffordable selections as soon as their cost exceeds funds, without
+  modifying the live city. Regression tests compare complete RAM/world results
+  against the original ROM with and without the money cheat, including 10,000
+  free zones, budgeted slices, cancellation and a million-zone selection.
+- Extend the sharp city-entry guard to Practice, normal new cities, Journey,
+  scenarios and saved cities. Observe the native black-to-bright fade on every
+  guest frame, including skipped fast-forward frames, before revealing terrain.
+
+
 ## 1.2.0 Enhanced Beta 16 — 2026-10-04
 
 - Add a native-font DEVELOPMENT SPEED page after map-size selection: 1x, 3x,

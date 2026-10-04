@@ -1,10 +1,13 @@
 #include "sc_construction.h"
+#include "sc_program.h"
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <time.h>
 
 static uint8_t rom[0x80000], ram[0x20000], before[0x20000];
 static ScBuildPlan plan;
@@ -26,7 +29,7 @@ static unsigned build(unsigned tool,int x0,int y0,int x1,int y1) {
 }
 int main(int argc,char **argv) {
   assert(argc==2); FILE *f=fopen(argv[1],"rb"); assert(f);
-  assert(fread(rom,1,sizeof rom,f)==sizeof rom); fclose(f);
+  assert(fread(rom,1,sizeof rom,f)==sizeof rom); fclose(f);ScProgramEnable(true);
   ScWorldReset(&world);world.active=world.huge=world.giant=true;
   assert(ScConstructionPlanWorld(&plan,&world,0,0,0,959,799));
   assert(plan.count==768000 && plan.cells[767999].x==959 && plan.cells[767999].y==799);
@@ -238,5 +241,60 @@ int main(int argc,char **argv) {
     for(int yy=0;yy<ScWorldHeight(&world);++yy) for(int xx=0;xx<ScWorldWidth(&world);++xx)
       if(xx<x || xx>=x+3 || yy<y || yy>=y+3) assert(!ScWorldCell(&world,xx,yy));
   }
+  /* Resumable C batches must match complete original-ROM placement, including
+   * spatial fields, money, RNG, staging and simulation-coordinate preservation. */
+  for(unsigned cheat=0;cheat<2;++cheat) for(unsigned tool=1;tool<=14;++tool) {
+    reset(1000000);ram[0x425]=cheat?2:0;ScWorldReset(&world);world.active=world.huge=world.giant=world.colossal=world.mega=true;
+    assert(ScConstructionPlanWorld(&plan,&world,tool,3800,3100,3806,3106));
+    putenv("SC_CONSTRUCTION_REFERENCE=1");
+    assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
+    memcpy(before,ram,sizeof ram);world_before=world;unsigned reference_cost=cost;
+    reset(1000000);ram[0x425]=cheat?2:0;ScWorldReset(&world);world.active=world.huge=world.giant=world.colossal=world.mega=true;
+    putenv("SC_CONSTRUCTION_REFERENCE=0");
+    ScBuildWork *job=ScConstructionBegin(ram,&world,rom,sizeof rom,&plan);assert(job);
+    unsigned slices=0;
+    while(!ScConstructionStep(job,37)) {
+      assert(++slices<100000);
+      assert(!ScWorldCell(&world,3800,3100)); /* private until Finish */
+      assert(word(0xb9d)==(1000000&65535));
+    }
+    assert(ScConstructionCompleted(job)==plan.count);
+    assert(ScConstructionFinish(job,ram,&world,&cost)==SC_BUILD_OK && cost==reference_cost);
+    assert(!memcmp(ram,before,sizeof ram) && !memcmp(&world,&world_before,sizeof world));
+    ScConstructionFree(job);
+  }
+  reset(20000);ScWorldReset(&world);world.active=world.huge=world.giant=world.colossal=world.mega=true;
+  assert(ScConstructionPlanWorld(&plan,&world,5,0,0,3837,3195));
+  assert(plan.count>1000000);memcpy(before,ram,sizeof ram);
+  ScBuildWork *job=ScConstructionBegin(ram,&world,rom,sizeof rom,&plan);assert(job);
+  unsigned slices=0;clock_t start=clock();
+  while(!ScConstructionStep(job,4096))assert(++slices<100000);
+  unsigned evaluated=ScConstructionCompleted(job);
+  assert(evaluated<=201 && ScConstructionFinish(job,ram,&world,&cost)==SC_BUILD_FUNDS);
+  assert(!memcmp(ram,before,sizeof ram) && !ScWorldCell(&world,0,0));
+  ScConstructionFree(job);
+  printf("PASS: million-zone selection rejected after %u affordable checks, %u bounded slices, %.2f ms; atomic native equivalence on all tools\n",evaluated,slices,1000.0*(clock()-start)/CLOCKS_PER_SEC);
+  /* Bulk free construction must complete, not take the insufficient-funds exit. */
+  for(unsigned reference=0;reference<2;++reference) {
+    reset(20000);ram[0x425]=2;ScWorldReset(&world);world.active=world.huge=world.giant=world.colossal=world.mega=true;
+    assert(ScConstructionPlanWorld(&plan,&world,5,255,255,552,552) && plan.count==10000);
+    putenv(reference?"SC_CONSTRUCTION_REFERENCE=1":"SC_CONSTRUCTION_REFERENCE=0");
+    job=ScConstructionBegin(ram,&world,rom,sizeof rom,&plan);assert(job);start=clock();
+    while(!ScConstructionStep(job,4096)) {}
+    assert(ScConstructionCompleted(job)==10000 && ScConstructionFinish(job,ram,&world,&cost)==SC_BUILD_OK && !cost);
+    ScConstructionFree(job);
+    printf("PASS: %u free zones, %s %.2f ms\n",plan.count,reference?"original ROM":"C batches",1000.0*(clock()-start)/CLOCKS_PER_SEC);
+    if(!reference) {world_before=world;memcpy(before,ram,sizeof ram);}
+    else assert(!memcmp(ram,before,sizeof ram) && !memcmp(&world,&world_before,sizeof world));
+  }
+  putenv("SC_CONSTRUCTION_REFERENCE=0");
+  job=ScConstructionBegin(ram,&world,rom,sizeof rom,&plan);assert(job);
+  assert(!ScConstructionStep(job,37));ScConstructionFree(job);
+  assert(!memcmp(ram,before,sizeof ram) && !memcmp(&world,&world_before,sizeof world));
+  job=ScConstructionBegin(ram,&world,rom,sizeof rom,&plan);assert(job);
+  while(!ScConstructionStep(job,4096)) {}
+  ram[0x425]=31;
+  assert(ScConstructionFinish(job,ram,&world,&cost)==SC_BUILD_OK && ram[0x425]==31);
+  ScConstructionFree(job);
   puts("PASS: native construction costs, locality, rollback, power, gifts and preserved simulation coordinates");
 }

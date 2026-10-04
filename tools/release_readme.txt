@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 16 - CITY SETUP AND LARGER MAPS
+URBAN RECOMP ENHANCED BETA 16 - LOCAL PLACEMENT / ENTRY FIXES
 ======================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -6,6 +6,11 @@ The runtime, assets, documentation, credits and all 19 restored songs are
 embedded. They unpack into a versioned private cache under LOCALAPPDATA.
 Saves and settings stay beside the portable EXE; existing installations are
 not replaced. No ROM or personal saves/settings are included.
+
+Local follow-up: cheaper large drag previews, responsive batched construction
+(including the money cheat), and sharp city entry across start/load paths.
+Very large selections still require processing time; they no longer block
+window events throughout placement. This build has not been published.
 
 Enhanced fork: https://github.com/kandowontu2/UrbanRecomp
 Original project: https://github.com/blackerking/UrbanRecomp

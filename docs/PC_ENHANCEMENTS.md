@@ -7,6 +7,21 @@ enhancements. Windows packages are available from
 
 ## Implemented
 
+Large drag selections use a clipped grid preview and resumable private placement
+batches. Rendering, window events and music continue while the transaction runs;
+the city simulation waits at a safe input boundary until the complete result is
+ready. Original placement rules, costs and the money cheat are preserved. Spare
+frame-pacing time also advances the job. Massive selections still take time:
+a local 3840x3200 replay placed 299,547 free residential zones in about 26 seconds,
+with presentation around 60 FPS during placement. A matching held-preview replay
+reduced average draw/presentation work from roughly 156 ms to 4.5 ms. Timings are
+machine-dependent and exclude any promise of instant map-wide construction.
+
+All ordinary city-start and saved-city entry paths keep their temporary setup
+image black until the native city fade is ready, preventing the transient blurry
+terrain before the completed sharp view. Fast-forward checks the fade on every
+guest frame, including frames whose expanded pixels are skipped.
+
 Windows builds launch without a console window. Start `UrbanRecomp.exe`
 directly; the optional batch launcher exits immediately after starting it.
 Developers can build with `-DSC_CONSOLE=ON` to retain the console. Command-line

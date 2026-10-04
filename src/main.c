@@ -139,7 +139,7 @@ static bool s_journey_arming;
 static unsigned s_journey_menu_selection;
 static unsigned s_loading_slot;
 static bool s_city_loading;
-static bool s_test_city_present_pending,s_test_city_fade_started,s_test_city_black_seen;
+static bool s_city_present_pending,s_city_fade_started,s_city_black_seen;
 static bool s_test_revealed,s_test_load_pending,s_test_generate_pending,s_test_saving,s_test_swap;
 static bool s_test_menu_pending;
 static uint8_t s_test_native_backup[0x8000],s_test_names_backup[32];
@@ -186,11 +186,12 @@ static const char *s_video_config = "sc-video.ini";
 static int s_window_width = 1024, s_window_height = 768;
 static ScVideoRect s_destination;
 static ScBuildPlan s_build_plan;
+static ScBuildWork *s_build_work;
+static uint64_t s_build_started;
 static bool s_build_pending, s_build_active, s_build_cancelled;
 static int s_build_x0, s_build_y0, s_build_x1, s_build_y1;
 static int s_build_scroll_x, s_build_scroll_y;
 static unsigned s_build_tool;
-static uint64_t s_build_release_frame;
 static ScClipboard s_clipboard;
 static unsigned s_clip_tool, s_clip_pending; /* 0 native, 1 Copy, 2 Paste */
 static ScMousePan s_middle_pan;
@@ -2666,7 +2667,7 @@ static bool test_city_begin_load(void) {
   uint32_t n;const uint8_t *record=ScSram_Extra(&n);
   if(!n) {
     s_test_generate_pending=true;
-    s_test_city_present_pending=true;s_test_city_fade_started=s_test_city_black_seen=false;
+    s_city_present_pending=true;s_city_fade_started=s_city_black_seen=false;
     return true;
   }
   ScWorld *world=malloc(sizeof *world);ScPopulation population;
@@ -2674,7 +2675,7 @@ static bool test_city_begin_load(void) {
   if(!valid) {fprintf(stderr,"[test city] City 3 record is invalid; saved file preserved\n");return false;}
   if(!test_city_private_sram(ScTestCityNativeSave(record,n)))return false;
   s_test_load_pending=true;ram_set_w(0x421,1);
-  s_test_city_present_pending=true;s_test_city_fade_started=s_test_city_black_seen=false;
+  s_city_present_pending=true;s_city_fade_started=s_city_black_seen=false;
   return true;
 }
 static void test_city_finish_save(void) {
@@ -3674,7 +3675,8 @@ static bool sc_program_host_boundary(const Interp816 *cpu) {
     if(s_save_dialog_active && cpu->pc==0xad54) return true;
     if(ScTileLookupOwns(cpu->pc)) return true;
     switch(cpu->pc) {
-    case 0x8948: /* city entry fade-in / prepared Test City reveal */
+    case 0x8907: /* common city initialization before any HUD/palette uploads */
+    case 0x8948: /* city entry fade-in */
     case 0xf1ed: /* map generation */
     case 0x8976:case 0x897f: /* warnings, construction, paste, census, power */
     case 0xe59b:case 0xa63c: /* Journey messages */
@@ -4336,8 +4338,16 @@ static bool run_one_frame(void) {
     if (s_rom_is_us) {
       /* The city setup enables terrain before HUD uploads and the original
        * fade-in task are ready. Keep this transient view behind black. */
-      if(s_test_city_present_pending && cpu->k==1 && cpu->pc==0x8948)
-        s_test_city_fade_started=true;
+      if((cpu->k==3 && (cpu->pc==0xc621 || cpu->pc==0xc66a ||
+            cpu->pc==0xc67f || cpu->pc==0xc8a1)) ||
+          (cpu->k==1 && cpu->pc==0x8907 && !s_city_present_pending)) {
+        s_city_present_pending=true;s_city_fade_started=s_city_black_seen=false;
+        if(getenv("SC_CITY_ENTRY_DIAG"))fprintf(stderr,"[city entry] prepare frame %llu pc %02x:%04x\n",(unsigned long long)s_frames,cpu->k,cpu->pc);
+      }
+      if(s_city_present_pending && cpu->k==1 && cpu->pc==0x8948) {
+        s_city_fade_started=true;
+        if(getenv("SC_CITY_ENTRY_DIAG"))fprintf(stderr,"[city entry] fade frame %llu\n",(unsigned long long)s_frames);
+      }
       if(s_test_revealed && cpu->k==2 && cpu->pc==0xbec6) {
         unsigned direction=ram_w(0xca)&12,choice=ram_w(0x421)%3;
         if(direction) {
@@ -4392,7 +4402,7 @@ static bool run_one_frame(void) {
       }
       if(s_test_menu_pending && cpu->k==3 && cpu->pc==0xd337)cpu->pc=0xd33c;
       if(s_test_menu_pending && cpu->k==3 && cpu->pc==0xd369)s_test_menu_pending=false;
-      if(cpu->k==3 && cpu->pc==0xd306) {s_size_selecting=s_speed_selecting=false;s_practice_size_pending=false;ScMapSizeMenuSet(false);}
+      if(cpu->k==3 && cpu->pc==0xd306) {s_city_present_pending=s_city_fade_started=s_city_black_seen=false;s_size_selecting=s_speed_selecting=false;s_practice_size_pending=false;ScMapSizeMenuSet(false);}
       if((s_size_selecting || s_speed_selecting) && cpu->k==3 && cpu->pc==0xd337) cpu->pc=0xd33b;
       if((s_size_selecting || s_speed_selecting) && cpu->k==3 && cpu->pc==0xd333 && (g_ram[0xc9]&0x80)) {
         if(s_speed_selecting && s_size_game_choice!=3) {
@@ -4498,9 +4508,10 @@ static bool run_one_frame(void) {
       s_native_power_active=false;
       if (s_development_speed>1) refresh_fast_power(true);
     }
-    if (s_build_pending && s_rom_is_us && cpu->k == 1 && cpu->pc == 0x897f &&
+    if (s_build_pending && !s_build_work && s_rom_is_us && cpu->k == 1 && cpu->pc == 0x897f &&
         cpu->dp == 0 && cpu->db == 0 && host_map_screen_live())
       commit_mouse_construction();
+    if(s_build_work)break;
     if (s_clip_pending && s_rom_is_us && cpu->k==1 && cpu->pc==0x897f &&
         cpu->dp==0 && cpu->db==0 && host_map_screen_live()) commit_clipboard();
     if (s_population.live && s_rom_is_us && cpu->k==1 && cpu->pc==0x897f &&
@@ -4804,7 +4815,7 @@ static bool run_one_frame(void) {
         s_test_generate_pending=false;s_practice_size_pending=false;s_journey_arming=false;
         reset_refresh_clocks();ScDevelopmentReset(&s_development);memset(&s_world_guest,0,sizeof s_world_guest);
         ScRendererResetHistory(&s_custom_renderer);
-        if(!ok) {s_test_city_present_pending=false;fprintf(stderr,"[test city] generation failed\n");}
+        if(!ok) {s_city_present_pending=false;fprintf(stderr,"[test city] generation failed\n");}
       }
       if(cpu->pc==0xc63c && s_world.test_city)ram_set_w(0x38,0);
       if(cpu->pc==0xc633 && s_practice_size_pending) {
@@ -5064,6 +5075,19 @@ static bool run_one_frame(void) {
   if (getenv("SC_ADDR_TRACE_ARM_ON_01ED")) {
     if (s_addr_trace_last_ed == 0xff) { s_addr_trace_last_ed = g_ram[0x01ed]; s_addr_trace_armed = false; }
     else if (!s_addr_trace_armed && g_ram[0x01ed] != s_addr_trace_last_ed) s_addr_trace_armed = true;
+  }
+  if(s_city_present_pending && g_ram[0x14]==0 && s_city_fade_started) {
+    bool dark=PPU_forcedBlank(g_ppu) || !PPU_brightness(g_ppu);
+    /* The native city fade also darkens CGRAM with INIDISP at full
+     * brightness. Wait for that black frame, not just forced blank. */
+    bool palette_dark=true;
+    for(unsigned i=0;i<256;++i) if(g_ppu->cgram[i]&32767) {palette_dark=false;break;}
+    dark|=palette_dark;
+    if(dark) s_city_black_seen=true;
+    else if(s_city_black_seen) {
+      s_city_present_pending=false;
+      if(getenv("SC_CITY_ENTRY_DIAG"))fprintf(stderr,"[city entry] reveal frame %llu zoom %g hud %u\n",(unsigned long long)s_frames,s_custom_renderer.map_zoom,ram_w(0x1d7));
+    }
   }
   return guard > 0;
 }
@@ -7488,6 +7512,7 @@ static bool load_state(const char *path) {
                     "Save it again with this build.\n", path);
     fseek(f, 0, SEEK_SET);
   }
+  ScConstructionFree(s_build_work);s_build_work=NULL;
   FileSli fs;
   fs.base.func = file_sli_read;
   fs.f = f;
@@ -7504,7 +7529,7 @@ static bool load_state(const char *path) {
   reset_refresh_clocks();
   s_journey_arming=false;
   s_city_loading=s_size_selecting=s_speed_selecting=s_practice_size_pending=false;
-  s_test_city_present_pending=s_test_city_fade_started=s_test_city_black_seen=false;
+  s_city_present_pending=s_city_fade_started=s_city_black_seen=false;
   ScMapSizeMenuSet(false);
   ScWorldReset(&s_world); memset(&s_world_guest,0,sizeof s_world_guest);
   ScPopulationImport(&s_population, g_ram);
@@ -8091,21 +8116,69 @@ static void trigger_disaster_bit(unsigned bit, const char *what) {
 static uint8_t *s_rom_data;
 static uint32_t s_rom_size;
 static void commit_mouse_construction(void) {
-  /* Only the city input boundary calls this; the guest holds no simulation
-   * cell or partially computed budget at this point. */
-  s_build_pending = false;
+  /* Suspend the guest at its idle input boundary until an atomic private
+   * transaction is ready. Host events, presentation and music keep running. */
   if (ram_w(0xd7) || ram_w(0x020d) != s_build_plan.tool ||
-      (int16_t)ram_w(0x01bd) != s_build_scroll_x || (int16_t)ram_w(0x01bf) != s_build_scroll_y)
-    return;
-  unsigned cost = 0;
-  uint64_t started = SDL_GetPerformanceCounter();
-  ScBuildResult r = ScConstructionCommitWorld(g_ram, &s_world, s_rom_data, s_rom_size, &s_build_plan, &cost);
-  fprintf(stderr, "[mouse build] %u placements, cost %u, %s\n", s_build_plan.count, cost,
-      r == SC_BUILD_OK ? "committed" : r == SC_BUILD_FUNDS ? "insufficient funds" : "rejected");
-  if (getenv("SC_PERF")) fprintf(stderr, "[mouse latency] queue %llu frames, build %.2f ms\n",
-      (unsigned long long)(s_frames-s_build_release_frame),
-      (SDL_GetPerformanceCounter()-started)*1000.0/SDL_GetPerformanceFrequency());
-  if (r != SC_BUILD_OK) g_ram[5] = 2; /* The game's normal reject sound. */
+      (int16_t)ram_w(0x01bd) != s_build_scroll_x || (int16_t)ram_w(0x01bf) != s_build_scroll_y) {
+    s_build_pending=false;return;
+  }
+  s_build_started=SDL_GetPerformanceCounter();
+  s_build_work=ScConstructionBegin(g_ram,&s_world,s_rom_data,s_rom_size,&s_build_plan);
+  if(!s_build_work) {s_build_pending=false;g_ram[5]=2;}
+}
+static void poll_mouse_construction_until(uint64_t deadline) {
+  if(!s_build_work)return;
+  do {
+    if(ScConstructionStep(s_build_work,4096)) {
+      unsigned cost=0,completed=ScConstructionCompleted(s_build_work);
+      ScBuildResult r=ScConstructionFinish(s_build_work,g_ram,&s_world,&cost);
+      ScConstructionFree(s_build_work);s_build_work=NULL;s_build_pending=false;
+      fprintf(stderr,"[mouse build] %u placements, evaluated %u, cost %u, %s\n",s_build_plan.count,completed,cost,
+          r==SC_BUILD_OK?"committed":r==SC_BUILD_FUNDS?"insufficient funds":"rejected");
+      if(getenv("SC_PERF"))fprintf(stderr,"[mouse latency] build %.2f ms\n",(SDL_GetPerformanceCounter()-s_build_started)*1000.0/SDL_GetPerformanceFrequency());
+      if(r!=SC_BUILD_OK)g_ram[5]=2;
+      return;
+    }
+  } while(SDL_GetPerformanceCounter()<deadline);
+}
+static void poll_mouse_construction(void) {
+  poll_mouse_construction_until(SDL_GetPerformanceCounter()+SDL_GetPerformanceFrequency()/250);
+}
+static void draw_build_preview(SDL_Renderer *renderer,ScViewport v) {
+  if(!s_build_plan.count)return;
+  const ScBuildCell first=s_build_plan.cells[0],last=s_build_plan.cells[s_build_plan.count-1];
+  static const int large_steps[]={4,4,6,4,4};
+  int step=s_build_tool>=10 && s_build_tool<=14?large_steps[s_build_tool-10]:s_build_tool>=5?3:1;
+  int left=first.x<last.x?first.x:last.x,top=first.y<last.y?first.y:last.y;
+  int right=(first.x>last.x?first.x:last.x)+step,bottom=(first.y>last.y?first.y:last.y)+step;
+  int scroll_x=s_custom_video.enabled?s_custom_renderer.scroll_x+s_custom_renderer.scroll_adjust_x:s_build_scroll_x*8;
+  int scroll_y=s_custom_video.enabled?s_custom_renderer.scroll_y+s_custom_renderer.scroll_adjust_y:s_build_scroll_y*8;
+  double x0=left*8-scroll_x,y0=top*8-scroll_y,x1=right*8-scroll_x,y1=bottom*8-scroll_y;
+  if(s_custom_video.enabled) {ScRendererProjectCity(&s_custom_renderer,&x0,&y0);ScRendererProjectCity(&s_custom_renderer,&x1,&y1);}
+  double sx=(double)s_destination.w/v.width,sy=(double)s_destination.h/v.height;
+  x0=s_destination.x+(v.core_x+x0)*sx;x1=s_destination.x+(v.core_x+x1)*sx;
+  y0=s_destination.y+(v.core_y+y0)*sy;y1=s_destination.y+(v.core_y+y1)*sy;
+  double dx=(x1-x0)*step/(right-left),dy=(y1-y0)*step/(bottom-top);
+  SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
+  SDL_SetRenderDrawColor(renderer,255,230,60,220);
+  int clip_top=(int)(s_destination.y+(v.core_y+46)*sy);
+  if(clip_top<s_destination.y)clip_top=s_destination.y;
+  SDL_Rect clip={(int)s_destination.x,clip_top,(int)s_destination.w,(int)(s_destination.y+s_destination.h-clip_top)};
+  SDL_RenderSetClipRect(renderer,&clip);
+  ScRect outer=SC_RECT(x0,y0,x1-x0,y1-y0);SDL_RenderDrawRect(renderer,&outer);
+  /* Shared grid lines replace four draw calls per zone. At subpixel scale
+   * the outer outline stays readable instead of becoming a solid yellow fill. */
+  if(dx>=4) {
+    int begin=(int)floor((clip.x-x0)/dx)+1;if(begin<1)begin=1;
+    for(int i=begin;i<(right-left)/step && x0+i*dx<clip.x+clip.w;++i)
+      SDL_RenderDrawLine(renderer,x0+i*dx,y0,x0+i*dx,y1);
+  }
+  if(dy>=4) {
+    int begin=(int)floor((clip.y-y0)/dy)+1;if(begin<1)begin=1;
+    for(int i=begin;i<(bottom-top)/step && y0+i*dy<clip.y+clip.h;++i)
+      SDL_RenderDrawLine(renderer,x0,y0+i*dy,x1,y0+i*dy);
+  }
+  SDL_RenderSetClipRect(renderer,NULL);
 }
 static uint8_t clipboard_rom_read(void *ctx,uint32_t address) {
   const ScRenderer *r=ctx;
@@ -9363,6 +9436,8 @@ static int run_qualification(uint64_t frames) {
               (unsigned long long)f);
       return 1;
     }
+
+    while(s_build_work)poll_mouse_construction();
 
     uint64_t h = 1469598103934665603ULL;
     for (size_t i = 0; i < sizeof(g_ram); i++) { h ^= g_ram[i]; h *= 1099511628211ULL; }
@@ -11672,7 +11747,7 @@ int main(int argc, char **argv) {
     bool pan_was_latched=s_keyboard_pan_latched;
     bool keyboard_pan_allowed=s_rom_is_us && s_custom_video.enabled &&
         s_custom_renderer.city_input && !s_custom_renderer.advisor_frame &&
-        !s_custom_renderer.map_hold && !s_test_city_present_pending && !s_menu_open &&
+        !s_custom_renderer.map_hold && !s_city_present_pending && !s_menu_open &&
         !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3] &&
         !s_middle_pan.active && !s_build_active && !s_build_pending &&
         !s_clip_drag && !s_clip_pending && !mouse_raw_left;
@@ -11796,6 +11871,7 @@ int main(int argc, char **argv) {
         s_build_scroll_x = (int16_t)ram_w(0x01bd); s_build_scroll_y = (int16_t)ram_w(0x01bf);
         s_build_x0 = s_custom_video.enabled ? mouse_city_x : s_build_scroll_x + mouse_target_x / 8;
         s_build_y0 = s_custom_video.enabled ? mouse_city_y : s_build_scroll_y + mouse_target_y / 8;
+        s_build_plan.count=0;
         s_build_active = true; s_build_cancelled = false;
         SDL_CaptureMouse(true);
       }
@@ -11806,16 +11882,17 @@ int main(int argc, char **argv) {
           s_build_active = false; s_build_cancelled = true;
         } else {
           if (supported) {
-            s_build_x1 = s_custom_video.enabled ? mouse_city_x : s_build_scroll_x + mouse_target_x / 8;
-            s_build_y1 = s_custom_video.enabled ? mouse_city_y : s_build_scroll_y + mouse_target_y / 8;
-            ScConstructionPlanWorld(&s_build_plan, &s_world, s_build_tool,
-                s_build_x0, s_build_y0, s_build_x1, s_build_y1);
+            int x=s_custom_video.enabled?mouse_city_x:s_build_scroll_x+mouse_target_x/8;
+            int y=s_custom_video.enabled?mouse_city_y:s_build_scroll_y+mouse_target_y/8;
+            if(!s_build_plan.count || x!=s_build_x1 || y!=s_build_y1) {
+              s_build_x1=x;s_build_y1=y;
+              ScConstructionPlanWorld(&s_build_plan,&s_world,s_build_tool,s_build_x0,s_build_y0,x,y);
+            }
           }
           /* Leaving the canvas/HUD retains the last valid plan. Captured
            * release commits it; re-entry continues the same gesture. */
           if (!mouse_raw_left && previous_left && s_build_plan.count) {
             s_build_active = false; s_build_pending = true;
-            s_build_release_frame = s_frames;
           }
         }
       }
@@ -11978,8 +12055,9 @@ int main(int argc, char **argv) {
      * (and therefore `texture` below) simply isn't touched this iteration,
      * so whatever was last rendered stays on screen underneath the overlay. */
     bool guard_tripped = false;
-    if (!s_menu_open) {
-      for (int ffi = 0; ffi < frames_this_iter; ffi++) {
+    poll_mouse_construction();
+    if (!s_menu_open && !s_build_work) {
+      for (int ffi = 0; ffi < frames_this_iter && !s_build_work; ffi++) {
         /* Reserve a fully drawn final frame. Tab uses spare display time,
          * rather than requiring six frames regardless of city workload.
          * Intermediate frames retain native PPU/APU timing and sprite
@@ -12230,42 +12308,10 @@ int main(int argc, char **argv) {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     ScRect dest = SC_RECT(s_destination.x, s_destination.y, s_destination.w, s_destination.h);
-    bool hide_city_setup=s_test_city_present_pending && g_ram[0x14]==0;
-    if(hide_city_setup && s_test_city_fade_started) {
-      bool dark=PPU_forcedBlank(g_ppu) || !PPU_brightness(g_ppu);
-      /* The native city fade also darkens CGRAM with INIDISP at full
-       * brightness. Wait for that black frame, not just forced blank. */
-      bool palette_dark=true;
-      for(unsigned i=0;i<256;++i) if(g_ppu->cgram[i]&32767) {palette_dark=false;break;}
-      dark|=palette_dark;
-      if(dark) s_test_city_black_seen=true;
-      else if(s_test_city_black_seen) {
-        s_test_city_present_pending=false;hide_city_setup=false;
-      }
-    }
+    bool hide_city_setup=s_city_present_pending && g_ram[0x14]==0;
     bool _cok = hide_city_setup || (SDL_RenderCopy(renderer, present_texture, NULL, &dest) SC_SDL_OK);
-    if ((s_build_active || s_build_pending) && host_map_screen_live() && !s_menu_open) {
-      ScViewport v = s_custom_video.enabled ? s_custom_renderer.view : viewport;
-      double sx = (double)s_destination.w / v.width;
-      double sy = (double)s_destination.h / v.height;
-      static const int large_steps[]={4,4,6,4,4};
-      int step = s_build_tool>=10 && s_build_tool<=14?large_steps[s_build_tool-10]:s_build_tool>=5?3:1;
-      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-      SDL_SetRenderDrawColor(renderer, 255, 230, 60, 220);
-      for (unsigned i = 0; i < s_build_plan.count; ++i) {
-        int gx = s_build_plan.cells[i].x * 8 - (s_custom_video.enabled ?
-            s_custom_renderer.scroll_x+s_custom_renderer.scroll_adjust_x : s_build_scroll_x*8);
-        int gy = s_build_plan.cells[i].y * 8 - (s_custom_video.enabled ?
-            s_custom_renderer.scroll_y+s_custom_renderer.scroll_adjust_y : s_build_scroll_y*8);
-        double px=gx,py=gy,px1=gx+step*8,py1=gy+step*8;
-        if(s_custom_video.enabled) {ScRendererProjectCity(&s_custom_renderer,&px,&py);ScRendererProjectCity(&s_custom_renderer,&px1,&py1);}
-        if (px+v.core_x < 0 || py+v.core_y < 0 ||
-            px1+v.core_x > v.width || py1+v.core_y > v.height) continue;
-        ScRect r = SC_RECT(s_destination.x + (v.core_x + px) * sx,
-                          s_destination.y + (v.core_y + py) * sy, (px1-px) * sx, (py1-py) * sy);
-        SDL_RenderDrawRect(renderer, &r);
-      }
-    }
+    if(!hide_city_setup && (s_build_active || s_build_pending) && host_map_screen_live() && !s_menu_open)
+      draw_build_preview(renderer,s_custom_video.enabled?s_custom_renderer.view:viewport);
     if(clipboard_ui && !s_menu_open && (s_clip_drag || s_clip_pending || (s_clip_tool==2 && s_clip_hover))) {
       ScViewport v=s_custom_video.enabled?s_custom_renderer.view:viewport;
       double sx=(double)s_destination.w/v.width,sy=(double)s_destination.h/v.height;
@@ -12413,6 +12459,13 @@ int main(int argc, char **argv) {
      * to input-to-display latency on every otherwise fast frame. */
     next_frame_deadline += (uint64_t)(kTargetFrameSeconds * (double)SDL_GetPerformanceFrequency());
     uint64_t now = SDL_GetPerformanceCounter();
+    /* Use otherwise idle pacing time for private placement, keeping a short
+     * deadline and polling window events again at the next 60 Hz iteration. */
+    if(s_build_work && now+SDL_GetPerformanceFrequency()/1000<next_frame_deadline) {
+      uint64_t work_t0=now;
+      poll_mouse_construction_until(next_frame_deadline-SDL_GetPerformanceFrequency()/1000);
+      now=SDL_GetPerformanceCounter();SC_PERF_ADD(kPerfEmu,work_t0,now);
+    }
     const uint64_t sleep_t0 = now;
     if (now < next_frame_deadline) {
       double remaining_ms = (double)(next_frame_deadline - now) * 1000.0 /
@@ -12491,6 +12544,7 @@ int main(int argc, char **argv) {
         (unsigned long long)stats.write_failures);
   }
   ScMusicStop();
+  ScConstructionFree(s_build_work);s_build_work=NULL;
   if(perf_frame_file) fclose(perf_frame_file);
   if(bank_frame_file) fclose(bank_frame_file);
   if(s_native_missing_file) {fclose(s_native_missing_file);s_native_missing_file=NULL;}
