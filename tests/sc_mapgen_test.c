@@ -42,14 +42,37 @@ static void geographic_check(ScMapGenState *st,unsigned seed,unsigned size) {
     if(!crossing || counts[0]<=n/4 || counts[1]<=n/20 || counts[2]<=n/100) fprintf(stderr,"failed seed %u size %u: crossing %d counts %u,%u,%u\n",seed,size,crossing,counts[0],counts[1],counts[2]);
     assert(crossing && counts[0]>n/4 && counts[1]>n/20 && counts[2]>n/100);
     for(unsigned i=0;i<4;++i)assert(quadrants[i]>0);
+    if(size)for(unsigned y=1;y<h-1;++y)for(unsigned x=1;x<w-1;++x) {
+        unsigned at=y*w+x,v=st->map[at];if(!v || v>=20)continue;
+        unsigned mask=0,neighbours[]={at-1,at+w,at+1,at-w};
+        for(unsigned d=0;d<4;++d) {
+            unsigned n=st->map[neighbours[d]];
+            if(!n || n>=20)mask|=1u<<d;
+        }
+        assert(mask!=5 && mask!=10 && mask!=7 && mask!=11 && mask!=13 && mask!=14 && mask!=15);
+    }
     ScMapPreview preview;sc_mapgen_preview_build(&preview,st->map,w,h,seed);
     preview.frame=0;
     for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x)assert(!sc_mapgen_preview_cell(&preview,x,y));
     preview.frame=45;
     for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x)assert(sc_mapgen_preview_cell(&preview,x,y)<0x14);
     preview.frame=90;
-    for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x)
-        assert(sc_mapgen_preview_cell(&preview,x,y)==st->map[((uint64_t)y*h/100)*w+(uint64_t)x*w/120]);
+    for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x) {
+        unsigned v=sc_mapgen_preview_cell(&preview,x,y);assert(v<38);
+        if(!size)assert(v==st->map[y*w+x]);
+    }
+    sc_mapgen_preview_zoom(&preview,8,.25,.75);
+    assert(preview.zoom==8 && preview.center_x>=w/16.0 && preview.center_y<=h-h/16.0);
+    double cx=preview.center_x,cy=preview.center_y;
+    sc_mapgen_preview_pan(&preview,-.1,-.1);
+    assert(preview.center_x<cx && preview.center_y<cy);
+    cx=preview.center_x;cy=preview.center_y;
+    sc_mapgen_preview_pan(&preview,0,0);
+    assert(preview.center_x==cx && preview.center_y==cy);
+    sc_mapgen_preview_zoom(&preview,.001,.25,.75);
+    assert(preview.zoom==1 && preview.center_x==w*.5 && preview.center_y==h*.5);
+    sc_mapgen_preview_pan(&preview,10,-10);
+    assert(preview.center_x==w*.5 && preview.center_y==h*.5);
     free(queue);free(seen);
     printf("geography seed %u size %u: land %.1f%% water %.1f%% trees %.1f%%\n",seed,size,
         counts[0]*100.0/n,counts[1]*100.0/n,counts[2]*100.0/n);
@@ -133,7 +156,6 @@ int main(void) {
       assert(g->state.map[3071999]==0xc123 && g->state.map[0]==first && g->before==g->after);
     }
     uint64_t last=0;
-    static uint8_t fixed_classes[2][240*200];
     for(unsigned size=0;size<6;++size)for(unsigned seed=0;seed<(size<2?16:2);++seed) {
         ScMapGenPrng p,q;sc_mapgen_seed(&p,0x5c00,seed,0,0,2,0);q=p;
         sc_mapgen_generate_geographic(&p,&g->state,size);
@@ -143,15 +165,31 @@ int main(void) {
         uint64_t current=hash(g->state.map,cells);assert(current!=last);last=current;
         assert(g->before==g->after && g->after==UINT64_C(0xfacedeed98765432));
         geographic_check(&g->state,seed,size);
-        /* Enlarging the world adds districts; it cannot stretch the existing
-         * interior's river widths, lake shapes or forest patches. Exclude the
-         * outer coast and ignore native cosmetic shoreline/tree variants. */
-        if(size && seed<2)for(unsigned y=24;y<176;++y)for(unsigned x=24;x<216;++x) {
-            unsigned v=g->state.map[y*g->state.width+x],type=!v?0:v<20?1:2;
-            if(size==1)fixed_classes[seed][y*240+x]=(uint8_t)type;
-            else assert(fixed_classes[seed][y*240+x]==type);
+        /* Growing the map adds native-scale reaches, not map-sized channels.
+         * Most horizontal/vertical water spans remain under 40 cells wide. */
+        if(size) {
+            unsigned small=0,total=0,w=g->state.width,h=g->state.height;
+            for(unsigned y=24;y<h-24;y+=7) {
+                unsigned run=0;
+                for(unsigned x=24;x<w-24;++x) {
+                    unsigned v=g->state.map[y*w+x];
+                    if(v && v<20)++run;
+                    else if(run) {++total;small+=run<40;run=0;}
+                }
+            }
+            assert(total && small*4>total*3);
         }
     }
+    /* A narrow river between the old point samples remains visible in both
+     * the native overview and the sharper display-sized preview. */
+    memset(again->map,0,240*200*2);
+    for(unsigned y=0;y<200;++y)again->map[y*240+1]=1;
+    ScMapPreview preview;sc_mapgen_preview_build(&preview,again->map,240,200,123);
+    preview.frame=90;
+    for(unsigned y=0;y<100;++y)assert(sc_mapgen_preview_cell(&preview,0,y)==1);
+    uint8_t cells[240*200],reveal[240*200];
+    sc_mapgen_preview_raster(&preview,cells,reveal,240,200);
+    assert(cells[1]==1 && !cells[0] && !cells[2]);
     free(g); free(again);
     puts("PASS: 16 stock fingerprints, 40 deterministic river/forest/coast seeds across all six sizes through 3840x3200, connected water, feature coverage, preview phases, far-bank cells and bounds guards");
 }

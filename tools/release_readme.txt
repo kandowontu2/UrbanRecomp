@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 16 - LOCAL TERRAIN / MOUSE FIXES
+URBAN RECOMP ENHANCED BETA 16 - LOCAL PREVIEW / TOOL WINDOW FIXES
 ======================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -10,6 +10,14 @@ not replaced. No ROM or personal saves/settings are included.
 Local follow-up: connected rivers, tributaries, lakes, coasts/islands and forest
 districts on every size, with staged map-select previews. Expanded maps add
 more terrain features at original tile scale instead of stretching them.
+Rivers use curved reaches with varied headings instead of parallel bands,
+and narrow water nubs are removed before native shoreline fitting.
+Map previews draw sharply at display resolution. Ctrl+wheel zooms toward
+the mouse; middle mouse drags. Click the preview to expand it across the
+window, then click again or press Esc to return to map selection.
+Tool-window shadows stay over the zoomed city without full-size building
+fragments. GO TO MENU restores the main menu, and Resume aligns with the
+other choices. Preview textures are cached while the image is unchanged.
 Startup/setup/load lists show a separate native mouse hand and retain the
 arrow beside the hovered option. Keyboard/gamepad uses native selection jumps.
 Also included: cheaper large drag previews, responsive batched construction

@@ -723,6 +723,21 @@ int main(void) {
     word(ram,0x379,255);
     for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
     assert(r.zoom_frame && r.zoom_hud && !r.city_input && r.city_overlay_frame);
+    /* Poisoned native city pixels must never leak through a BG3 menu shadow,
+     * on either the CPU or deferred GPU path. Compose the UI ink itself. */
+    p->bgXsc[2]=0x60;p->cgram[2]=31;p->bgmode=9;
+    for(int cell=0;cell<1024;++cell)p->vram[0x6000+cell]=0x2001;
+    for(int y=0;y<8;++y)p->vram[8+y]=0xff00;
+    for(int deferred=0;deferred<2;++deferred) {
+        r.defer_terrain=deferred;
+        for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+        assert(ScRendererPixel(&r,r.view.core_x+100,100)==0xffff0000);
+        assert(ScRendererPixel(&r,r.view.core_x+40,50)==0xffff0000);
+    }
+    p->bgmode=1;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(!r.advisor_pixels[100*256+100]);
+    r.defer_terrain=false;
     word(ram,0x379,0);ram[0x391]=255;ram[0xe3]=255;
     for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
     assert(r.zoom_frame && r.zoom_hud && !r.city_input && r.city_overlay_frame);
@@ -737,7 +752,7 @@ int main(void) {
     p->inidisp=15;p->bgmode=1;p->screenEnabled[0]=2;p->bgXsc[1]=0x50;
     for(unsigned i=0;i<1024;++i)p->vram[0x5000+i]=7<<10;
     p->cgram[123]=31<<5;p->cgram[125]=31<<10;p->cgram[120]=31;
-    rom[0x1148e]=11;rom[0x1148f]=13;rom[0x114a6]=8;word(ram,0x14,5);
+    rom[0x1148e]=11;rom[0x1148f]=13;rom[0x114a2]=8;rom[0x114a6]=13;word(ram,0x14,5);
     r.map_preview.active=1;r.map_preview.cells[0]=1;r.map_preview.reveal[0]=10;
     r.map_preview.cells[1]=0x18;r.map_preview.reveal[1]=50;
     r.map_zoom=.015625;r.defer_terrain=false;

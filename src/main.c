@@ -141,6 +141,8 @@ static unsigned s_loading_slot;
 static bool s_city_loading;
 static ScMouseUiPointer s_ui_mouse_pointer;
 static uint64_t s_preview_started;
+static bool s_preview_expanded,s_preview_complete,s_preview_left_down,s_preview_click_owned,s_preview_input_blocked;
+static double s_preview_anchor_x=.5,s_preview_anchor_y=.5,s_preview_cursor_x,s_preview_cursor_y;
 static bool s_city_present_pending,s_city_fade_started,s_city_black_seen;
 static bool s_test_revealed,s_test_load_pending,s_test_generate_pending,s_test_saving,s_test_swap;
 static bool s_test_menu_pending;
@@ -4317,6 +4319,7 @@ static bool run_one_frame(void) {
         }
         sc_mapgen_preview_build(&s_custom_renderer.map_preview,gs.map,
             s_world.active?ScWorldWidth(&s_world):120,s_world.active?ScWorldHeight(&s_world):100,pr.s0);
+        s_preview_expanded=s_preview_complete=false;
         /* Generation precedes the native Please wait panel. Start the reveal
          * only when map selection is visible, so that panel cannot consume it. */
         s_preview_started=0;
@@ -4430,7 +4433,11 @@ static bool run_one_frame(void) {
       }
       if(s_test_menu_pending && cpu->k==3 && cpu->pc==0xd337)cpu->pc=0xd33c;
       if(s_test_menu_pending && cpu->k==3 && cpu->pc==0xd369)s_test_menu_pending=false;
-      if(cpu->k==3 && cpu->pc==0xd306) {s_city_present_pending=s_city_fade_started=s_city_black_seen=false;s_size_selecting=s_speed_selecting=false;s_practice_size_pending=false;ScMapSizeMenuSet(false);}
+      if(cpu->k==3 && (cpu->pc==0xd306 || cpu->pc==0xd30f)) {
+        if(getenv("SC_SETTINGS_DIAG"))fprintf(stderr,"[city setup] reset main entry %04x speed-page %d\n",cpu->pc,ScDevelopmentMenuActive());
+        s_city_present_pending=s_city_fade_started=s_city_black_seen=false;
+        s_size_selecting=s_speed_selecting=s_practice_size_pending=false;ScMapSizeMenuSet(false);
+      }
       if((s_size_selecting || s_speed_selecting) && cpu->k==3 && cpu->pc==0xd337) cpu->pc=0xd33b;
       if((s_size_selecting || s_speed_selecting) && cpu->k==3 && cpu->pc==0xd333 && (g_ram[0xc9]&0x80)) {
         if(s_speed_selecting && s_size_game_choice!=3) {
@@ -4443,12 +4450,16 @@ static bool run_one_frame(void) {
         cpu->pc=0xd370;
       }
       if((ScMapSizeMenuActive() || ScDevelopmentMenuActive()) && cpu->k==2 && cpu->pc==0xbcbd) cpu->pc=0xbcd0;
+      /* Resume uses its own cartridge text template, whose left edge is
+       * twelve pixels to the right of the extended menu's other choices. */
+      if(cpu->k==2 && cpu->pc==0xbcc1)ram_set_w(0x25d,124);
       /* Expand the decompressed panel BEFORE its first DMA. A VRAM-only
        * edit is overwritten by that pending upload during the entry fade. */
       if(cpu->k==2 && cpu->pc==0xbb89)
         ScJourneyMenuFrame((uint16_t *)(g_ram+0x8000),0x3000);
       /* Extend the real five-choice menu and its native hand sprite. */
       if(cpu->k==2 && cpu->pc==0xbcd6) {
+        ram_set_w(0x25d,136);
         ScJourneyMenuFont(g_ppu->vram);
         ScJourneyMenuFrame(g_ppu->vram,PPU_bgTilemapAdr(g_ppu,2));
       }
@@ -7543,6 +7554,7 @@ static bool load_state(const char *path) {
   s_ui_mouse_pointer=(ScMouseUiPointer){0};
   s_custom_renderer.menu_pointer_active=false;
   s_custom_renderer.map_preview.active=0;s_preview_started=0;
+  s_preview_expanded=s_preview_complete=s_preview_left_down=s_preview_click_owned=s_preview_input_blocked=false;
   ScConstructionFree(s_build_work);s_build_work=NULL;
   FileSli fs;
   fs.base.func = file_sli_read;
@@ -8174,6 +8186,79 @@ static void poll_mouse_construction_until(uint64_t deadline) {
 }
 static void poll_mouse_construction(void) {
   poll_mouse_construction_until(SDL_GetPerformanceCounter()+SDL_GetPerformanceFrequency()/250);
+}
+static SDL_Texture *s_preview_texture;
+static uint8_t *s_preview_cells,*s_preview_reveal;
+static unsigned s_preview_width,s_preview_height,s_preview_revision;
+static unsigned s_preview_frame=UINT_MAX;
+static uint32_t s_preview_palette[38];
+static bool map_selection_preview_live(void) {
+  return s_custom_renderer.map_preview.active && s_custom_renderer.map_preview.source &&
+      (ram_w(0x14)==5 || ram_w(0x14)==6) && !ram_w(0xb31);
+}
+static ScRect map_selection_preview_rect(ScViewport v,int dw,int dh) {
+  double sx=(double)s_destination.w/v.width,sy=(double)s_destination.h/v.height;
+  if(s_preview_expanded) {
+    double w=fmin(dw,dh*1.2),h=w/1.2;
+    return SC_RECT((dw-w)*.5,(dh-h)*.5,w,h);
+  }
+  return SC_RECT(s_destination.x+(v.core_x+48)*sx,s_destination.y+(v.core_y+88)*sy,120*sx,100*sy);
+}
+static void draw_map_selection_preview(SDL_Renderer *renderer,ScViewport v) {
+  ScMapPreview *p=&s_custom_renderer.map_preview;
+  if(!p->active || !p->source || (ram_w(0x14)!=5 && ram_w(0x14)!=6) ||
+      ram_w(0xb31) || !(g_ppu->screenEnabled[0]&2))return;
+  double sx=(double)s_destination.w/v.width,sy=(double)s_destination.h/v.height;
+  int dw,dh;SDL_GetRendererOutputSize(renderer,&dw,&dh);
+  ScRect rect=map_selection_preview_rect(v,dw,dh);
+  unsigned w=(unsigned)ceil(rect.w),h=(unsigned)ceil(rect.h);
+  if(w<120)w=120;if(h<100)h=100;if(w>2048)w=2048;if(h>2048)h=2048;
+  if(!s_preview_texture || w!=s_preview_width || h!=s_preview_height) {
+    SDL_Texture *texture=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,w,h);
+    uint8_t *cells=malloc((size_t)w*h),*reveal=malloc((size_t)w*h);
+    if(!texture || !cells || !reveal) {if(texture)SDL_DestroyTexture(texture);free(cells);free(reveal);return;}
+    if(s_preview_texture)SDL_DestroyTexture(s_preview_texture);
+    free(s_preview_cells);free(s_preview_reveal);
+    s_preview_texture=texture;s_preview_cells=cells;s_preview_reveal=reveal;
+    s_preview_width=w;s_preview_height=h;s_preview_revision=0;s_preview_frame=UINT_MAX;
+    snesrecomp_sdl_set_texture_linear(texture,false);
+  }
+  bool upload=s_preview_revision!=p->revision || s_preview_frame!=p->frame ||
+      memcmp(s_preview_palette,s_custom_renderer.preview_colors,sizeof s_preview_palette)!=0;
+  if(s_preview_revision!=p->revision) {
+    sc_mapgen_preview_raster(p,s_preview_cells,s_preview_reveal,w,h);
+    s_preview_revision=p->revision;
+  }
+  if(upload) {
+    void *data;int pitch;
+    if(!(SDL_LockTexture(s_preview_texture,NULL,&data,&pitch) SC_SDL_OK))return;
+    for(unsigned y=0;y<h;++y) {
+      uint32_t *row=(uint32_t *)((uint8_t *)data+(size_t)y*pitch);
+      for(unsigned x=0;x<w;++x) {
+        unsigned at=y*w+x,ci=p->frame>=s_preview_reveal[at]?s_preview_cells[at]:0;
+        row[x]=s_custom_renderer.preview_colors[ci<38?ci:0];
+      }
+    }
+    SDL_UnlockTexture(s_preview_texture);
+    s_preview_frame=p->frame;memcpy(s_preview_palette,s_custom_renderer.preview_colors,sizeof s_preview_palette);
+  }
+  if(s_preview_expanded) {
+    SDL_SetRenderDrawColor(renderer,0,0,0,255);SDL_RenderClear(renderer);
+  }
+  SDL_RenderCopy(renderer,s_preview_texture,NULL,&rect);
+  /* Redraw the fixed-size hand above the detailed preview only. The native
+   * buttons, frame and cursor elsewhere keep their original composition. */
+  if(s_ui_mouse_pointer.active && !s_middle_pan.active) {
+    SDL_Rect clip={(int)rect.x,(int)rect.y,(int)ceil(rect.w),(int)ceil(rect.h)};
+    SDL_RenderSetClipRect(renderer,&clip);
+    for(int y=0;y<16;++y)for(int x=0;x<16;++x) {
+      uint32_t ink=ScRendererHandPixel(g_ppu,x,y);if(!ink)continue;
+      ScRect pixel=SC_RECT(s_preview_cursor_x+(x-SC_MOUSE_HAND_HOT_X)*sx,
+        s_preview_cursor_y+(y-SC_MOUSE_HAND_HOT_Y)*sy,sx,sy);
+      SDL_SetRenderDrawColor(renderer,ink>>16&255,ink>>8&255,ink&255,255);SDL_RenderFillRect(renderer,&pixel);
+    }
+    SDL_RenderSetClipRect(renderer,NULL);
+  }
 }
 static void draw_build_preview(SDL_Renderer *renderer,ScViewport v) {
   if(!s_build_plan.count)return;
@@ -11136,6 +11221,9 @@ int main(int argc, char **argv) {
         continue;
       }
       if(ev.type==SDL_KEYDOWN && SC_EVENT_SCANCODE(ev)==SDL_SCANCODE_ESCAPE && !ev.key.repeat) {
+        if(s_preview_expanded && map_selection_preview_live()) {
+          s_preview_expanded=false;continue;
+        }
         if(getenv("SC_SAVE_DIALOG_DIAG")) fprintf(stderr,"[escape save] key frame %llu mode=%u city=%u modal=%u/%u/%u/%u dialog=%u\n",
             (unsigned long long)s_frames,ram_w(0x14),ram_w(0x3e),ram_w(0xd7),ram_w(0x379),g_ram[0x391],g_ram[0xe3],s_mouse_dialog);
         if(s_menu_open) s_menu_open=false;
@@ -11153,6 +11241,22 @@ int main(int argc, char **argv) {
       }
       if (getenv("SC_SCRIPTED_INPUT") && !(getenv("SC_KEY_EVENTS") &&
           ev.type==SDL_KEYDOWN && ev.key.windowID==0)) continue; /* owned UI regression window */
+      if(!s_menu_open && s_custom_renderer.map_preview.active &&
+          (ram_w(0x14)==5 || ram_w(0x14)==6) && !ram_w(0xb31) &&
+          ev.type==SDL_MOUSEWHEEL && (SDL_GetModState()&KMOD_CTRL)) {
+#if !SNESRECOMP_SDL3 && SDL_VERSION_ATLEAST(2,0,18)
+        double amount=ev.wheel.preciseY;
+#else
+        double amount=ev.wheel.y;
+#endif
+        if(ev.wheel.direction==SDL_MOUSEWHEEL_FLIPPED)amount=-amount;
+        double x=s_preview_anchor_x,y=s_preview_anchor_y;
+        if(isfinite(amount))sc_mapgen_preview_zoom(&s_custom_renderer.map_preview,
+            pow(1.25,fmax(-32,fmin(32,amount))),x,y);
+        if(getenv("SC_MAP_PREVIEW_DIAG"))fprintf(stderr,"[map preview] zoom %.4f center %.1f,%.1f\n",
+            s_custom_renderer.map_preview.zoom,s_custom_renderer.map_preview.center_x,s_custom_renderer.map_preview.center_y);
+        continue;
+      }
       if(!s_menu_open && !s_build_active && !s_build_pending && !s_clip_drag && !s_clip_pending && host_map_screen_live() &&
          !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3]) {
         if(ev.type==SDL_MOUSEWHEEL && (SDL_GetModState()&KMOD_CTRL)) {
@@ -11540,11 +11644,37 @@ int main(int argc, char **argv) {
         const char *tool=getenv("SC_MOUSE_TOOL");
         if (tool) ram_set_w(0x20d,(uint16_t)atoi(tool));
       }
-      const bool inside = focused && (s_custom_video.enabled ?
+      bool inside = focused && (s_custom_video.enabled ?
           ScRendererWindowToGuest(&s_custom_renderer,s_destination,ww,wh,drawable_w,drawable_h,
               mx,my,&mouse_target_x,&mouse_target_y,&mouse_navigation_hit) :
           ScVideoWindowToGuest(pointer_view,s_destination,ww,wh,drawable_w,drawable_h,
               mx,my,&mouse_target_x,&mouse_target_y));
+      bool preview_live=map_selection_preview_live();
+      ScRect preview_rect=map_selection_preview_rect(pointer_view,drawable_w,drawable_h);
+      double px=ww>0?mx*drawable_w/ww:0,py=wh>0?my*drawable_h/wh:0;
+      bool preview_hit=focused && px>=preview_rect.x && px<preview_rect.x+preview_rect.w &&
+          py>=preview_rect.y && py<preview_rect.y+preview_rect.h;
+      s_preview_cursor_x=px;s_preview_cursor_y=py;
+      s_preview_anchor_x=preview_hit?(px-preview_rect.x)/preview_rect.w:.5;
+      s_preview_anchor_y=preview_hit?(py-preview_rect.y)/preview_rect.h:.5;
+      if(!preview_live)s_preview_expanded=false;
+      bool preview_left=mouse_raw_left;
+      if(preview_live && preview_left && !s_preview_left_down && (preview_hit || s_preview_expanded)) {
+        s_preview_expanded=!s_preview_expanded;s_preview_click_owned=true;
+        if(s_preview_expanded)s_preview_complete=true;
+        if(getenv("SC_MAP_PREVIEW_DIAG"))fprintf(stderr,"[map preview] expanded %d\n",s_preview_expanded);
+      }
+      s_preview_left_down=preview_left;
+      s_preview_input_blocked=preview_live && (s_preview_expanded || s_preview_click_owned);
+      if(s_preview_click_owned) {
+        if(!preview_left)s_preview_click_owned=false;
+        mouse_raw_left=false;mouse_buttons&=~SDL_BUTTON(SDL_BUTTON_LEFT);
+      }
+      if(preview_live && s_preview_expanded && focused) {
+        inside=true;
+        mouse_target_x=(px-s_destination.x)*pointer_view.width/s_destination.w-pointer_view.core_x;
+        mouse_target_y=(py-s_destination.y)*pointer_view.height/s_destination.h-pointer_view.core_y;
+      }
       if(focused && s_rom_is_us && host_map_screen_live() && ram_w(0x1d7) &&
           !ram_w(0xd7) && !ram_w(0x379) && s_mouse_dialog==SC_MOUSE_DIALOG_NONE &&
           !s_custom_renderer.advisor_frame && !s_custom_renderer.map_hold) {
@@ -11567,19 +11697,29 @@ int main(int argc, char **argv) {
       const bool right = focused && (mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT));
       const bool middle = focused && (mouse_buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE));
       const bool middle_was_active=s_middle_pan.active;
-      const bool pan_allowed=focused && s_custom_video.enabled && !mouse_raw_left && !s_build_active && !s_build_pending &&
+      const bool city_pan_allowed=focused && s_custom_video.enabled && !mouse_raw_left && !s_build_active && !s_build_pending &&
           !s_clip_drag && !s_clip_pending && host_map_screen_live() && !ram_w(0x379) &&
           s_mouse_dialog==SC_MOUSE_DIALOG_NONE && !s_custom_renderer.advisor_frame &&
           (s_middle_pan.active || (!ram_w(0xd7) && !g_ram[0x391] && !g_ram[0xe3] && !s_custom_renderer.map_hold));
+      const bool preview_pan_allowed=preview_live && focused && !mouse_raw_left;
+      const bool pan_allowed=city_pan_allowed || preview_pan_allowed;
       const bool pan_land=inside && !mouse_navigation_hit && !mouse_clip_hit &&
           (s_custom_video.enabled?mouse_city_hit:(!ram_w(0x1d7) || (mouse_target_x>=56 && mouse_target_y>=48)));
       const bool pan_held=middle || (right && !s_clip_tool);
       double sensitivity=(double)s_mouse_sensitivity/100*s_pan_max_tiles*scroll_key_multiplier(keys);
       double zoom=s_custom_renderer.map_zoom>0?s_custom_renderer.map_zoom:1;
-      ScMousePanDelta pan_delta=ScMousePanUpdate(&s_middle_pan,pan_allowed,pan_held,pan_land,mx,my,
-          ww>0 && s_destination.w>0?(double)drawable_w/ww*pointer_view.width/s_destination.w/zoom*sensitivity:0,
-          wh>0 && s_destination.h>0?(double)drawable_h/wh*pointer_view.height/s_destination.h/zoom*sensitivity:0);
-      if(s_middle_pan.active) ScRendererPan(&s_custom_renderer,pan_delta.x,pan_delta.y);
+      double pan_sx=preview_pan_allowed?(double)drawable_w/ww/preview_rect.w:
+          ww>0 && s_destination.w>0?(double)drawable_w/ww*pointer_view.width/s_destination.w/zoom*sensitivity:0;
+      double pan_sy=preview_pan_allowed?(double)drawable_h/wh/preview_rect.h:
+          wh>0 && s_destination.h>0?(double)drawable_h/wh*pointer_view.height/s_destination.h/zoom*sensitivity:0;
+      ScMousePanDelta pan_delta=ScMousePanUpdate(&s_middle_pan,pan_allowed,preview_pan_allowed?middle:pan_held,
+          preview_pan_allowed?preview_hit:pan_land,mx,my,pan_sx,pan_sy);
+      if(s_middle_pan.active && preview_pan_allowed) {
+        sc_mapgen_preview_pan(&s_custom_renderer.map_preview,pan_delta.x,pan_delta.y);
+        if(getenv("SC_MAP_PREVIEW_DIAG") && (pan_delta.x || pan_delta.y))
+          fprintf(stderr,"[map preview] pan %.4f,%.4f center %.1f,%.1f\n",pan_delta.x,pan_delta.y,
+              s_custom_renderer.map_preview.center_x,s_custom_renderer.map_preview.center_y);
+      } else if(s_middle_pan.active) ScRendererPan(&s_custom_renderer,pan_delta.x,pan_delta.y);
       if(getenv("SC_MOUSE_PAN_DIAG") && (middle_was_active || s_middle_pan.active))
         fprintf(stderr,"[host pan] frame %llu active %d delta %.4f,%.4f camera %.4f,%.4f zoom %.6f native %d,%d mode %u\n",
             (unsigned long long)s_frames,(int)s_middle_pan.active,pan_delta.x,pan_delta.y,
@@ -11593,7 +11733,7 @@ int main(int argc, char **argv) {
         if (inside) {
           int dx = last_inside ? mouse_target_x - last_x : 0;
           int dy = last_inside ? mouse_target_y - last_y : 0;
-          mouse_pointer_moved=dx || dy || !last_inside;
+          mouse_pointer_moved=dx || dy || !last_inside || middle_was_active;
           /* Write the full absolute position, never clamp the travel delta:
            * a jump across the viewport must land correctly in one frame. */
           /* The ROM pointer remains byte sized. Host construction uses the
@@ -11621,7 +11761,7 @@ int main(int argc, char **argv) {
           if (dy < 0) s_mouse_dir |= kPad_Up;
           if (dy > 0) s_mouse_dir |= kPad_Down;
           s_mouse_dir_frames = s_mouse_dir ? 1 : 0;
-          if (s_rom_is_us) {
+          if (s_rom_is_us && !s_preview_input_blocked) {
             ScMouseUiResult ui = mouse_ui_point(g_ram, mouse_target_x, mouse_target_y,
                 false, s_ninth_scenario);
             mouse_ui_select = dx || dy || (mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) ||
@@ -11823,7 +11963,7 @@ int main(int argc, char **argv) {
       uint64_t now=SDL_GetPerformanceCounter();
       if(!s_preview_started)s_preview_started=now;
       unsigned frame=(now-s_preview_started)*60/SDL_GetPerformanceFrequency();
-      s_custom_renderer.map_preview.frame=frame>90?90:frame;
+      s_custom_renderer.map_preview.frame=s_preview_complete || frame>90?90:frame;
     }
     /* Budget mouse input takes control only on motion/press. A stationary
      * pointer must not pull a keyboard/gamepad selection back to its last
@@ -11842,7 +11982,7 @@ int main(int argc, char **argv) {
       s_custom_renderer.pointer_hud = false;
       s_mouse_dir_frames = 0;
       mouse_edge_input = 0;
-    } else if (mouse_ui_handled && mouse_ui_select) {
+    } else if (mouse_ui_handled && mouse_ui_select && !s_preview_input_blocked) {
       mouse_ui_point(g_ram, mouse_target_x, mouse_target_y, true, s_ninth_scenario);
       if (g_ram[0x14] == 5 && g_ram[0x0b2d] == 1 && g_ram[0x0b31])
         s_map_mouse_refresh_pending = true;
@@ -12006,6 +12146,7 @@ int main(int argc, char **argv) {
      * them immediately, but whatever is held on the frame the menu closes
      * would otherwise leak straight through as a real button press. */
     if (s_menu_open || scripted_input) input = 0;
+    if(map_selection_preview_live() && s_preview_input_blocked)input=0;
     if(s_escape_back_frames) {input|=s_escape_back_input;--s_escape_back_frames;}
     apply_frame_input(s_frames);
     apply_freezes();
@@ -12366,6 +12507,7 @@ int main(int argc, char **argv) {
     ScRect dest = SC_RECT(s_destination.x, s_destination.y, s_destination.w, s_destination.h);
     bool hide_city_setup=s_city_present_pending && g_ram[0x14]==0;
     bool _cok = hide_city_setup || (SDL_RenderCopy(renderer, present_texture, NULL, &dest) SC_SDL_OK);
+    if(!hide_city_setup)draw_map_selection_preview(renderer,s_custom_video.enabled?s_custom_renderer.view:viewport);
     if(!hide_city_setup && (s_build_active || s_build_pending) && host_map_screen_live() && !s_menu_open)
       draw_build_preview(renderer,s_custom_video.enabled?s_custom_renderer.view:viewport);
     if(clipboard_ui && !s_menu_open && (s_clip_drag || s_clip_pending || (s_clip_tool==2 && s_clip_hover))) {
@@ -12687,6 +12829,8 @@ int main(int argc, char **argv) {
     }
   }
   SDL_DestroyTexture(texture);
+  if(s_preview_texture)SDL_DestroyTexture(s_preview_texture);
+  free(s_preview_cells);free(s_preview_reveal);
   SDL_DestroyRenderer(renderer);
   SDL_DestroyWindow(window);
   SDL_Quit();

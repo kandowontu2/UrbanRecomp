@@ -1462,6 +1462,24 @@ static void capture_advisor_row(ScRenderer *r,const Ppu *p,int y,const uint32_t 
                 if(dy>=0 && dy<64 && sprite_pixel(p,slot,x-ox,dy))obj=true;
             }
         }
+        if(r->city_overlay_frame) {
+            /* The native result may have BG1/BG2 roofs in front of a low
+             * priority BG3 shadow. Lift the UI layers themselves, never that
+             * already-composited city cache, into the zoomed scene. */
+            bool high=false;
+            unsigned ci=page_pixels[x]?bg_sample(p,2,x,y+1,&high):0;
+            unsigned rank=ci?(high?(PPU_bg3priority(p)?15:3):1):0,layer=2;
+            unsigned object=ScObjPixel(p,x),oi=object&255;
+            /* Low-priority BG3 is the shadow on the subscreen. The projected
+             * terrain already applies that colour math; it is not an opaque
+             * grey panel to place in front of the city's roofs. */
+            if(ci && rank<7 && (p->screenEnabled[0]&3)) {ci=0;page=false;}
+            if(obj && oi && (object>>12)>rank) {
+                ci=oi;layer=oi<192?6:4;
+            }
+            r->advisor_pixels[y*256+x]=(page || obj)?composite_color(p,ci,ci?layer:5,0,5,x):0;
+            continue;
+        }
         r->advisor_pixels[y*256+x]=(page || obj) ?
             r->native_line ? SC_RELOCATED_NATIVE_PIXEL|((unsigned)(y+r->view.core_y)<<8)|x :
             native[x]|0xff000000 : 0;
@@ -1978,13 +1996,22 @@ static void map_preview_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y)
         y<88 || y>=188 || !(p->screenEnabled[0]&2))return;
     uint32_t *row=r->pixels+(size_t)(y+r->view.core_y)*r->view.width;
     unsigned palette=((bg_word(p,1,48,y+1)>>10)&7)*16;
+    if(y==88)for(unsigned cell=0;cell<38;++cell)
+        r->preview_colors[cell]=color(p,palette+rom_read(r,0x02948e + (cell>=0x14?0x14:cell)));
     for(unsigned x=0;x<120;++x) {
         unsigned cell=sc_mapgen_preview_cell(&r->map_preview,x,y-88);
-        unsigned ink=palette+rom_read(r,0x02948e + cell);
+        /* Native tree lookup entries also encode animation phases. A fixed
+         * geographical overview uses the stable green forest entry, rather
+         * than letting a tree variant acquire the water palette colour. */
+        unsigned ink=palette+rom_read(r,0x02948e + (cell>=0x14?0x14:cell));
         unsigned object=ScObjPixel(p,48+x);
         if((p->screenEnabled[0]&16) && (object&255))ink=object&255;
         row[r->view.core_x+48+x]=color(p,ink);
     }
+}
+uint32_t ScRendererHandPixel(const Ppu *p,int x,int y) {
+    unsigned ci=sprite_word_pixel(p,0x3f9e,16,x,y);
+    return ci?color(p,ci):0;
 }
 void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const uint32_t *native) {
     if (!r->pixels || !p || !ram || !native || line<0 || line>=224) return;

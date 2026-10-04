@@ -1525,24 +1525,7 @@ static bool geo_fixed_water(unsigned x,unsigned y,unsigned width,unsigned height
                             unsigned style,bool vertical,bool coast_side,
                             uint32_t seed,unsigned rough) {
     unsigned major=vertical?y:x,minor=vertical?x:y;
-    unsigned spacing=vertical?120:100,channel=minor/spacing;
-    uint32_t channel_seed=geo_hash(seed^((channel+1)*0x632be5abu));
-    int center=(int)spacing/2+(int)(channel_seed%(spacing/3))-(int)spacing/6;
-    center+=((int)geo_noise((uint64_t)major*65536/75,0,1,channel_seed)-32768)*28/65536;
-    unsigned radius=2+(channel_seed>>16)%3;
-    bool water=abs((int)(minor%spacing)-center)<(int)(radius+rough/32768);
-    /* Short, narrow tributaries repeat with independent district seeds and
-     * join the through river. Keep their source within this watershed. */
-    uint32_t branch=geo_hash(channel_seed^((major/100+1)*0x9e3779b9u));
-    unsigned begin=10+(branch>>8)%20,end=begin+40+(branch>>16)%25;
-    unsigned local=major%100;
-    if((branch&3)!=0 && local>=begin && local<=end) {
-        int direction=branch&4?1:-1;
-        int room=direction>0?(int)spacing-8-center:center-8;
-        int span=20+(branch>>24)%30;if(span>room)span=room;
-        int tributary=center+direction*span*(int)(end-local)/(int)(end-begin);
-        water|=abs((int)(minor%spacing)-tributary)<2;
-    }
+    bool water=false;
     if(style==1 || style==3) {
         unsigned extent=vertical?width:height;
         unsigned edge=coast_side?extent-1-minor:minor;
@@ -1565,6 +1548,61 @@ static bool geo_fixed_water(unsigned x,unsigned y,unsigned width,unsigned height
         }
     }
     return water;
+}
+static void geo_disc(uint8_t *classes,unsigned width,unsigned height,int x,int y,int radius) {
+    for(int dy=-radius;dy<=radius;++dy)for(int dx=-radius;dx<=radius;++dx) {
+        int px=x+dx,py=y+dy;
+        if(dx*dx+dy*dy<=radius*radius && px>=0 && py>=0 && px<(int)width && py<(int)height)
+            classes[py*width+px]=1;
+    }
+}
+/* Curved reaches use native-sized round brushes. Independent headings,
+ * bends and lengths replace the old equally spaced, parallel river bands. */
+static void geo_reach(uint8_t *classes,unsigned width,unsigned height,
+                      int ax,int ay,int bx,int by,uint32_t seed,int radius) {
+    int dx=bx-ax,dy=by-ay,length=abs(dx)+abs(dy);
+    if(!length)return;
+    int bend_limit=length/2;if(bend_limit>140)bend_limit=140;
+    int bend1=(int)(geo_hash(seed)%(2*bend_limit+1))-bend_limit;
+    int bend2=(int)(geo_hash(seed+1)%(2*bend_limit+1))-bend_limit;
+    int cx=ax+dx/3-dy*bend1/length,cy=ay+dy/3+dx*bend1/length;
+    int ex=ax+2*dx/3-dy*bend2/length,ey=ay+2*dy/3+dx*bend2/length;
+    for(int i=0;i<=length*2;++i) {
+        double t=(double)i/(length*2),u=1-t;
+        int x=(int)(u*u*u*ax+3*u*u*t*cx+3*u*t*t*ex+t*t*t*bx+.5);
+        int y=(int)(u*u*u*ay+3*u*u*t*cy+3*u*t*t*ey+t*t*t*by+.5);
+        geo_disc(classes,width,height,x,y,radius);
+    }
+}
+static void geo_rivers(uint8_t *classes,unsigned width,unsigned height,uint32_t seed,bool vertical) {
+    /* One connected crossing supplies a dependable river for every seed. */
+    unsigned extent=vertical?height:width;
+    int previous=60;
+    for(unsigned major=0;major<=extent+32;major+=32) {
+        int center=60+((int)geo_noise((uint64_t)major*65536/96,0,1,seed^0x193a5u)-32768)*80/65536;
+        if(major)geo_reach(classes,width,height,vertical?previous:(int)major-32,
+            vertical?(int)major-32:previous,vertical?center:(int)major,
+            vertical?(int)major:center,geo_hash(seed+major),4);
+        previous=center;
+    }
+    for(unsigned gy=0;gy<(height+179)/180;++gy)for(unsigned gx=0;gx<(width+199)/200;++gx) {
+        uint32_t rng=geo_hash(seed^gx*374761393u^gy*668265263u);
+        unsigned count=1+geo_next(&rng)%3;
+        for(unsigned k=0;k<count;++k) {
+            int ax=gx*200+geo_next(&rng)%200,ay=gy*180+geo_next(&rng)%180;
+            int dx=(int)(geo_next(&rng)%281)-140,dy=(int)(geo_next(&rng)%281)-140;
+            if(abs(dx)+abs(dy)<90)dy+=dy<0?-90:90;
+            int bx=ax+dx,by=ay+dy;
+            uint32_t reach=geo_next(&rng);int radius=3+geo_next(&rng)%3;
+            geo_reach(classes,width,height,ax,ay,bx,by,reach,radius);
+            if(reach&1)geo_disc(classes,width,height,ax,ay,6+(reach>>8)%5);
+            /* Short tributaries meet this reach, rather than running as a
+             * second parallel line for the whole length of the map. */
+            int length=abs(dx)+abs(dy);
+            if(reach&2)geo_reach(classes,width,height,ax,ay,ax-dy*70/length,
+                ay+dx*70/length,reach^0x58d3u,3);
+        }
+    }
 }
 void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned size) {
     if(size>5)size=0;
@@ -1638,6 +1676,21 @@ void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned si
         }
     }
     if(classes) {
+        if(size)geo_rivers(classes,width,height,seed,vertical);
+        /* A one-cell water spur cannot be represented by the cartridge's
+         * shoreline tiles (opposite/three land edges map to open water).
+         * Prune these nubs before fitting the coast, using a stable snapshot. */
+        for(unsigned pass=0;pass<2;++pass) {
+            for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
+                unsigned at=y*width+x;st->map[at]=classes[at];
+                if(classes[at]!=1 || !x || !y || x+1==width || y+1==height)continue;
+                unsigned mask=(classes[at-1]!=1)|((classes[at+width]!=1)<<1)|
+                    ((classes[at+1]!=1)<<2)|((classes[at-width]!=1)<<3);
+                if(mask==5 || mask==10 || mask==7 || mask==11 || mask==13 || mask==14 || mask==15)
+                    st->map[at]=0;
+            }
+            for(unsigned at=0;at<cells;++at)classes[at]=(uint8_t)st->map[at];
+        }
         static const uint8_t shore[16]={1,7,10,9,8,1,11,1,5,4,1,1,6,1,1,1};
         static const uint8_t trees[16]={0,0,0,0x16,0,0,0x14,0x15,0,0x1c,0,0x19,0x1a,0x1b,0x17,0x18};
         const int dx[4]={-1,0,1,0},dy[4]={0,1,0,-1};
@@ -1661,16 +1714,63 @@ void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned si
 }
 void sc_mapgen_preview_build(ScMapPreview *p,const uint16_t *map,
                              unsigned width,unsigned height,unsigned seed) {
+    static unsigned revision;
     memset(p,0,sizeof *p);
     if(!map || !width || !height)return;
-    for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x) {
-        unsigned at=y*120+x,wx=(uint64_t)x*width/120,wy=(uint64_t)y*height/100;
-        unsigned cell=map[wy*width+wx]&1023;
-        p->cells[at]=cell;
-        p->reveal[at]=cell && cell<0x14?1+y*44/100:
-            cell>=0x14?46+(geo_hash(seed+(x/4)*31337+(y/4)*7919)%44):0;
-    }
+    p->source=map;p->width=width;p->height=height;p->seed=seed;p->revision=++revision;
+    p->zoom=1;p->center_x=width*.5;p->center_y=height*.5;
+    sc_mapgen_preview_raster(p,p->cells,p->reveal,120,100);
     p->active=1;
+}
+void sc_mapgen_preview_raster(const ScMapPreview *p,uint8_t *cells,uint8_t *reveal,unsigned w,unsigned h) {
+    if(!p || !p->source || !w || !h)return;
+    double span_x=p->width/p->zoom,span_y=p->height/p->zoom;
+    double left=p->center_x-span_x*.5,top=p->center_y-span_y*.5;
+    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
+        unsigned at=y*w+x;
+        unsigned x0=(unsigned)(left+x*span_x/w),y0=(unsigned)(top+y*span_y/h);
+        unsigned x1=(unsigned)(left+(x+1)*span_x/w+.999999),y1=(unsigned)(top+(y+1)*span_y/h+.999999);
+        if(x0>=p->width)x0=p->width-1;
+        if(y0>=p->height)y0=p->height-1;
+        if(x1<=x0)x1=x0+1;
+        if(y1<=y0)y1=y0+1;
+        if(x1>p->width)x1=p->width;
+        if(y1>p->height)y1=p->height;
+        unsigned water=0,trees=0,total=(x1-x0)*(y1-y0),cell=0;
+        for(unsigned wy=y0;wy<y1;++wy)for(unsigned wx=x0;wx<x1;++wx) {
+            unsigned v=p->source[wy*p->width+wx]&1023;
+            water+=v>0 && v<0x14;trees+=v>=0x14;
+            cell=v;
+        }
+        /* Preserve thin rivers in an overview instead of sampling a single
+         * tile which can miss a whole waterway. Detailed views retain tiles. */
+        if(total>1)cell=water && water*4>=total?1:trees*3>=total?0x18:0;
+        cells[at]=(uint8_t)cell;
+        reveal[at]=cell && cell<0x14?1+y0*44/p->height:
+            cell>=0x14?46+(geo_hash(p->seed+(x0/4)*31337+(y0/4)*7919)%44):0;
+    }
+}
+void sc_mapgen_preview_zoom(ScMapPreview *p,double factor,double x,double y) {
+    if(!p || !p->active || !(factor>0) || factor!=factor)return;
+    double next=p->zoom*factor;
+    if(next<1)next=1;
+    if(next>32)next=32;
+    if(x<0 || x>1)x=.5;
+    if(y<0 || y>1)y=.5;
+    p->center_x+=(x-.5)*p->width*(1/p->zoom-1/next);
+    p->center_y+=(y-.5)*p->height*(1/p->zoom-1/next);
+    double hx=p->width/next*.5,hy=p->height/next*.5;
+    if(p->center_x<hx)p->center_x=hx;
+    if(p->center_x>p->width-hx)p->center_x=p->width-hx;
+    if(p->center_y<hy)p->center_y=hy;
+    if(p->center_y>p->height-hy)p->center_y=p->height-hy;
+    p->zoom=next;++p->revision;
+    sc_mapgen_preview_raster(p,p->cells,p->reveal,120,100);
+}
+void sc_mapgen_preview_pan(ScMapPreview *p,double x,double y) {
+    if(!p || !p->active || p->zoom<=1 || (!x && !y) || x!=x || y!=y)return;
+    p->center_x+=x*p->width/p->zoom;p->center_y+=y*p->height/p->zoom;
+    sc_mapgen_preview_zoom(p,1,.5,.5);
 }
 unsigned sc_mapgen_preview_cell(const ScMapPreview *p,unsigned x,unsigned y) {
     if(!p || !p->active || x>=120 || y>=100)return 0;

@@ -152,9 +152,17 @@ typedef struct ScMapPreview {
     uint8_t cells[SC_MAPGEN_CELLS], reveal[SC_MAPGEN_CELLS];
     unsigned frame;
     int active;
+    /* Source belongs to the generator and remains alive during selection. */
+    const uint16_t *source;
+    unsigned width,height,seed,revision;
+    double zoom,center_x,center_y;
 } ScMapPreview;
 void sc_mapgen_preview_build(ScMapPreview *preview, const uint16_t *map,
                              unsigned width, unsigned height, unsigned seed);
 unsigned sc_mapgen_preview_cell(const ScMapPreview *preview, unsigned x, unsigned y);
+void sc_mapgen_preview_raster(const ScMapPreview *preview,uint8_t *cells,uint8_t *reveal,
+                              unsigned width,unsigned height);
+void sc_mapgen_preview_zoom(ScMapPreview *preview,double factor,double x,double y);
+void sc_mapgen_preview_pan(ScMapPreview *preview,double x,double y);
 
 #endif

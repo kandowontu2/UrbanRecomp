@@ -2,6 +2,21 @@
 
 ## Unreleased — local terrain, mouse, placement and city-entry fixes
 
+- Compose tool-window artwork over the projected city instead of copying
+  full-size building pixels from the native backdrop. Keep menu shadows on
+  the zoomed terrain and preserve CPU/GPU rendering, budget and adviser pages.
+- Clear the setup-page state on the GO TO MENU return path, restoring the
+  main menu instead of DEVELOPMENT SPEED. Align RESUME SAVED CITY with the
+  other main-menu choices.
+- Replace regularly spaced parallel river bands with curved reaches at
+  varied angles and lengths, round native-scale brushes and tributaries.
+  Remove narrow water nubs which have no matching native shoreline tile.
+- Render map-selection previews at display resolution with nearest sampling
+  and coverage-aware downsampling. Ctrl+wheel zooms toward the mouse; middle
+  mouse drags the preview. Click the preview to expand it across the window;
+  click again or press Esc to return. Keep the native buttons and hand size,
+  bound the preview camera, and cache unchanged textures during idle frames.
+
 - Generate connected meandering rivers and tributaries, irregular lakes,
   coastal and island maps, and coherent forest districts on all six map sizes.
   Sample the full map dimensions with a deterministic 32-bit geographic stream.

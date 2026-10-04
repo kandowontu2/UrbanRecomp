@@ -36,6 +36,7 @@ typedef struct ScRenderer {
     int16_t object_grid_x[128];
     ScVehicleSprite object_grid_vehicles[19];
     ScMapPreview map_preview;
+    uint32_t preview_colors[38];
     ScViewport view;
     ScViewport gameplay_view; /* configured HUD anchor; menus are centered */
     double map_zoom;
@@ -132,3 +133,4 @@ void ScRendererClipboardRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,
     unsigned tool,bool available,uint64_t price,int y,uint32_t *out);
 /* Restore the live HUD hand above host-added COPY/PASTE labels. */
 void ScRendererHudPointer(ScRenderer *r,const Ppu *ppu);
+uint32_t ScRendererHandPixel(const Ppu *ppu,int x,int y);

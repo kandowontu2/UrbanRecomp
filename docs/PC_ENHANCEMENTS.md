@@ -17,11 +17,26 @@ all their existing terrain. Native shoreline and tree tile rules still apply.
 The original stock generator remains available to developers through
 `SC_MAPGEN_ORIGINAL=1` for Normal maps and unchanged oracle tests.
 
-The map-select preview shows the whole selected map at the original 120x100
-preview resolution. It reveals water first, then forest patches over roughly
+Expanded river reaches use varied directions, lengths and bends instead of
+equally spaced parallel bands. Round brushes and removal of narrow water
+nubs give the cartridge shoreline tiles a matching edge.
+
+The map-select preview keeps its original 120x100 box while drawing at the
+display's pixel resolution. Coverage-aware sampling preserves thin rivers
+between the old single-tile samples. It reveals water first, then forest patches over roughly
 1.5 seconds after the waiting panel. Its palette comes from the live native
 BG2 layer, and the preview does not change city zoom or UI scale. NEXT and
 map-number mouse clicks regenerate the preview when released.
+Ctrl+wheel zooms the preview toward the mouse. Hold middle mouse to drag the
+preview; stationary input does not move it. Click inside the preview to open
+an expanded view across the window; click again or press Esc to return to
+map selection. The expanded view shows the complete generated terrain and
+keeps the mouse hand at its ordinary UI size. Zoom and pan affect only this
+preview, and its camera stays within the map.
+
+Tool-window backgrounds compose the native UI and shadows over the projected
+city, without importing unzoomed building fragments. GO TO MENU resets both
+setup-page flags, and RESUME SAVED CITY shares the other choices' left edge.
 
 Startup, map-size, development-speed and saved-city lists show a separate
 native hand whose fingertip aligns with the mouse. The original selection
