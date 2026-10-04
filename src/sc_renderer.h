@@ -26,8 +26,18 @@ typedef struct ScRenderer {
     const Ppu *captured_vram_source;
     ScCityRowCache city_cache[6];
     unsigned city_cache_next;
+    /* Immutable two-dimensional OBJ grid, shared by rows until its live
+     * admission/attributes change. VRAM remains versioned independently. */
+    bool object_grid_valid;
+    unsigned object_grid_header,object_grid_key[6];
+    uint16_t object_grid_oam[256];
+    uint8_t object_grid_high[32],object_grid_y[128],object_grid_grace[128];
+    int16_t object_grid_x[128];
+    ScVehicleSprite object_grid_vehicles[19];
     ScViewport view;
     ScViewport gameplay_view; /* configured HUD anchor; menus are centered */
+    double map_zoom;
+    bool zoom_frame, zoom_hud;
     uint32_t *pixels;
     ScTerrainFrame terrain;
     bool defer_terrain;
@@ -99,6 +109,7 @@ bool ScRendererWindowToGuest(const ScRenderer *r, ScVideoRect destination,
                             int window_w, int window_h, int drawable_w, int drawable_h,
                             double x, double y, int *guest_x, int *guest_y,
                             bool *navigation);
+void ScRendererProjectCity(const ScRenderer *r,double *x,double *y);
 ScVideoRect ScRendererMinimapView(const ScRenderer *r, const uint8_t *ram);
 bool ScRendererCityPoint(const ScRenderer *r, const uint8_t *ram,
                          int x, int y, int *world_x, int *world_y);

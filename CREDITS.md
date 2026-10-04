@@ -9,7 +9,10 @@ The enhanced fork is maintained by [kandowontu2](https://github.com/kandowontu2/
 - **Matthew Stan / Matthew Stanley:** [snesrecomp](https://github.com/mstan/snesrecomp)
   and recomp-ui, including the SNES device models and launcher.
 - **angelo_wf and contributors:** the MIT-licensed LakeSnes CPU core used by
-  snesrecomp. **JRickey / gba-recomp and PSXRecomp contributors:** color models.
+  snesrecomp, also the semantic source for the compatible ROM-to-C tier and
+  native interrupt/idle CPU control. Copyright (c) 2021-2023 angelo_wf and
+  contributors; the retained MIT notice is in the bundled attribution.
+  **JRickey / gba-recomp and PSXRecomp contributors:** color models.
   snesrecomp's complete third-party attribution and color-model licenses are
   included in the bundled `licenses` directory.
 - **SDL contributors, Sam Lantinga:** SDL, used for windowing, input, audio and

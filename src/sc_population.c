@@ -58,24 +58,23 @@ struct ScPopulationCensus {
     bool ready;
     uint16_t ids[SC_WORLD_MAX_CELLS];
     uint64_t revisions[SC_WORLD_TILE_CHUNKS];
-    uint32_t capacity[SC_WORLD_TILE_CHUNKS][3];
     uint64_t total[3];
     bool dirty[SC_WORLD_TILE_CHUNKS];
+    uint8_t affected[SC_WORLD_MAX_CELLS/8];
+    uint32_t queue[SC_WORLD_MAX_CELLS];
+    unsigned queued;
 };
 ScPopulationCensus *ScPopulationCensusCreate(void) {return calloc(1,sizeof(ScPopulationCensus));}
 void ScPopulationCensusDestroy(ScPopulationCensus *c) {free(c);}
 uint64_t ScPopulationCensusEvaluatedCells(const ScPopulationCensus *c) {return c?c->evaluated:0;}
 
-static void census_dirty_range(ScPopulationCensus *c,int first,int end,unsigned cells) {
-    if(first<0) first=0;
-    if(end>(int)cells) end=(int)cells;
-    if(first>=end) return;
-    const unsigned span=SC_WORLD_TILE_CHUNK_BYTES/2;
-    for(unsigned chunk=(unsigned)first/span;chunk<=(unsigned)(end-1)/span;++chunk) c->dirty[chunk]=true;
+static unsigned census_cell(const uint8_t *map,const uint16_t *ids,int width,int height,int x,int y) {
+    if(x<0 || y<0 || x>=width || y>=height)return 0;
+    return ids?ids[y*width+x]:word(map,2*(y*width+x))&1023;
 }
-static void census_capacity(const uint8_t *map,int width,int height,const uint8_t *rom,
+static void census_capacity(const uint8_t *map,const uint16_t *ids,int width,int height,const uint8_t *rom,
                             int x,int y,uint32_t capacity[3]) {
-    unsigned tile=map_cell(map,width,height,x,y);
+    unsigned tile=census_cell(map,ids,width,height,x,y);
     if(tile>=958 || !(rom[0x184eb+tile]&1)) return;
     if((tile>=0x80 && tile<0x129) || (tile>=0x376 && tile<0x39a)) {
         unsigned n=0;
@@ -83,7 +82,7 @@ static void census_capacity(const uint8_t *map,int width,int height,const uint8_
         else if(tile==0x84) {
             for(int dy=-1;dy<=1;++dy) for(int dx=-1;dx<=1;++dx) {
                 if(!dx && !dy) continue;
-                unsigned house=map_cell(map,width,height,x+dx,y+dy);
+                unsigned house=census_cell(map,ids,width,height,x+dx,y+dy);
                 n+=house>=0x89 && house<0x95;
             }
         } else if(tile>=0x99) n=(2+(tile-0x99)%36/9)*8;
@@ -93,6 +92,15 @@ static void census_capacity(const uint8_t *map,int width,int height,const uint8_
     } else if(tile>=0x1f4 && tile<0x249) {
         capacity[2]+=tile>=0x201?1+(tile-0x201)%36/9:0;
     }
+}
+static bool census_center(unsigned tile,const uint8_t *rom) {
+    return tile<958 && (rom[0x184eb+tile]&1) &&
+        ((tile>=0x80 && tile<0x129) || (tile>=0x137 && tile<0x249) || tile>=0x376);
+}
+static void census_affect(ScPopulationCensus *c,unsigned cell) {
+    unsigned byte=cell/8,bit=1u<<(cell&7);
+    if(c->affected[byte]&bit)return;
+    c->affected[byte]|=(uint8_t)bit;c->queue[c->queued++]=cell;
 }
 bool ScPopulationRefreshCached(ScPopulationCensus *c,ScPopulation *s,const uint8_t *ram,
     const ScWorld *w,const uint8_t *rom,size_t size) {
@@ -110,8 +118,8 @@ bool ScPopulationRefreshCached(ScPopulationCensus *c,ScPopulation *s,const uint8
         c->width!=width || c->height!=height;
     if(full) {
         c->world=w;c->rom=rom;c->epoch=epoch;c->width=width;c->height=height;
-        memset(c->capacity,0,sizeof c->capacity);memset(c->total,0,sizeof c->total);
-        memset(c->dirty,1,chunks*sizeof *c->dirty);
+        memset(c->total,0,sizeof c->total);memset(c->dirty,0,sizeof c->dirty);
+        memset(c->affected,0,sizeof c->affected);c->queued=0;
     }
     for(unsigned chunk=0;chunk<chunks;++chunk) {
         if(!full && c->revisions[chunk]==revisions[chunk]) continue;
@@ -119,31 +127,48 @@ bool ScPopulationRefreshCached(ScPopulationCensus *c,ScPopulation *s,const uint8
         bool changed=false;
         for(unsigned i=first;i<end;++i) {
             unsigned tile=word(w->tiles,2*i)&1023;
-            if(full || c->ids[i]!=tile) {c->ids[i]=(uint16_t)tile;changed=true;}
+            if(full) {c->ids[i]=(uint16_t)tile;continue;}
+            unsigned old=c->ids[i];if(old==tile)continue;
+            changed=true;
+            if(census_center(old,rom) || census_center(tile,rom))census_affect(c,i);
+            /* Only a change in occupied-house membership can affect another
+             * center's population. Keep the complete old snapshot until all
+             * deltas have been computed, including simultaneous neighbor edits. */
+            if((old>=0x89 && old<0x95)!=(tile>=0x89 && tile<0x95)) {
+                int x=(int)(i%width),y=(int)(i/width);
+                for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
+                    if((!dx && !dy) || x+dx<0 || y+dy<0 || x+dx>=(int)width || y+dy>=(int)height)continue;
+                    unsigned neighbor=(unsigned)(y+dy)*width+(unsigned)(x+dx);
+                    if(c->ids[neighbor]==0x84 || (word(w->tiles,2*neighbor)&1023)==0x84)census_affect(c,neighbor);
+                }
+            }
         }
         c->revisions[chunk]=revisions[chunk];
-        if(changed && !full) {
-            /* A house can affect a free-zone center across a chunk or row
-             * boundary, even when that center's own tile did not change. */
-            census_dirty_range(c,(int)first-1,(int)end+1,cells);
-            census_dirty_range(c,(int)first-(int)width-1,(int)end-(int)width+1,cells);
-            census_dirty_range(c,(int)first+(int)width-1,(int)end+(int)width+1,cells);
+        c->dirty[chunk]=changed;
+        if(full) {
+            uint32_t capacity[3]={0};unsigned x=first%width,y=first/width;
+            for(unsigned i=first;i<end;++i) {
+                census_capacity(w->tiles,NULL,(int)width,(int)height,rom,(int)x,(int)y,capacity);
+                if(++x==width) {x=0;++y;}
+            }
+            for(unsigned kind=0;kind<3;++kind)c->total[kind]+=capacity[kind];
+            c->evaluated+=end-first;
         }
     }
-    for(unsigned chunk=0;chunk<chunks;++chunk) {
-        if(!c->dirty[chunk]) continue;
-        uint32_t capacity[3]={0};
-        unsigned first=chunk*span,end=first+span;if(end>cells) end=cells;
-        unsigned x=first%width,y=first/width;
-        for(unsigned i=first;i<end;++i) {
-            census_capacity(w->tiles,(int)width,(int)height,rom,(int)x,(int)y,capacity);
-            if(++x==width) {x=0;++y;}
-        }
-        for(unsigned kind=0;kind<3;++kind) {
-            c->total[kind]-=c->capacity[chunk][kind];
-            c->total[kind]+=capacity[kind];c->capacity[chunk][kind]=capacity[kind];
-        }
-        c->evaluated+=end-first;c->dirty[chunk]=false;
+    for(unsigned n=0;n<c->queued;++n) {
+        unsigned i=c->queue[n];int x=(int)(i%width),y=(int)(i/width);
+        uint32_t old[3]={0},next[3]={0};
+        census_capacity(NULL,c->ids,(int)width,(int)height,rom,x,y,old);
+        census_capacity(w->tiles,NULL,(int)width,(int)height,rom,x,y,next);
+        for(unsigned kind=0;kind<3;++kind) {c->total[kind]-=old[kind];c->total[kind]+=next[kind];}
+        c->affected[i/8]&=(uint8_t)~(1u<<(i&7));++c->evaluated;
+    }
+    c->queued=0;
+    /* Commit IDs only after all old/new neighborhood deltas are resolved. */
+    for(unsigned chunk=0;chunk<chunks;++chunk)if(c->dirty[chunk]) {
+        unsigned first=chunk*span,end=first+span;if(end>cells)end=cells;
+        for(unsigned i=first;i<end;++i)c->ids[i]=(uint16_t)(word(w->tiles,2*i)&1023);
+        c->dirty[chunk]=false;
     }
     c->ready=true;
     if(!s->valid) ScPopulationImport(s,ram);

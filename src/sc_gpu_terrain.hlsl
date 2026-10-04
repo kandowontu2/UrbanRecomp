@@ -40,11 +40,18 @@ uint captured_object(uint at,uint x) {
  if(header==0xffffffff) return 0;
  uint bucket=x/32;
  if(bucket>=city[header]) return 0;
+ if(rows[at+9]&524288) bucket+=((rows[at+303]>>8)&255)/32*city[header];
  uint record=city[header+1+bucket*2],count=city[header+2+bucket*2],result=0;
  [loop] for(uint i=0;i<count;++i,record+=6) {
   int dx=int(x)-int(city[record]);uint size=city[record+1];
   if(int(x)<int(city[record+5]) || dx<0 || uint(dx)>=size) continue;
   uint y=city[record+2],attr=city[record+3];
+  if(rows[at+9]&524288) {
+   int dy=(int(rows[at+303]<<8)>>16)-int(y);
+   if(attr&65536) dy&=255;
+   if(dy<0 || uint(dy)>=size) continue;
+   y=uint(dy);
+  }
   if(attr&0x4000) dx=int(size)-1-dx;
   if(attr&0x8000) y=size-1-y;
   uint tile=(((attr&240)+(y/8)*16)&255)|(((attr&15)+uint(dx)/8)&15);
@@ -60,7 +67,7 @@ TerrainTile resolve_tile(TerrainTile t,uint at,uint column) {
   t.roof=city_cell(rows[at+305]+column+2);
   t.warning=city_cell(rows[at+306]+column);
  }
- uint snapshot=rows[at+300],chr=rows[at+301],warning_chr=rows[at+302],y=rows[at+303];
+ uint snapshot=rows[at+300],chr=rows[at+301],warning_chr=rows[at+302],y=rows[at+303]&7;
  uint base=t.base==0xffffffff?0:resources[t.base&1023]&65535;
  uint roof=t.roof==0xffffffff?0x2300:resources[t.roof&1023]>>16;
  uint owner=t.warning,cell=owner&1023;
@@ -76,9 +83,36 @@ TerrainTile resolve_tile(TerrainTile t,uint at,uint column) {
  t.warning=warning?resource_word(snapshot,adr)|(resource_word(snapshot,adr+8)<<16):0;
  return t;
 }
-uint2 native_sample(uint nr,uint edge,uint layer) {
- uint nx=edge+native_rows[nr+layer],nt=nr+4+layer*66+(nx/8)*2;
- uint attr=native_rows[nt+1],pixel=decode(native_rows[nt],(attr&0x4000)?nx&7:7-(nx&7));
+uint2 native_tile(uint nr,uint at,uint column,uint layer) {
+ uint nt=nr+4+layer*66;
+ if(!(native_rows[nr+3]&4)) return uint2(native_rows[nt+column*2],native_rows[nt+column*2+1]);
+ uint sx=(native_rows[nt]+column*8)&1023,sy=native_rows[nt+1],size=native_rows[nt+4];
+ uint map=native_rows[nt+2]+((sy>>3)&31)*32+((sx>>3)&31);
+ if((sx&256) && (size&1)) map+=0x400;
+ if((sy&256) && (size&2)) map+=(size&1)?0x800:0x400;
+ uint snapshot=rows[at+300],word=resource_word(snapshot,map),depth=layer==2?2:4;
+ uint dy=(word&0x8000)?7-(sy&7):sy&7,adr=native_rows[nt+3]+(word&1023)*(depth*4)+dy;
+ uint planes=resource_word(snapshot,adr);
+ if(depth==4) planes|=resource_word(snapshot,adr+8)<<16;
+ return uint2(planes,word);
+}
+uint native_object(uint nr,uint at,uint x) {
+ uint count=(native_rows[nr+3]>>8)&127;
+ while(count) {
+  uint i=--count,base=nr+4+(i/30)*66+5+(i%30)*2;
+  uint position=native_rows[base],source=native_rows[base+1];
+  int dx=int(x)-(int(position<<16)>>16);
+  if(dx<int((source>>16)&15) || dx>=int((source>>20)&15)) continue;
+  uint adr=source&32767,snapshot=rows[at+300];
+  uint planes=resource_word(snapshot,adr)|(resource_word(snapshot,adr+8)<<16);
+  uint pixel=decode(planes,(source&0x8000)?uint(dx):7-uint(dx));
+  if(pixel) {pixel+=(position>>16);return (pixel&255)|((pixel>>12)<<8);}
+ }
+ return 0;
+}
+uint2 native_sample(uint nr,uint at,uint edge,uint layer) {
+ uint nx=edge+native_rows[nr+layer];uint2 t=native_tile(nr,at,nx/8,layer);
+ uint attr=t.y,pixel=decode(t.x,(attr&0x4000)?nx&7:7-(nx&7));
  if(pixel) pixel+=((attr>>10)&7)*(layer==2?4:16);
  bool high=(attr&0x2000)!=0;
  uint rank=layer==0?(high?12:8):layer==1?(high?11:7):high?((native_rows[nr+3]&1)?15:3):1;
@@ -100,12 +134,13 @@ void main(uint3 id : SV_DispatchThreadID) {
  if(c==0x01000000 || c==0x02000000 || (c>>24)==3) {
   bool relocated=(c>>24)==3,native_pixel=c==0x02000000 || relocated;
   uint source_y=relocated?(c>>8)&4095:id.y;
-  uint at=source_y*308;Row r;
+  uint at=source_y*311;Row r;
   r.phase=rows[at];r.core_x=rows[at+1];r.main_mask=rows[at+2];r.sub_mask=rows[at+3];
   r.window_main=rows[at+4];r.window_sub=rows[at+5];r.windows=rows[at+6];
   r.logic=rows[at+7];r.bounds=rows[at+8];r.math=rows[at+9];r.control=rows[at+10];r.fixed_color=rows[at+11];
   uint source_x=relocated?r.core_x+(c&255):id.x;
-  uint x=source_x+r.phase;
+  uint virtual_x=(r.math&1048576)?((source_x*rows[at+308]+rows[at+309])>>16):source_x;
+  uint x=virtual_x+r.phase;
   TerrainTile t;
   if(unused&1) {
    uint first=(r.core_x+r.phase)/8,column=x/8;
@@ -122,14 +157,16 @@ void main(uint3 id : SV_DispatchThreadID) {
   if(unused&2) {
    if(local>=0 && local<256) overlay=overlays[source_y*256+uint(local)];
   } else overlay=overlays[source_y*width+source_x];
-  if((r.math&65536) && !((r.math&131072) && local>=0 && local<256)) {
-   overlay.y=captured_object(at,source_x)|
+  if((native_pixel || !(r.math&1048576)) && local>=0 && local<256 && (native_rows[source_y*202+3]&8))
+   overlay.y=(overlay.y&~4095u)|native_object(source_y*202,at,uint(local));
+  if((r.math&65536) && (!(r.math&1048576) || !native_pixel) && !((r.math&131072) && local>=0 && local<256)) {
+   overlay.y=captured_object(at,(r.math&1048576)?uint(int(virtual_x)+int(rows[at+310])):source_x)|
     (((r.math&4096) && ((r.math&8192) || local<56))?0x80000000:0);
   }
   if(!relocated && (r.math&1024) && local>=0 && local<256) {
    bool land=!(r.math&4096) || (!(r.math&8192) && local>=56);
    bool needs_power=land && (t.attributes&0x80000);
-   uint nr=source_y*202,nx=uint(local)+native_rows[nr],bg=native_rows[nr+4+(nx/8)*2+1];
+   uint nr=source_y*202,nx=uint(local)+native_rows[nr],bg=native_tile(nr,at,nx/8,0).y;
    bool clear=land && (t.attributes&0x200000) && bg==0x1376;
    uint base=t.staged&65535,staged_roof=t.staged>>16;
    bool bad=(r.math&2048) && land && (!(t.attributes&0x100000) || base!=(t.expected&65535) ||
@@ -149,12 +186,12 @@ void main(uint3 id : SV_DispatchThreadID) {
    bool core=(r.math&512) && local>=0 && local<256;
    uint sub=index,priority=roof?11:7;
    if(core && local>=8 && local<248) {
-    uint2 n=native_sample(source_y*202,uint(local),1);sub=n.x;priority=n.y;
+    uint2 n=native_sample(source_y*202,at,uint(local),1);sub=n.x;priority=n.y;
    }
    if(!(r.sub_mask&2)) sub=0;
    samples[1]=sub;owners[1]=sub?1:5;
    if(core && (r.sub_mask&1)) {
-    uint2 hud=native_sample(source_y*202,uint(local),0);
+    uint2 hud=native_sample(source_y*202,at,uint(local),0);
     if(hud.x && (!sub || hud.y==12 || priority!=11)) {samples[1]=hud.x;owners[1]=0;}
    }
   } else [unroll] for(uint screen=0;screen<2;++screen) {
@@ -162,7 +199,7 @@ void main(uint3 id : SV_DispatchThreadID) {
    if(native_pixel) {
     uint nr=source_y*202;
     [unroll] for(uint layer=0;layer<3;++layer) {
-     uint2 n=native_sample(nr,uint(edge),layer);uint pixel=n.x,z=n.y;
+     uint2 n=native_sample(nr,at,uint(edge),layer);uint pixel=n.x,z=n.y;
      if(pixel && z>rank && (mask&(1u<<layer)) && (!(window&(1u<<layer)) || !window_contains(r,layer,edge))) {
       samples[screen]=pixel;owners[screen]=layer;rank=z;
      }
@@ -177,7 +214,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     [unroll] for(uint layer=0;layer<=2;layer+=2) {
      uint shift=layer?16:0,pixel=(overlay.x>>shift)&255,z=(overlay.x>>(shift+8))&15;
      if(overlay.x&0x40000000) {
-      uint2 n=native_sample(source_y*202,uint(edge),layer);pixel=(layer==0 && (overlay.x&0x20000000))?0:n.x;z=n.y;
+      uint2 n=native_sample(source_y*202,at,uint(edge),layer);pixel=(layer==0 && (overlay.x&0x20000000))?0:n.x;z=n.y;
      }
      if(pixel && z>rank && (mask&(1u<<layer)) && (!(window&(1u<<layer)) || !window_contains(r,layer,edge))) {
       samples[screen]=pixel;owners[screen]=layer;rank=z;

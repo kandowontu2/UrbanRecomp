@@ -38,8 +38,8 @@ static void check_fit_scale(void) {
             ScVideoCaptureScale(&s,v,w,h);
             assert(s.fit_scale==scale); /* Repeated Fit retains exactly the same scale. */
         }
-        ScViewport capped=ScVideoViewport(&s,32768,32768);
-        ScVideoRect d=ScVideoDestination(capped,32768,32768);
+        ScViewport capped=ScVideoViewport(&s,65536,65536);
+        ScVideoRect d=ScVideoDestination(capped,65536,65536);
         assert(capped.width==SC_MAX_CANVAS && capped.height==SC_MAX_CANVAS);
         assert(fabs((double)d.h/capped.height-s.fit_scale)<.005);
         ScViewport small=ScVideoViewport(&s,64,64);
@@ -55,18 +55,19 @@ static void check_zoom(void) {
         ScViewport before=ScVideoViewport(&s,w,h);
         assert(ScVideoZoom(&s,before,w,h,.5));
         ScViewport after=ScVideoViewport(&s,w,h);ScVideoRect d=ScVideoDestination(after,w,h);
-        assert(after.width>=before.width*2-2 && after.height>=before.height*2-2);
-        assert(after.pixel_scale==before.pixel_scale*.5 && d.w<=w && d.h<=h);
+        assert(after.width==before.width && after.height==before.height);
+        assert(after.pixel_scale==before.pixel_scale && s.map_zoom==.5);
+        assert(d.w<=w && d.h<=h);
         int x,y;
         double px=d.x+(after.core_x+128.5)*d.w/after.width;
         double py=d.y+(after.core_y+112.5)*d.h/after.height;
         assert(ScVideoToGuest(after,d,px,py,&x,&y) && x==128 && y==112);
-        assert(ScVideoZoom(&s,after,w,h,2));
-        assert(fabs(s.fit_scale-before.pixel_scale)<1e-9);
-        assert(ScVideoZoom(&s,ScVideoViewport(&s,w,h),w,h,1e-30));
-        after=ScVideoViewport(&s,w,h);assert(after.width<=SC_MAX_CANVAS && after.height<=SC_MAX_CANVAS);
-        assert(ScVideoZoom(&s,after,w,h,1e30));
-        after=ScVideoViewport(&s,w,h);assert(after.width>=256 && after.height>=224);
+        assert(ScVideoZoom(&s,after,w,h,2));assert(s.map_zoom==1);
+        assert(ScVideoZoom(&s,after,w,h,1e-30));
+        assert(s.map_zoom>0 && before.width/s.map_zoom<=SC_MAX_CANVAS+1);
+        after=ScVideoViewport(&s,w,h);
+        assert(after.width==before.width && after.height==before.height);
+        assert(ScVideoZoom(&s,after,w,h,1e30));assert(s.map_zoom==4);
         ScVideoSettings valid=s;
         assert(!ScVideoZoom(&s,after,w,h,NAN) && !ScVideoZoom(&s,after,w,h,0));
         assert(!ScVideoZoom(&s,after,0,h,2));assert(!memcmp(&s,&valid,sizeof s));

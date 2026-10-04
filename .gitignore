@@ -16,6 +16,7 @@
 
 # Active recompiler output -- generated locally per-developer
 src/gen/
+src/program_gen/
 
 # Extracted graphics/text (tools/extract_graphics.py output) -- derived
 # from the copyrighted ROM, generated locally per-developer

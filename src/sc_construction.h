@@ -30,4 +30,6 @@ bool ScConstructionPowerBitmap(const uint8_t *ram,const ScWorld *world,
 /* Interpreter oracle for differential verification of the ordered kernel. */
 bool ScConstructionPowerBitmapReference(const uint8_t *ram,const ScWorld *world,
     const uint8_t *rom,size_t size,uint8_t *bitmap,size_t bitmap_size);
+/* Initialize generated stock-district spatial fields with the original scans. */
+bool ScConstructionPrimeFields(uint8_t *ram,const uint8_t *rom,size_t size);
 #endif

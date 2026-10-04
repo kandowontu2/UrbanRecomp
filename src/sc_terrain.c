@@ -20,6 +20,15 @@ bool ScTerrainResize(ScTerrainFrame *f,unsigned width,unsigned height) {
 void ScTerrainDestroy(ScTerrainFrame *f) {
     free(f->tiles);free(f->palette);free(f->rows);free(f->overlays);free(f->native);free(f->resources);free(f->city);memset(f,0,sizeof *f);
 }
+bool ScTerrainSpanWidth(ScTerrainFrame *f,unsigned width) {
+    if(!f || !f->tiles || !width || width>4096)return false;
+    if(width<f->width)width=f->width;
+    unsigned stride=(width+14)/8;
+    if(stride==f->stride) return true;
+    ScTerrainTile *tiles=calloc((size_t)stride*f->height,sizeof *tiles);
+    if(!tiles) return false;
+    free(f->tiles);f->tiles=tiles;f->stride=stride;return true;
+}
 static unsigned decode(uint32_t planes,unsigned bit) {
     return ((planes>>bit)&1)|(((planes>>(bit+8))&1)<<1)|
         (((planes>>(bit+16))&1)<<2)|(((planes>>(bit+24))&1)<<3);
@@ -47,11 +56,18 @@ static unsigned captured_object(const ScTerrainFrame *f,const ScTerrainRow *row,
     if(row->reserved==UINT32_MAX) return 0;
     unsigned bucket=x/32,header=row->reserved;
     if(bucket>=f->city[header]) return 0;
+    if(row->math&SC_ROW_OBJECT_GRID) bucket+=((row->world_y>>8)&255)/32*f->city[header];
     unsigned at=f->city[header+1+bucket*2],count=f->city[header+2+bucket*2],result=0;
     for(unsigned i=0;i<count;++i,at+=6) {
         const uint32_t *r=f->city+at;int dx=(int)x-(int32_t)r[0];
         if((int)x<(int32_t)r[5] || dx<0 || (unsigned)dx>=r[1]) continue;
         unsigned y=r[2],attr=r[3],size=r[1];
+        if(row->math&SC_ROW_OBJECT_GRID) {
+            int dy=(int16_t)(row->world_y>>8)-(int32_t)r[2];
+            if(attr&0x10000) dy&=255;
+            if(dy<0 || (unsigned)dy>=size) continue;
+            y=(unsigned)dy;
+        }
         if(attr&0x4000) dx=(int)size-1-dx;
         if(attr&0x8000) y=size-1-y;
         unsigned tile=(((attr&0xf0)+(y/8)*16)&255)|(((attr&15)+(unsigned)dx/8)&15);
@@ -82,13 +98,14 @@ ScTerrainTile ScTerrainResolveTile(const ScTerrainFrame *f,unsigned y,ScTerrainT
     t.expected=base|(roof<<16);
     t.attributes|=((base>>10)&7)*16|(((roof>>10)&7)*16)<<8|
         (base&0x4000?1u<<16:0)|(roof&0x4000?1u<<17:0)|(warning?SC_TILE_POWER_WARNING:0);
-    unsigned dy=(base&0x8000)?7-row->world_y:row->world_y;
+    unsigned world_y=row->world_y&7;
+    unsigned dy=(base&0x8000)?7-world_y:world_y;
     unsigned at=(row->chr_base+(base&1023)*16+dy)&0x7fff;
     t.base=t.base==UINT32_MAX?0:resource_word(f,row,at)|(uint32_t)resource_word(f,row,at+8)<<16;
-    dy=(roof&0x8000)?7-row->world_y:row->world_y;
+    dy=(roof&0x8000)?7-world_y:world_y;
     at=(row->chr_base+(roof&1023)*16+dy)&0x7fff;
     t.roof=(roof&1023)==0x300?0:resource_word(f,row,at)|(uint32_t)resource_word(f,row,at+8)<<16;
-    at=(row->warning_base+0x376*16+row->world_y)&0x7fff;
+    at=(row->warning_base+0x376*16+world_y)&0x7fff;
     t.reserved=warning?resource_word(f,row,at)|(uint32_t)resource_word(f,row,at+8)<<16:0;
     return t;
 }
@@ -103,9 +120,37 @@ static bool contains_mode(const ScTerrainRow *row,unsigned layer,int x,bool logi
     }
 }
 static bool contains(const ScTerrainRow *row,unsigned layer,int x) {return contains_mode(row,layer,x,true);}
+ScNativeTile ScTerrainNativeTile(const ScTerrainFrame *f,unsigned y,unsigned layer,unsigned column) {
+    const ScNativeRow *native=f->native+y;
+    if(!(native->flags&SC_NATIVE_RAW_BG)) return native->tiles[layer][column];
+    const uint32_t *d=native->layer[layer];
+    unsigned sx=(d[0]+column*8)&1023,sy=d[1],size=d[4];
+    unsigned map=d[2]+((sy>>3)&31)*32+((sx>>3)&31);
+    if((sx&256) && (size&1)) map+=0x400;
+    if((sy&256) && (size&2)) map+=size&1?0x800:0x400;
+    unsigned word=resource_word(f,f->rows+y,map),depth=layer==2?2:4;
+    unsigned dy=word&0x8000?7-(sy&7):sy&7;
+    unsigned at=d[3]+(word&1023)*(depth*4)+dy;
+    return (ScNativeTile){resource_word(f,f->rows+y,at)|
+        (depth==4?(uint32_t)resource_word(f,f->rows+y,at+8)<<16:0),word};
+}
+unsigned ScTerrainNativeObject(const ScTerrainFrame *f,unsigned y,unsigned x) {
+    const ScNativeRow *row=f->native+y;
+    unsigned count=(row->flags>>8)&127;
+    while(count) {
+        unsigned i=--count;const uint32_t *s=row->layer[i/30]+5+2*(i%30);
+        int dx=(int)x-(int16_t)s[0];
+        if(dx<(int)((s[1]>>16)&15) || dx>=(int)((s[1]>>20)&15)) continue;
+        unsigned at=s[1]&32767,planes=resource_word(f,f->rows+y,at)|
+            (uint32_t)resource_word(f,f->rows+y,at+8)<<16;
+        unsigned value=decode(planes,s[1]&0x8000?(unsigned)dx:7-(unsigned)dx);
+        if(value) {value+=(s[0]>>16);return (value&255)|((value>>12)<<8);}
+    }
+    return 0;
+}
 static unsigned native_sample(const ScTerrainFrame *f,unsigned y,unsigned x,unsigned layer,unsigned *rank) {
     const ScNativeRow *native=f->native+y;unsigned px=x+native->phase[layer];
-    const ScNativeTile *t=&native->tiles[layer][px/8];
+    ScNativeTile captured=ScTerrainNativeTile(f,y,layer,px/8);const ScNativeTile *t=&captured;
     unsigned pixel=decode(t->planes,(t->attributes&0x4000)?px&7:7-(px&7));
     bool high=(t->attributes&0x2000)!=0;
     *rank=layer==0?(high?12:8):layer==1?(high?11:7):high?(native->flags&1?15:3):1;
@@ -118,7 +163,7 @@ static bool native_repair(const ScTerrainFrame *f,unsigned x,unsigned y,
     if(!(row->math&SC_ROW_NATIVE_REPAIR) || local<0 || local>=256) return false;
     bool land=!(row->math&SC_ROW_CITY_HUD) || (!(row->math&SC_ROW_HUD_TOP) && local>=56);
     bool warning=land && (tile->attributes&SC_TILE_POWER_WARNING);
-    unsigned native_bg=f->native[y].tiles[0][(local+f->native[y].phase[0])/8].attributes;
+    unsigned native_bg=ScTerrainNativeTile(f,y,0,(local+f->native[y].phase[0])/8).attributes;
     bool clear=land && (tile->attributes&SC_TILE_CLEAR_WARNING) && native_bg==0x1376;
     unsigned base=tile->staged&65535,roof=tile->staged>>16;
     bool bad=(row->math&SC_ROW_STAGING_CHECK) && land &&
@@ -132,7 +177,7 @@ static bool native_repair(const ScTerrainFrame *f,unsigned x,unsigned y,
 uint32_t ScTerrainPixel(const ScTerrainFrame *f,unsigned x,unsigned y) {
     if(!f || !f->tiles || x>=f->width || y>=f->height) return 0xff000000;
     const ScTerrainRow *row=f->rows+y;
-    unsigned px=x+row->phase;
+    unsigned px=((row->math&SC_ROW_CITY_ZOOM)?(unsigned)(((uint64_t)x*row->zoom_step+row->zoom_fraction)>>16):x)+row->phase;
     ScTerrainTile resolved=ScTerrainResolveTile(f,y,ScTerrainRawTile(f,y,px/8));
     const ScTerrainTile *t=&resolved;
     unsigned b=decode(t->base,t->attributes&(1<<16)?px&7:7-(px&7));
@@ -144,8 +189,11 @@ uint32_t ScTerrainPixel(const ScTerrainFrame *f,unsigned x,unsigned y) {
     bool windows[]={contains(row,1,edge),contains(row,5,edge)};
     ScTerrainOverlay overlay=f->overlays[(size_t)y*f->width+x];
     int local=(int)x-(int)row->core_x;
+    if(!(row->math&SC_ROW_CITY_ZOOM) && local>=0 && local<256 && (f->native[y].flags&SC_NATIVE_RAW_OBJ))
+        overlay.object=(overlay.object&~UINT32_C(0xfff))|ScTerrainNativeObject(f,y,local);
     if((row->math&SC_ROW_GPU_OBJECTS) && !((row->math&SC_ROW_OBJECT_CORE) && local>=0 && local<256)) {
-        overlay.object=captured_object(f,row,x)|
+        unsigned object_x=(row->math&SC_ROW_CITY_ZOOM)?(unsigned)(row->zoom_x+(int)(((uint64_t)x*row->zoom_step+row->zoom_fraction)>>16)):x;
+        overlay.object=captured_object(f,row,object_x)|
             ((row->math&SC_ROW_CITY_HUD) && ((row->math&SC_ROW_HUD_TOP) || local<56)?UINT32_C(0x80000000):0);
     }
     native_repair(f,x,y,t,&overlay);
@@ -229,6 +277,8 @@ uint32_t ScNativePixel(const ScTerrainFrame *f,unsigned x,unsigned y) {
         pixels[layer]=native_sample(f,y,edge,layer,ranks+layer);
     }
     ScTerrainOverlay overlay=f->overlays[(size_t)y*f->width+x];
+    if(native->flags&SC_NATIVE_RAW_OBJ)
+        overlay.object=(overlay.object&~UINT32_C(0xfff))|ScTerrainNativeObject(f,y,edge);
     for(unsigned screen=0;screen<2;++screen) {
         unsigned mask=screen?row->sub:row->main,window=screen?row->window_sub:row->window_main,rank=0;
         for(unsigned layer=0;layer<3;++layer) {

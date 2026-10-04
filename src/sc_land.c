@@ -38,7 +38,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,uint8_t *restr
         switch(c->pc) {
         case 0x849e:case 0xa29a:case 0xa2b9:case 0x9e61:
             if(6>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;c->cyclesUsed=6;cycles+=6;if(single) return cycles;break;
         case 0x84c3:case 0xa2b8:case 0xa2d6:case 0x9e8d:
             if(6>budget-cycles) return cycles;
@@ -47,7 +47,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,uint8_t *restr
             if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
-            if(w->huge) ScWorldGuestStep(w,c,r);
+            if(w->huge) ScWorldGuestStepPrepared(w,c,r);
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xdf));
             c->pc=0x9ce1;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;

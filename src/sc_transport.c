@@ -49,7 +49,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
         case 0x849e:case 0xa29a:case 0x8ff4:
             if(c->pc==0x8ff4 && !w->huge) return cycles;
             if(6>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;c->cyclesUsed=6;cycles+=6;if(single) return cycles;break;
         case 0x84c3:case 0xa2b8:case 0x9034:
             if(6>budget-cycles) return cycles;

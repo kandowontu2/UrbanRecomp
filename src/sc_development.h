@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include "sc_world.h"
 
 typedef struct ScDevelopment {
@@ -18,6 +19,9 @@ uint16_t ScDevelopmentStep(ScDevelopment *state, uint8_t *ram,
 uint16_t ScDevelopmentStepWorld(ScDevelopment *state, const ScWorld *world, uint8_t *ram,
                            uint16_t pc, uint16_t dp, uint16_t sp, int speed);
 void ScDevelopmentReset(ScDevelopment *state);
+/* Optional host-only operation timings; no guest state or clock changes. */
+void ScDevelopmentSetProfileClock(uint64_t (*clock)(void),uint64_t frequency);
+void ScDevelopmentReportProfile(FILE *out);
 typedef struct Interp816 Interp816;
 /* Native C zone-capacity and simulation random kernels. Return the original
  * cycle cost at the compatibility boundary, or zero for an unhandled entry. */

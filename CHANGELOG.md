@@ -1,5 +1,162 @@
 # Enhanced fork changelog
 
+## 1.2.0 Enhanced Beta 12 — 2026-10-04
+
+- Convert connected road, bridge and rail upkeep to native C, including
+  traffic-dependent artwork, funding and decay, bridge footprint changes,
+  train initialization and seaport counts. Preserve original RNG order,
+  full-world writes and exact frame/IRQ deadlines; keep one-instruction
+  handling at beam boundaries. Full-city state and rendering remain exact.
+  Local complete-cycle comparisons show about 11% lower average processing
+  time and fewer late frames; occasional frame spikes remain.
+
+- Defer compatibility-memory preparation while direct C simulation helpers
+  access city data themselves. Bind the original opcode path when needed;
+  retain full-coordinate hooks, beam deadlines and bus-backed sprite/tile work.
+- Add experimental independent land tile summaries on Vulkan, including density,
+  pollution, occupancy and original branch clocks. Check all four raw source
+  tiles before publication; retain ordered native land-value arithmetic,
+  exact interrupt boundaries and nonblocking C fallback. Keep the job opt-in
+  because production comparisons have not shown a performance improvement.
+- Calculate independent crime cells on Vulkan, including police coverage,
+  signed bias, native scratch values and branch clocks. Publish results in
+  native order, reject changed source samples and retain nonblocking C
+  fallback, save/load invalidation and original interrupt boundaries.
+- Specialize native density, smoothing, police/fire and zone-update kernels
+  for their bounded, atomic and accelerated callers. Preserve original
+  clocks and interrupt behavior while reducing repeated execution-mode work.
+  Complete-cycle comparisons on the filled 1920x1600 city show about 17%
+  lower average processing time; occasional frame spikes remain.
+- Keep the occupied-zone count at full width when calculating city centers
+  on dense large maps. Resume count carries correctly after saves, and
+  recover older saves whose derived city center lies outside the map.
+- Refresh the land gutter beside the toolbox during terrain zoom instead
+  of retaining old pixels or GPU markers. Preserve native UI in that strip.
+- Use the native byte coordinates for terrain-quality updates so unused
+  adjacent scratch bytes cannot disable the complete-cell C fast path.
+- Batch terrain-quality calculations and reduce repeated scratch/register
+  publication in GPU pollution and police/fire coverage passes. Keep exact
+  interrupt budgets, field values and final native CPU/save state.
+- Connect density, land value, crime, pollution and service-field stages to
+  the native city loop, retaining GPU submission and original beam deadlines.
+- Connect extra development attempts to shared native RNG, housing and zone
+  mutation helpers, preserving attempt order, full map writes and city time.
+  Dispatch directly to the owning helper and avoid repeating invariant CPU
+  mode checks inside connected mutations; retain stack and deadline checks.
+- Compile real caller continuations after the game's five inline-argument
+  helpers, covering menu and complete-city simulation paths that previously
+  fell back to the CPU interpreter.
+- Select ordinary road artwork in one bounded C operation, preserving traffic
+  thresholds, full map coordinates, tile invalidation and original clocks.
+- Retire fully funded ordinary-road upkeep and artwork together in C. Keep
+  decay, bridge and short-deadline paths at their original boundaries.
+- Keep road, rail and bridge upkeep in the connected city execution path,
+  retaining RNG, live map bindings and interrupt/census boundaries. Calculate
+  the bridge-distance probe directly in C when it fits before a beam event.
+- Prepare contiguous GPU-owned terrain row spans once per HUD/blanking
+  boundary instead of repeating those checks for each projected pixel.
+- Reuse exact power-network results across native traversal-policy changes
+  when conductivity, generator identities and capacity remain unchanged.
+  Preserve refresh timing and ordered brownouts; invalidate both cached
+  results after an electrical-network change.
+- Update population totals from changed zone centers and their affected
+  house neighbors instead of recounting surrounding tile chunks. Retain
+  simultaneous-edit, reload and full-width population correctness.
+- Compile every phase of the native animated-graphics dispatch table to C,
+  retaining DMA writes, live operand checks and per-instruction clocks.
+- Compile the native UI-reason, syscall, screen, ending and ordinary-zone
+  dispatch tables, including idle handlers. Execute the verified view-cursor
+  NOP patch natively instead of falling back to the 65816 interpreter.
+- Keep the HUD, minimap, overview panels and menus at their normal display
+  scale while zoom changes only the city terrain. Match mouse selection,
+  outlines and drag pan to the zoomed land; retain CPU/GPU pixel parity.
+- Spread expanded-city zone processing across the map instead of scanning
+  visibly from top to bottom. Visit every tile once per pass and persist the
+  scan position/order so saved cities resume consistently.
+- Keep large-city tile and development work in a connected native C execution
+  path, retaining clock, interrupt and census boundaries. Controlled 50x tests
+  show an improvement. The final filled-city adaptive-Tab sample averages
+  60.14 FPS at X50; occasional late frames remain.
+- Open hidden City 3 through the native main-menu fade and Load City setup,
+  clearing the old menu before displaying save entries, including empty SRAM.
+- Add hidden saved City 3 at 1920x1600, revealed with Ctrl+Shift+tilde on
+  Load City (also on the main menu when no regular cities exist). Generate
+  a connected, developed city with ordinary zone capacities, power plants,
+  transport, police/fire, parks, gifts and civic/coastal facilities.
+  Save its native city data and full world in a checked SRM trailer while
+  preserving the original two cartridge slots; saved City 3 takes precedence
+  over generated code on subsequent loads.
+- Double maximum zoom-out terrain coverage to 4096x4096 native pixels,
+  retaining fixed UI scale, mouse mapping, CPU fallback and GPU support.
+
+- Compile all 56 indirect city-tool dispatch entries to native C, including
+  adviser, budget and gifts. Retire interrupt and idle CPU control natively,
+  preserving stack/vector bus order, event clocks and independent controls.
+- During Tab fast-forward, keep frame-wait continuations in one native C
+  scheduler loop across scanout, HDMA and line boundaries. Retain per-span
+  audio/beam retirement, interrupt
+  exits, exact entropy counters and a preceding-dispatch control.
+- Bypass world operand-plan decoding for irrelevant instructions and banks.
+  Preserve unmapped access descriptors, live ROM edits, geometry immediates
+  and verified footprint-table exceptions; retain original-path controls.
+- Compile world-hook ownership, cache live-validated operand plans, and execute
+  common native tile/field coordinate entries directly in C. Retain independent
+  original hooks for full-state, pixel and timing comparisons.
+- Make Escape open the original Save City slot dialog during city play.
+  Keep Escape as Back/Close in menus and dialogs, ignore key repeats, and
+  restore city rendering through the native menu transition after saving
+  or cancelling.
+- Share immutable two-dimensional sprite grids across scanlines and move
+  vertical sprite admission to Vulkan. Preserve wrapped OAM, unwrapped
+  vehicles, live mid-frame edits, overlapping priority and CPU fallback.
+- Generate connected C blocks for UI/driver code, linking ordinary successors
+  with direct C control flow. Preserve live target checks, opcode patches,
+  host preparation and per-edge event retirement; retain matched controls.
+- Connect compiled C UI/driver execution across verified host-hook boundaries,
+  preserving per-instruction beam, interrupt, audio and expanded-world mapping
+  while avoiding the full gameplay dispatcher between those boundaries.
+- Add a compatible ROM-to-C program tier for 33,091 instruction sites across
+  the code banks. Preserve live operands, bus order, flags, stack and clocks
+  while returning at every host hook/interrupt boundary. Keep patched,
+  unresolved and control-state fallback explicit; retain local generation.
+- Move supported native Mode 1 background tilemap and CHR decoding into
+  Vulkan using immutable scanline VRAM/scroll descriptors. Preserve original
+  pixels, relocated HUD/adviser panels, color math and decoded fallback.
+- Replace the counted-sprite emitter with direct C record assembly and
+  resumable deadline continuations, verified against the original ROM CPU.
+- Convert connected traffic/growth decay and transport-total postpasses to
+  resumable C, including partial cells, setup, loop control and returns on
+  stock and expanded maps. Preserve simulation clocks and field publication.
+- Convert the connected 16-bit division driver to C, including interrupted
+  operand setup, loop and return; fuse complete iterations into word arithmetic
+  while retaining exact original clocks and beam/IRQ deadline behavior.
+- Convert city tile-sweep setup, owner/infrastructure dispatch, statistics,
+  loop control and returns into a connected C path. Join expanded coordinate
+  lookup/return and retain all original clocks, map hooks and tile invalidation.
+- Convert both additive RNG drivers to resumable C, including tiny-deadline
+  setup/loop stages and the bounded generator's continuations around division.
+  Preserve the random sequence, stack shadows and restored caller flags.
+- Connect frame-wait setup, deadline continuations and return to a native C
+  scheduler lane. Preserve counter entropy, interrupts, beam events and audio
+  clocks while avoiding the full gameplay dispatcher during verified waits.
+- Move supported native OBJ pixel decoding and priority composition to Vulkan
+  through immutable scanline sliver descriptors. Keep original OAM selection
+  and hardware overflow flags; reconstruct only CPU-requested sprite blocks.
+  Intermediate Tab frames retain sprite state without constructing unused
+  pixel rows. Preserve held-map snapshots and over-capacity/layout fallback.
+  Cache vertical OAM membership in original rotated order, checking live OAM
+  and size/priority state each line so DMA and host edits invalidate it.
+- Validate the filled 1920x1600 city at X50 with adaptive Tab pacing: 60.14
+  FPS across 3,174 warm frames, p99 active work 14.64 ms and four frames over
+  16.7 ms. The complete-city comparison matches all 13,466,232 integer state
+  bytes and rendered pixels, with zero main/kernel interpreter calls on that
+  replay. All 19 restored tracks play with zero music-worker failures.
+
+Remaining limits: occasional frame spikes remain; these measurements apply to
+this tested PC/workload rather than every machine or game path. Physical
+hardware pinch delivery remains unverified, and the yearly black budget
+popup report remains deferred.
+
 ## 1.2.0 Enhanced Beta 11 — 2026-10-03
 
 ### Performance and rendering

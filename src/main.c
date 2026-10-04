@@ -69,9 +69,10 @@ typedef SDL_Rect ScRect;
 #include "snes/cart.h"
 #include "snes/dsp1.h"
 #include "snes/interp816.h"
+#include "sc_program.h"
 #include "types.h"
 
-/* ── globals the shared runner device sources reference ─────────────────── */
+/* â”€â”€ globals the shared runner device sources reference â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 /* SC_AOT_TIER: built as part of the AOT/CpuState migration (see
  * src/aot_probe.c and the UrbanRecompAOT target). In that build the
  * shared runtime is linked in, and it already defines several of the symbols
@@ -106,6 +107,9 @@ uint8_t    g_ram[0x20000];
 #include "sc_math.h"
 #include "sc_tile_lookup.h"
 #include "sc_wait.h"
+#include "sc_sprite.h"
+#include "sc_postpass.h"
+#include "sc_sweep.h"
 #include "sc_music.h"
 #include "sc_beam.h"
 #include "sc_ppu.h"
@@ -114,8 +118,10 @@ uint8_t    g_ram[0x20000];
 #include "sc_construction.h"
 #include "sc_clipboard.h"
 #include "sc_power_refresh.h"
+#include "sc_power_traversal.h"
 #include "sc_world_guest.h"
 #include "sc_journey.h"
+#include "sc_test_city.h"
 static ScWorld s_world;
 static ScWorldGuest s_world_guest;
 static bool s_perf_detail;
@@ -123,6 +129,7 @@ static double s_perf_clock_ms,s_perf_raster_ms,s_perf_power_ms;
 static uint64_t s_perf_spatial_cells;
 static uint64_t s_perf_native_development_calls;
 static bool s_skip_custom_frame;
+static bool s_wait_lane_enabled;
 static bool s_measure_custom_frame;
 static double s_custom_frame_ms;
 static double s_perf_custom_ms,s_perf_native_ms;
@@ -131,6 +138,17 @@ static bool s_journey_arming;
 static unsigned s_journey_menu_selection;
 static unsigned s_loading_slot;
 static bool s_city_loading;
+static bool s_test_revealed,s_test_load_pending,s_test_generate_pending,s_test_saving,s_test_swap;
+static bool s_test_menu_pending;
+static uint8_t s_test_native_backup[0x8000],s_test_names_backup[32];
+static unsigned s_test_flags_backup;
+static void test_city_restore_sram(void);
+static bool s_save_dialog_pending,s_save_dialog_active;
+static Interp816 s_save_dialog_return;
+static unsigned s_save_dialog_phase;
+static uint16_t s_save_dialog_page,s_save_dialog_x,s_save_dialog_y;
+static unsigned s_escape_back_frames;
+static uint16_t s_escape_back_input;
 static bool s_size_selecting, s_practice_size_pending;
 static unsigned s_size_game_choice;
 static void save_large_map_setting(void);
@@ -194,7 +212,7 @@ static void sc_catchup_apu(Snes *snes) {
   } else snes_catchupApu(snes);
 }
 
-/* ── RTL glue the device sources call. This host bypasses common_rtl.c (the
+/* â”€â”€ RTL glue the device sources call. This host bypasses common_rtl.c (the
  * AOT/CpuState runtime) entirely for Phase 1, so these are the same
  * minimal no-op/direct implementations snesrecomp's own reference driver
  * uses (cosim/ref_driver.c) rather than a game-specific reinterpretation. */
@@ -274,7 +292,7 @@ static bool s_enable_audio = true;
 static uint64_t s_nmi_requests;
 static uint64_t s_nmi_serviced;
 
-/* ── debugging tools (env-gated, zero cost when unset) ───────────────────
+/* â”€â”€ debugging tools (env-gated, zero cost when unset) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  * SC_IO_TRACE=<end-frame>   log every joypad-register read/write ($4016/17,
  *                           $4200, $4218-421b) up to that frame.
  * SC_PC_TRACE=<frame>       on the first $4218 read at/after that frame,
@@ -918,8 +936,8 @@ static void hdma_do_line(HdmaChanState *c) {
   c->repCount--;
 }
 
-/* ── accurate H/V position driver, ported from snesrecomp/cosim/ref_driver.c
- * (the framework's own game-neutral reference frame loop) ──────────────── */
+/* â”€â”€ accurate H/V position driver, ported from snesrecomp/cosim/ref_driver.c
+ * (the framework's own game-neutral reference frame loop) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 /* Defined with the host-map block far below; used from the frame loop here. */
 static void host_map_arm_captures(void);
 static void host_map_compose(void);
@@ -998,6 +1016,9 @@ static void handle_pos_stuff(void) {
 
   if (snes->hPos == 0) {
     bool startingVblank = false;
+    if(snes->vPos==1)
+      ScTestCityMenuFont(g_ppu->vram,g_ppu->oam,g_ppu->highOam,
+          s_test_revealed && ram_w(0x14)==17);
     if (snes->vPos <= kVideoHeight) {
       uint64_t raster_t0=s_perf_detail?SDL_GetPerformanceCounter():0;
       /* Host-map mode renders each visible line TWICE: once with the layer
@@ -1113,7 +1134,9 @@ static void handle_pos_stuff(void) {
             sub_window_mask<0 && g_snes_ppu_dbg_layer_mask==0xff &&
             ScRendererDeferNativeLine(&s_custom_renderer,g_ppu,g_ram,snes->vPos-1);
         if(native_gpu) ScPpuSkipPixels(true);
+        ScPpuDeferObjects(native_gpu);
         ppu_runLine(g_ppu, snes->vPos);
+        ScPpuDeferObjects(false);
         ScPpuSkipPixels(skipped);
         g_ppu->screenWindowed[1]=saved;
       }
@@ -2214,7 +2237,7 @@ static void sc_note_aot_entry(uint32_t pc24, int mf, int xf) {
 }
 
 #ifdef SC_AOT_TIER
-/* ── SC_FIBER=1: run the guest inside the fiber (migration step 3d) ───────
+/* â”€â”€ SC_FIBER=1: run the guest inside the fiber (migration step 3d) â”€â”€â”€â”€â”€â”€â”€
  *
  * The driver itself lives in src/sc_fiberdrive.c, because it needs
  * cpu_state.h and that header declares a global `CpuState g_cpu` which
@@ -2239,7 +2262,7 @@ static int  s_fiber_want;
 static int  s_fiber_explicit;
 
 /* One host frame in the fiber model: advance the PPU and devices for a whole
- * frame (so raster effects still work line by line, per MIGRATION_step3 §4),
+ * frame (so raster effects still work line by line, per MIGRATION_step3 Â§4),
  * release the vblank wait the way the NMI handler would, then let the guest
  * run until its vblank HLE hands the frame back. */
 /* Beam advance, exposed to the frame driver (src/sc_fiberdrive.c).
@@ -2501,6 +2524,8 @@ static ScMouseDialog s_mouse_dialog;
 static const int kDevelopmentSpeeds[] = {1, 2, 5, 10, 50};
 static const char *const kDevelopmentSpeedNames[] = {"NORMAL", "X2", "X5", "X10", "X50"};
 static ScDevelopment s_development;
+static bool s_native_bind_eager;
+static uint64_t s_native_bind_deferred,s_native_bind_fallback;
 static ScPopulation s_population;
 static ScPopulationCensus *s_population_census;
 static ScRefreshClock s_population_clock;
@@ -2598,6 +2623,43 @@ static void world_saved_city(bool save) {
 #endif
   if (!ok) { remove(temporary); fprintf(stderr,"world: could not save %s\n",s_world_path); }
   free(data);
+}
+/* Use the native codec on a private cartridge image. Neither an interrupted
+ * load/save nor the half-second SRAM writer may publish it into slots 1/2. */
+static bool test_city_private_sram(const uint8_t *native) {
+  if(s_test_swap || g_snes->cart->ramSize!=sizeof s_test_native_backup)return false;
+  memcpy(s_test_native_backup,g_snes->cart->ram,sizeof s_test_native_backup);
+  memcpy(s_test_names_backup,g_ram+0xb65,sizeof s_test_names_backup);
+  s_test_flags_backup=ram_w(0x44);
+  ScSram_Suspend(true);s_test_swap=true;
+  if(native)memcpy(g_snes->cart->ram,native,sizeof s_test_native_backup);
+  else g_snes->cart->ram[5]=0; /* failed native compression cannot look saved */
+  return true;
+}
+static void test_city_restore_sram(void) {
+  if(!s_test_swap)return;
+  memcpy(g_snes->cart->ram,s_test_native_backup,sizeof s_test_native_backup);
+  memcpy(g_ram+0xb65,s_test_names_backup,sizeof s_test_names_backup);
+  ram_set_w(0x44,s_test_flags_backup);
+  s_test_swap=false;ScSram_Suspend(false);
+}
+static bool test_city_begin_load(void) {
+  uint32_t n;const uint8_t *record=ScSram_Extra(&n);
+  if(!n) {s_test_generate_pending=true;return true;}
+  ScWorld *world=malloc(sizeof *world);ScPopulation population;
+  bool valid=world && ScTestCityDecode(record,n,world,&population);free(world);
+  if(!valid) {fprintf(stderr,"[test city] City 3 record is invalid; saved file preserved\n");return false;}
+  if(!test_city_private_sram(ScTestCityNativeSave(record,n)))return false;
+  s_test_load_pending=true;ram_set_w(0x421,1);return true;
+}
+static void test_city_finish_save(void) {
+  size_t n=ScTestCityRecordSize();uint8_t *record=malloc(n);
+  bool ok=record && ScTestCityEncode(record,n,g_snes->cart->ram,&s_world,&s_population);
+  test_city_restore_sram();s_test_saving=false;
+  ok=ok && ScSram_SetExtra(record,(uint32_t)n);free(record);
+  if(ok) {ScSram_Flush();ok=ScSram_Stored();}
+  if(ok)fprintf(stderr,"[test city] saved City 3 in SRAM; normal slots preserved\n");
+  else fprintf(stderr,"[test city] could not save City 3; previous saves preserved\n");
 }
 static const int kDragTurbos[] = { 1, 2, 3, 4, 6 };
 
@@ -3051,7 +3113,7 @@ static void sc_maybe_trigger_disaster(void) {
   s_disaster_bit = -1;
 }
 
-/* ── 00:90dd, the stream decompressor ──────────────────────
+/* â”€â”€ 00:90dd, the stream decompressor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  *
  * 48% of the overview-map load (docs/ROM_MAP.md). src/sc_decomp.c does
  * the same work on the host.
@@ -3350,7 +3412,7 @@ static void sc_decomp_hook(Interp816 *cpu) {
   }
 }
 
-/* ── 02:8b34, the overview-map cell classifier ───────────────
+/* â”€â”€ 02:8b34, the overview-map cell classifier â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  *
  * 02:899b software-renders the whole city into a bitmap -- 120x100 = 12000
  * cells, one classifier call each, 46% of the load window. The classifier is
@@ -3564,6 +3626,374 @@ static bool refresh_live_population(const uint8_t *rom,size_t size) {
   return ScPopulationRefreshCached(s_population_census,&s_population,g_ram,&s_world,rom,size);
 }
 
+/* Connected C execution for the UI/driver banks. These are the host hook
+ * boundaries in run_one_frame, rather than boundaries inferred from one
+ * recorded city. World-coordinate hooks and mapped operands still run on
+ * every edge inside the lane. Spatial bank 03 retains its larger native C
+ * kernels and development scheduler. New bank 00/01 hooks must be added here. */
+static bool sc_program_host_boundary(const Interp816 *cpu) {
+  if(cpu->k==0) {
+    if(s_world.test_city && (cpu->pc==0xc8e0 || cpu->pc==0xc987 || cpu->pc==0xca35))return true;
+    if(ScSpriteOwns(cpu->pc) || ScWaitOwns(cpu->pc)) return true;
+    switch(cpu->pc) {
+    case 0x80b2:case 0x80c0: /* NMI observation / title and vehicle snapshot */
+    case 0x90dd:case 0x90ee:case 0x9108:case 0x90eb:case 0x9106: /* decompression */
+    case 0x9882: /* music command substitution */
+    case 0xd19e:case 0xd1fc:case 0xd20a: /* mouse dialog observations */
+    case 0xc019:case 0xc0f5:case 0xc154:case 0xbd41: /* vehicles */
+      return true;
+    }
+    return false;
+  }
+  if(cpu->k==1) {
+    if(s_save_dialog_active && cpu->pc==0xad54) return true;
+    if(ScTileLookupOwns(cpu->pc)) return true;
+    switch(cpu->pc) {
+    case 0xf1ed: /* map generation */
+    case 0x8976:case 0x897f: /* warnings, construction, paste, census, power */
+    case 0xe59b:case 0xa63c: /* Journey messages */
+    case 0xcc1a:case 0xcc3a: /* gift dialog observation */
+    case 0xa9c4: /* music enable */
+    case 0xf11a:case 0xef29:case 0xef86: /* vehicles */
+    case 0x8d26:case 0x89a0:case 0x89a3: /* accelerated scroll boundaries */
+    case 0x8d2d:case 0x8d92:case 0x8dcd:
+      return true;
+    }
+    return s_scroll_pass[0].repeating || s_scroll_pass[1].repeating;
+  }
+  return true;
+}
+
+static uint64_t s_program_lane_edges,s_program_lane_entries;
+static uint64_t s_program_block_edges,s_program_block_entries;
+typedef struct {uint64_t target;long *guard;unsigned edges;} ScProgramHostFlow;
+static bool sc_program_flow_before(void *context,Interp816 *cpu) {
+  ScProgramHostFlow *flow=context;
+  if(sc_program_host_boundary(cpu) || !ScProgramAvailable(cpu)) return false;
+  if(flow->edges) {
+    if(s_frames>=flow->target || *flow->guard<=0) return false;
+    --*flow->guard;
+    if(s_bank_profile) {
+      ++s_bank_ops[cpu->k];
+      if(cpu->k==s_bank_page_sel) {
+        ++s_b3_page[cpu->pc>>8];
+        if((cpu->pc>>8)==s_pc_profile_page) ++s_pc_profile_ops[cpu->pc&255];
+      }
+    }
+  }
+  ScWorldGuestStepPrepared(&s_world,cpu,g_ram);
+  ScWorldGuestVehiclesPrepared(&s_world,cpu,g_ram,g_snes->multiplyA);
+  sc_note_executed_pc(((uint32_t)cpu->k<<16)|cpu->pc,cpu->mf,cpu->xf);
+  ScWorldGuestBeginPrepared(&s_world_guest,&s_world,cpu,g_snes->cart->rom,g_snes->cart->romSize);
+  return true;
+}
+static bool sc_program_flow_after(void *context,Interp816 *cpu,unsigned cost) {
+  (void)cpu;ScProgramHostFlow *flow=context;unsigned master=cost*8;
+  g_master_cycles+=master;
+  sc_advance_beam(master);
+  g_snes->apuCatchupCycles+=(double)master*kApuCyclesPerMaster;
+  sc_catchup_apu(g_snes);
+  ++flow->edges;
+  return s_frames<flow->target && *flow->guard>0;
+}
+/* Opt-in coverage trace for native conversion. Record only an actual
+ * interpreter fallback, before it changes PC/flags; ordinary C edges do no
+ * file I/O or diagnostic clock measurements. */
+static FILE *s_native_missing_file;
+static int sc_interpreter_fallback(Interp816 *cpu) {
+  static bool initialized;
+  if(!initialized) {
+    initialized=true;const char *path=getenv("SC_NATIVE_MISSING_PATH");
+    if(path && *path) {
+      s_native_missing_file=fopen(path,"w");
+      if(s_native_missing_file) {
+        setvbuf(s_native_missing_file,NULL,_IOFBF,8192);
+        fputs("frame,pc,mf,xf,db,dp,sp,a,x,y,opcode,available\n",s_native_missing_file);
+      }
+    }
+  }
+  if(s_native_missing_file) {
+    unsigned offset=(cpu->k&127)*32768+(cpu->pc&32767);
+    unsigned opcode=offset<g_snes->cart->romSize?g_snes->cart->rom[offset]:0;
+    fprintf(s_native_missing_file,"%llu,%02x%04x,%u,%u,%02x,%04x,%04x,%04x,%04x,%04x,%02x,%u\n",
+        (unsigned long long)s_frames,cpu->k,cpu->pc,cpu->mf,cpu->xf,cpu->db,cpu->dp,cpu->sp,
+        cpu->a,cpu->x,cpu->y,opcode,(unsigned)ScProgramAvailable(cpu));
+  }
+  return interp816_runOpcode(cpu);
+}
+static unsigned sc_program_flow_fallback(void *context,Interp816 *cpu) {
+  (void)context;
+  if(s_bank_profile) {
+    ++s_interpreter_bank_ops[cpu->k];
+    if(cpu->k==s_bank_page_sel) {
+      ++s_interpreter_pages[cpu->pc>>8];
+      if((cpu->pc>>8)==s_pc_profile_page) ++s_interpreter_pc[cpu->pc&255];
+    }
+  }
+  int cost=sc_interpreter_fallback(cpu);return cost>0?(unsigned)cost:1;
+}
+static unsigned sc_run_program_lane(uint64_t target,long *guard) {
+  static int reference=-1;
+  if(reference<0) {const char *e=getenv("SC_PROGRAM_LANE_REFERENCE");reference=e && *e=='1';}
+  Interp816 *cpu=g_cpu;Snes *snes=g_snes;
+  if(reference || s_addr_trace_count || s_pc_capture_after!=-1 || s_dump_pc_armed ||
+      sc_program_host_boundary(cpu) || !ScProgramAvailable(cpu)) return 0;
+  ScProgramHostFlow flow={target,guard,0};
+  unsigned block_edges=ScProgramRun(cpu,&flow,sc_program_flow_before,
+      sc_program_flow_after,sc_program_flow_fallback);
+  if(block_edges) {
+    s_program_lane_edges+=block_edges;++s_program_lane_entries;
+    s_program_block_edges+=block_edges;++s_program_block_entries;
+    return block_edges;
+  }
+  unsigned edges=0;
+  do {
+    /* The enclosing loop already observed/profiled the first PC. Subsequent
+     * PCs remain observable here, even when a span crosses a bank or width. */
+    if(edges && s_bank_profile) {
+      ++s_bank_ops[cpu->k];
+      if(cpu->k==s_bank_page_sel) {
+        ++s_b3_page[cpu->pc>>8];
+        if((cpu->pc>>8)==s_pc_profile_page) ++s_pc_profile_ops[cpu->pc&255];
+      }
+    }
+    ScWorldGuestStepPrepared(&s_world,cpu,g_ram);
+    ScWorldGuestVehiclesPrepared(&s_world,cpu,g_ram,snes->multiplyA);
+    sc_note_executed_pc(((uint32_t)cpu->k<<16)|cpu->pc,cpu->mf,cpu->xf);
+    ScWorldGuestBeginPrepared(&s_world_guest,&s_world,cpu,snes->cart->rom,snes->cart->romSize);
+    unsigned cost=ScProgramStep(cpu);
+    if(!cost) {
+      /* A live ROM patch may invalidate a compiled action after membership
+       * admission. Its world hooks have already run: execute the original
+       * edge here, without applying those hooks a second time. */
+      if(s_bank_profile) {
+        ++s_interpreter_bank_ops[cpu->k];
+        if(cpu->k==s_bank_page_sel) {
+          ++s_interpreter_pages[cpu->pc>>8];
+          if((cpu->pc>>8)==s_pc_profile_page) ++s_interpreter_pc[cpu->pc&255];
+        }
+      }
+      int fallback=sc_interpreter_fallback(cpu);cost=fallback>0?(unsigned)fallback:1;
+    }
+    unsigned master=cost*8;
+    g_master_cycles+=master;
+    sc_advance_beam(master);
+    snes->apuCatchupCycles+=(double)master*kApuCyclesPerMaster;
+    sc_catchup_apu(snes);
+    ++edges;
+    /* Beam processing can assert IRQ/NMI, begin DMA, or finish this frame.
+     * Check the live CPU again before another C edge. Nothing is deferred. */
+    if(s_frames>=target || *guard<=0 || sc_program_host_boundary(cpu) ||
+        !ScProgramAvailable(cpu)) break;
+    --*guard;
+  } while(true);
+  s_program_lane_edges+=edges;++s_program_lane_entries;
+  return edges;
+}
+
+static uint64_t s_wait_lane_entries,s_wait_lane_spans;
+/* Frame-wait execution has no city hooks. Keep its event-bounded native C
+ * continuations in one scheduler lane instead of returning through the full
+ * gameplay dispatcher at each line/HDMA boundary. Beam and APU retirement
+ * remain per span, including an atomic instruction at an exact event. */
+static unsigned sc_run_wait_lane(uint64_t target,long *guard,bool atomic_reference) {
+  static int reference=-1;
+  if(reference<0) {const char *e=getenv("SC_WAIT_LANE_REFERENCE");reference=e && *e=='1';}
+  Interp816 *cpu=g_cpu;Snes *snes=g_snes;unsigned spans=0;
+  while(!cpu->k && ScWaitOwns(cpu->pc) && !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i)) {
+    if(spans && (s_frames>=target || *guard<=0)) break;
+    unsigned entry=cpu->pc;
+    unsigned boundary=snes->hPos<1024?1024:1364;
+    if(snes->hIrqEnabled && (!snes->vIrqEnabled || snes->vPos==snes->vTimer+1)) {
+      unsigned irq=4*snes->hTimer;
+      if(irq>=snes->hPos && irq<boundary) boundary=irq;
+    }
+    unsigned cost=0;
+    /* hPos==0 can assert NMI/start HDMA. An atomic edge observes that event
+     * at the same indivisible instruction boundary as the original driver. */
+    if(snes->hPos && boundary>snes->hPos+2)
+      cost=ScWaitDriverStep(cpu,g_ram,(boundary-snes->hPos-2)/8);
+    if(!cost && !atomic_reference) cost=ScWaitInstructionStep(cpu,g_ram);
+    if(!cost) break;
+    if(spans) {
+      --*guard;
+      if(s_bank_profile) {
+        ++s_bank_ops[0];
+        if(!s_bank_page_sel) {
+          ++s_b3_page[entry>>8];
+          if((entry>>8)==s_pc_profile_page) ++s_pc_profile_ops[entry&255];
+        }
+      }
+    }
+    memset(&s_world_guest,0,sizeof s_world_guest);
+    ++s_perf_spatial_cells;
+    unsigned master=cost*8;
+    g_master_cycles+=master;
+    sc_advance_beam(master);
+    snes->apuCatchupCycles+=(double)master*kApuCyclesPerMaster;
+    sc_catchup_apu(snes);
+    ++spans;
+    if(reference) break;
+  }
+  if(spans) {++s_wait_lane_entries;s_wait_lane_spans+=spans;}
+  return spans;
+}
+
+static uint64_t s_development_lane_entries,s_development_lane_spans;
+/* Extra zone attempts have no beam, calendar or audio retirement. Connect
+ * their native capacity/decision/artwork/math helpers and compiled C edges
+ * here instead of revisiting the complete city/UI dispatcher at each helper.
+ * The ordinary attempt and final zone-frame return stay with that dispatcher. */
+static bool sc_development_lane_site(const Interp816 *cpu) {
+  if(cpu->k!=3 || cpu->db!=3 || cpu->waiting || cpu->stopped ||
+     cpu->nmiWanted || (cpu->irqWanted && !cpu->i)) return false;
+  unsigned pc=cpu->pc;
+  if(pc==0x93b7 || pc==0x9301 || pc==0x9255)return false; /* Census ownership. */
+  return (pc>=0x842f && pc<=0x84ea) || (pc>=0x9035 && pc<=0x90a6) ||
+      (pc>=0x923d && pc<=0x9a92) || (pc>=0xa29a && pc<=0xa2f4) ||
+      ScMathDivideOwns(pc);
+}
+static unsigned sc_run_development_lane(long *guard) {
+  static int reference=-1,math_reference=-1,kernel_enabled=-1,extra_reference=-1;
+  if(reference<0) {const char *e=getenv("SC_DEVELOPMENT_LANE_REFERENCE");reference=e && *e=='1';}
+  if(math_reference<0) {const char *e=getenv("SC_MATH_REFERENCE");math_reference=e && *e=='1';}
+  if(kernel_enabled<0) {const char *e=getenv("SC_SPATIAL_KERNELS");kernel_enabled=!e || *e!='0';}
+  if(extra_reference<0) {const char *e=getenv("SC_EXTRA_BEAM_REFERENCE");extra_reference=e && *e=='1';}
+  if(reference || extra_reference || !s_development.repeating || s_addr_trace_count ||
+     s_pc_capture_after!=-1 || s_dump_pc_armed || !sc_development_lane_site(g_cpu))return 0;
+  Interp816 *cpu=g_cpu;const uint8_t *rom=g_snes->cart->rom;size_t size=g_snes->cart->romSize;
+  unsigned spans=0;
+  while(s_development.repeating && sc_development_lane_site(cpu) && *guard>0) {
+    /* Let main retire the final PLD/RTS at its ordinary clock. Admission of
+     * that final boundary must not consume an extra profiling/guard edge. */
+    if(cpu->pc==s_development.end && s_development.remaining<=1)break;
+    if(spans) {
+      --*guard;
+      if(s_bank_profile) {
+        ++s_bank_ops[3];
+        if(s_bank_page_sel==3) {
+          ++s_b3_page[cpu->pc>>8];
+          if((cpu->pc>>8)==s_pc_profile_page)++s_pc_profile_ops[cpu->pc&255];
+        }
+      }
+      ScWorldGuestStepPrepared(&s_world,cpu,g_ram);
+      uint16_t next=ScDevelopmentStepWorld(&s_development,&s_world,g_ram,cpu->pc,
+          cpu->dp,cpu->sp,s_development_speed);
+      if(next!=cpu->pc)cpu->mf=cpu->xf=false;
+      cpu->pc=next;
+      if(!s_development.repeating || !sc_development_lane_site(cpu))break;
+    }
+    sc_note_executed_pc(((uint32_t)cpu->k<<16)|cpu->pc,cpu->mf,cpu->xf);
+    /* Direct C helpers own their map accesses. Bind the compatibility bus
+     * only if this edge falls through to compiled opcode execution. */
+    if(s_native_bind_eager)ScWorldGuestBeginPrepared(&s_world_guest,&s_world,cpu,rom,size);
+    else {s_world_guest.mapped=false;if(s_bank_profile)++s_native_bind_deferred;}
+    unsigned cost=cpu->pc==0x9a3e?ScWorldGuestHousingStep(&s_world,cpu,g_ram,512):0;
+    if(!cost && cpu->pc==0x987f)cost=ScWorldGuestHouseSiteStep(&s_world,cpu,g_ram,rom,size,512);
+    if(!cost)cost=ScDevelopmentNativeBatch(&s_development,&s_world,cpu,g_ram,rom,size);
+    if(cost && s_perf_detail)++s_perf_native_development_calls;
+    if(!cost && !math_reference)cost=ScMathBatchStep(cpu,g_ram,4096);
+    if(!cost && kernel_enabled && s_world.active)
+      cost=ScWorldGuestBatchStep(&s_world,cpu,g_ram,rom,size,4096);
+    if(!cost)cost=ScWorldGuestFastStep(&s_world,cpu,g_ram,rom,size);
+    if(!cost)cost=ScWaitInstructionStep(cpu,g_ram);
+    if(!cost && !math_reference)cost=ScMathInstructionStep(cpu,g_ram);
+    if(!cost)cost=ScWorldGuestInstructionStep(&s_world,cpu,g_ram,rom,size);
+    if(cost) {s_world_guest.mapped=false;++s_perf_spatial_cells;}
+    else {
+      if(!s_native_bind_eager) {ScWorldGuestBeginPrepared(&s_world_guest,&s_world,cpu,rom,size);
+        if(s_bank_profile)++s_native_bind_fallback;}
+      cost=ScProgramStep(cpu);
+    }
+    if(!cost)break; /* Unconverted/modified code keeps its original host path. */
+    ++spans;
+  }
+  if(spans) {++s_development_lane_entries;s_development_lane_spans+=spans;}
+  return spans;
+}
+
+static uint64_t s_city_lane_entries,s_city_lane_spans;
+static bool city_lane_site(const Interp816 *c) {
+    static int field_reference=-1;
+    if(field_reference<0) {const char *e=getenv("SC_FIELD_LANE_REFERENCE");field_reference=e && *e=='1';}
+    unsigned p=c->pc;
+    if(c->k!=3 || c->db!=3 || c->waiting || c->stopped || c->nmiWanted || (c->irqWanted && !c->i))return false;
+    if(p==0x9255 || p==0x9301 || p==0x93b7)return false;
+    return (p>=0x8297 && p<=0x84ea) || (p>=0x88f3 && p<0x90a7) ||
+        (p>=0x90c5 && p<=0x9a92) || (!field_reference && p>=0x9a93 && p<=0xa299) ||
+        (p>=0xa29a && p<=0xa2b9) ||
+        (p>=0xa493 && p<0xa6b8) || (p>=0xa70c && p<0xa7e0) || ScMathDivideOwns(p);
+}
+/* Keep the spatial simulation in its connected C lane until a beam event or
+ * a host-owned census boundary. This removes the menu/save/construction
+ * dispatcher from every tile, growth-helper and derived-field edge on the
+ * largest maps. Prepared world hooks still run at each span, including GPU
+ * submission, full-width centroid carries and redirected field iterators. */
+static unsigned sc_run_city_lane(uint64_t target,long *guard) {
+    static int reference=-1,diagnostic=-1;
+    if(reference<0) {const char *e=getenv("SC_CITY_LANE_REFERENCE");reference=e && *e=='1';}
+    if(diagnostic<0)diagnostic=getenv("SC_SPATIAL_KERNELS") || getenv("SC_MATH_REFERENCE");
+    if(reference || !s_world.giant || s_addr_trace_count || s_pc_capture_after!=-1 || s_dump_pc_armed ||
+       diagnostic || !city_lane_site(g_cpu))return 0;
+    Interp816 *c=g_cpu;Snes *snes=g_snes;const uint8_t *rom=snes->cart->rom;size_t size=snes->cart->romSize;
+    unsigned spans=0;
+    while(s_frames<target && *guard>0 && city_lane_site(c)) {
+        if(spans) {
+            --*guard;
+            if(s_bank_profile) {
+                ++s_bank_ops[3];
+                if(s_bank_page_sel==3) {++s_b3_page[c->pc>>8];if((c->pc>>8)==s_pc_profile_page)++s_pc_profile_ops[c->pc&255];}
+            }
+            ScWorldGuestStepPrepared(&s_world,c,g_ram);
+            uint16_t next=ScDevelopmentStepWorld(&s_development,&s_world,g_ram,c->pc,c->dp,c->sp,s_development_speed);
+            if(next!=c->pc)c->mf=c->xf=false;
+            c->pc=next;
+            if(!city_lane_site(c))break;
+        }
+        unsigned entry=c->pc;bool extra=s_development.repeating;
+        unsigned boundary=snes->hPos<1024?1024:1364;
+        if(snes->hIrqEnabled && (!snes->vIrqEnabled || snes->vPos==snes->vTimer+1)) {
+            unsigned irq=4*snes->hTimer;if(irq>=snes->hPos && irq<boundary)boundary=irq;
+        }
+        unsigned scale=ScWorldGuestClockScale(&s_world,0x30000|entry),budget=0;
+        if(extra)budget=4096;
+        else if(snes->hPos && boundary>snes->hPos+2) {
+            unsigned master=(boundary-snes->hPos-2)*scale,remainder=scale>1?s_map_cycle_remainder:0;
+            if(master>remainder)budget=(master-remainder)/8;
+        }
+        if(s_native_bind_eager)ScWorldGuestBeginPrepared(&s_world_guest,&s_world,c,rom,size);
+        else {s_world_guest.mapped=false;if(s_bank_profile)++s_native_bind_deferred;}
+        unsigned cost=0;
+        if(extra) {
+            if(entry==0x9a3e)cost=ScWorldGuestHousingStep(&s_world,c,g_ram,512);
+            if(!cost && entry==0x987f)cost=ScWorldGuestHouseSiteStep(&s_world,c,g_ram,rom,size,512);
+            if(!cost)cost=ScDevelopmentNativeBatch(&s_development,&s_world,c,g_ram,rom,size);
+        }
+        if(!cost && ((entry>=0x9035 && entry<=0x90a6) || ScMathDivideOwns(entry)))
+            cost=ScMathBatchStep(c,g_ram,budget);
+        if(!cost && budget)cost=ScWorldGuestBatchStep(&s_world,c,g_ram,rom,size,budget);
+        if(!cost && (c->pc!=0x9dca || (c->a&1023)<0x28 || budget>=192 || extra))
+            cost=ScWorldGuestFastStep(&s_world,c,g_ram,rom,size);
+        if(!cost)cost=ScMathInstructionStep(c,g_ram);
+        if(!cost)cost=ScWorldGuestInstructionStep(&s_world,c,g_ram,rom,size);
+        if(cost) {s_world_guest.mapped=false;++s_perf_spatial_cells;}
+        else {
+          if(!s_native_bind_eager) {ScWorldGuestBeginPrepared(&s_world_guest,&s_world,c,rom,size);
+            if(s_bank_profile)++s_native_bind_fallback;}
+          cost=ScProgramStep(c);
+        }
+        if(!cost)break;
+        sc_note_executed_pc(0x30000|entry,c->mf,c->xf);++spans;
+        if(!extra) {
+            unsigned master=ScWorldGuestMasterCycles(&s_world,0x30000|entry,cost*8,&s_map_cycle_remainder);
+            g_master_cycles+=master;sc_advance_beam(master);
+            snes->apuCatchupCycles+=(double)master*kApuCyclesPerMaster;sc_catchup_apu(snes);
+        }
+    }
+    if(spans) {++s_city_lane_entries;s_city_lane_spans+=spans;}
+    return spans;
+}
+
 static bool run_one_frame(void) {
 #ifdef SC_AOT_TIER
   if (s_fiber_mode) return run_one_frame_fiber();
@@ -3612,13 +4042,59 @@ static bool run_one_frame(void) {
   const bool power_diag=getenv("SC_POWER_DIAG")!=NULL;
   static int native_diag=-1;
   if(native_diag<0) native_diag=getenv("SC_NATIVE_DIAG")!=NULL;
+  static int native_simulation=-1;
+  if(native_simulation<0) {const char *e=getenv("SC_NATIVE_SIMULATION");native_simulation=!e || *e!='0';}
+  static int atomic_reference=-1;
+  if(atomic_reference<0) {const char *e=getenv("SC_NATIVE_ATOMIC_REFERENCE");atomic_reference=e && *e=='1';}
   /* The extra attempts are bounded but can share one host frame; give
    * them a proportional instruction allowance. Normal retains the old bar. */
   while (s_frames < target && guard-- > 0) {
+    if(s_save_dialog_active && cpu->k==s_save_dialog_return.k &&
+       cpu->pc==s_save_dialog_return.pc && cpu->sp==s_save_dialog_return.sp) {
+      /* The stock save UI returns with working registers/flags changed.
+       * Restore the interrupted city's caller, retaining live IRQ/NMI state. */
+      cpu->a=s_save_dialog_return.a;cpu->x=s_save_dialog_return.x;cpu->y=s_save_dialog_return.y;
+      cpu->dp=s_save_dialog_return.dp;cpu->db=s_save_dialog_return.db;
+      interp816_setFlags(cpu,interp816_getFlags(&s_save_dialog_return));
+      ram_set_w(0x1df,s_save_dialog_page);
+      ram_set_w(0x1eb,s_save_dialog_x);ram_set_w(0x1ed,s_save_dialog_y);
+      s_save_dialog_active=false;
+      if(getenv("SC_SAVE_DIALOG_DIAG")) fprintf(stderr,"[escape save] returned to city at frame %llu\n",(unsigned long long)s_frames);
+    }
+    if(s_save_dialog_active && cpu->k==1 && cpu->pc==0xad54) {
+      /* Enter Save on the stock file page, then close that page after the
+       * slot dialog returns. The enclosing native menu restores the city
+       * PPU, tilemaps and modal flags on both Save and Cancel. */
+      if(s_save_dialog_phase==1) {s_save_dialog_phase=2;cpu->mf=false;cpu->a=1;cpu->pc=0xad8f;}
+      else cpu->pc=0xae22;
+    }
+    if(s_save_dialog_pending && s_rom_is_us && cpu->k==1 && cpu->pc==0x8976 &&
+       cpu->dp==0 && cpu->db==0 &&
+       !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3] &&
+       !s_city_loading && !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i)) {
+      s_save_dialog_pending=false;s_save_dialog_active=true;s_save_dialog_return=*cpu;
+      s_save_dialog_phase=1;
+      s_save_dialog_page=ram_w(0x1df);s_save_dialog_x=ram_w(0x1eb);s_save_dialog_y=ram_w(0x1ed);
+      ram_set_w(0x1df,4); /* 01:9dd5's indexed JSR selects the File page. */
+      /* A real JSR frame enters the original file-menu transition; jumping
+       * straight into the slot dialog skips its display setup. */
+      unsigned return_pc=(cpu->pc-1)&65535;
+      cpu->write(cpu->mem,cpu->sp--,return_pc>>8);
+      cpu->write(cpu->mem,cpu->sp--,return_pc&255);
+      cpu->pc=0x9d6b;
+      sc_charge_master_cycles(g_snes,6*8); /* injected native JSR */
+      if(getenv("SC_SAVE_DIALOG_DIAG")) fprintf(stderr,"[escape save] entering native file menu at frame %llu\n",(unsigned long long)s_frames);
+    }
     if (cpu->k == 0x00 && cpu->pc == 0x80b2) s_nmi_serviced++;
     if(s_rom_is_us && ((cpu->k==0 && (cpu->pc==0xd19e || cpu->pc==0xd1fc || cpu->pc==0xd20a)) ||
                       (cpu->k==1 && (cpu->pc==0xcc1a || cpu->pc==0xcc3a))))
       ScMouseUiObserve(&s_mouse_dialog,g_ram,cpu->k,cpu->pc,cpu->sp);
+    if(s_rom_is_us && s_world.test_city && cpu->k==0) {
+      /* Once Save? is confirmed, City 3 has its own destination. */
+      if(cpu->pc==0xc8e0)cpu->pc=0xc947; /* Save? instead of Where to save? */
+      if(cpu->pc==0xc987) {ram_set_w(0x423,1);cpu->pc=0xc9bc;}
+      if(cpu->pc==0xca35) {ram_set_w(0x423,1);cpu->pc=0xca6a;}
+    }
     /* SC_BANK_PROFILE=1: opcodes executed per bank, and how many frames the
      * simulation tick spans. Answers "is the simulation worth replacing with
      * native code" with a number instead of an impression -- the map
@@ -3641,6 +4117,41 @@ static bool run_one_frame(void) {
         s_tick_start_ops = 0;
       }
     }
+    /* The verified frame-wait path touches only WRAM. Execute its connected
+     * C lane before the gameplay hook dispatcher, retaining every beam/APU
+     * event and an atomic edge at line start, HDMA or IRQ deadlines. Address
+     * tracing keeps the ordinary observer path. A pending interrupt always
+     * goes through the original CPU dispatcher first. */
+    if(native_simulation && s_rom_fnv==SC_ROM_FNV_US && !s_addr_trace_count &&
+       !cpu->k && ScWaitOwns(cpu->pc) && !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i)) {
+      if(s_wait_lane_enabled) {
+        if(sc_run_wait_lane(target,&guard,atomic_reference)) continue;
+      } else {
+        /* Ordinary play retains the preceding inlined driver: qualification
+         * found a repeatable benefit for Tab, but a regression without it. */
+        unsigned boundary=snes->hPos<1024?1024:1364;
+        if(snes->hIrqEnabled && (!snes->vIrqEnabled || snes->vPos==snes->vTimer+1)) {
+          unsigned irq=4*snes->hTimer;
+          if(irq>=snes->hPos && irq<boundary) boundary=irq;
+        }
+        unsigned cost=0;
+        if(snes->hPos && boundary>snes->hPos+2)
+          cost=ScWaitDriverStep(cpu,g_ram,(boundary-snes->hPos-2)/8);
+        if(!cost && !atomic_reference) cost=ScWaitInstructionStep(cpu,g_ram);
+        if(cost) {
+          memset(&s_world_guest,0,sizeof s_world_guest);
+          ++s_perf_spatial_cells;++s_wait_lane_entries;++s_wait_lane_spans;
+          unsigned master=cost*8;
+          g_master_cycles+=master;
+          sc_advance_beam(master);
+          snes->apuCatchupCycles+=(double)master*kApuCyclesPerMaster;
+          sc_catchup_apu(snes);
+          continue;
+        }
+      }
+    }
+    if(native_simulation && s_rom_fnv==SC_ROM_FNV_US && sc_run_program_lane(target,&guard))
+      continue;
     /* Unconditional now that AUTO TURBO is gone. This only opens the
      * generation/decompression window; whether anything speeds up is MAPGEN
      * TURBO's decision, and 1 means off. */
@@ -3670,7 +4181,7 @@ static bool run_one_frame(void) {
                            cpu->pc == 0x9108))
       sc_decomp_hook(cpu);
 
-    /* ── Run the map generator natively, on the INTERPRETER path ───────────
+    /* â”€â”€ Run the map generator natively, on the INTERPRETER path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
      *
      * 01:f1ed is the whole generator, reached by JSL from 03:d869, and the
      * SNES CPU takes about 800 frames of wall clock to grind through it --
@@ -3774,6 +4285,26 @@ static bool run_one_frame(void) {
      * 03:ce61 is the scenario equivalent -- map in place, about to return. */
     if (s_ninth_scenario) ninth_scenario_hook(cpu->k, cpu->pc);
     if (s_rom_is_us) {
+      if(s_test_revealed && cpu->k==2 && cpu->pc==0xbec6) {
+        unsigned direction=ram_w(0xca)&12,choice=ram_w(0x421)%3;
+        if(direction) {
+          choice=(choice+((direction&4)?1:2))%3;ram_set_w(0x421,choice);g_ram[6]=7;
+        }
+        cpu->pc=0xbede; /* retain native hand publication and input yield */
+      }
+      if(s_test_revealed && cpu->k==2 && cpu->pc==0xbef2 && ram_w(0x421)==2)
+        cpu->a=(cpu->a&0xff00)|204;
+      if(s_test_revealed && cpu->k==3 && cpu->pc==0xe2a5 && ram_w(0x421)==2)
+        cpu->pc=0xe2a9; /* generated City 3 is available even before first save */
+      if(cpu->k==3 && cpu->pc==0xe2b8 && s_test_revealed && ram_w(0x421)==2) {
+        if(test_city_begin_load())ram_set_w(0x421,0);
+        else {cpu->pc=0xe2c4;ram_set_w(0x421,2);}
+      }
+      if(cpu->k==3 && cpu->pc==0xc5e5 && s_test_generate_pending)cpu->pc=0xc5eb;
+      if(cpu->k==3 && cpu->pc==0xcafd && s_world.test_city) {
+        if(test_city_private_sram(NULL)) {s_test_saving=true;ram_set_w(0x423,1);}
+        else {fprintf(stderr,"[test city] save unavailable; normal slots preserved\n");cpu->pc=0xcc16;ram_set_w(0x48,1);}
+      }
       /* Suppress only these notice/adviser publications. Their crime,
        * traffic and pollution calculations and all other events still run.
        * The original routine's RTS keeps the caller's stack intact. */
@@ -3801,6 +4332,13 @@ static bool run_one_frame(void) {
         if(ram_w(0x387) && (notice==9 || notice==10 || notice==11 || notice==27))
           ram_set_w(0x38b,0); /* ordinary notice expiry clears its panel */
       }
+      /* The debug shortcut requests the ordinary Resume transition. Changing
+       * $14 directly skips the native exit fade, clear and Load City setup. */
+      if(s_test_menu_pending && cpu->k==3 && cpu->pc==0xd333) {
+        ram_set_w(0x3e,0);g_ram[0xca]=0x90;
+      }
+      if(s_test_menu_pending && cpu->k==3 && cpu->pc==0xd337)cpu->pc=0xd33c;
+      if(s_test_menu_pending && cpu->k==3 && cpu->pc==0xd369)s_test_menu_pending=false;
       if(cpu->k==3 && cpu->pc==0xd306) {s_size_selecting=false;s_practice_size_pending=false;ScMapSizeMenuSet(false);}
       if(s_size_selecting && cpu->k==3 && cpu->pc==0xd337) cpu->pc=0xd33b;
       if(s_size_selecting && cpu->k==3 && cpu->pc==0xd333 && (g_ram[0xc9]&0x80)) {
@@ -4152,7 +4690,7 @@ static bool run_one_frame(void) {
       }
       if (cpu->k==3 && cpu->pc==0xcf89) ScWorldMirror(&s_world,g_ram);
       bool power_writeback=cpu->k==3 && cpu->pc==0xb152 && s_world.active;
-      ScWorldGuestStep(&s_world, cpu, g_ram);
+      ScWorldGuestStepPrepared(&s_world, cpu, g_ram);
       if(power_writeback && cpu->pc==0xb1a4) {
         s_native_power_active=false;
         if(s_development_speed>1) refresh_fast_power(true);
@@ -4163,14 +4701,34 @@ static bool run_one_frame(void) {
               g_snes->cart->romSize,s_frames);
         }
       }
-      ScWorldGuestVehicles(&s_world, cpu, g_ram, g_snes->multiplyA);
+      ScWorldGuestVehiclesPrepared(&s_world, cpu, g_ram, g_snes->multiplyA);
     }
     if (s_rom_fnv == SC_ROM_FNV_US && cpu->k == 3) {
-      if (cpu->pc == 0xcbe2) population_saved_city(true);
-      if (cpu->pc == 0xc8ce) population_saved_city(false);
-      if (cpu->pc == 0xc8ce) world_saved_city(false);
+      if(cpu->pc==0xcbe2 && s_test_saving)test_city_finish_save();
+      else if(cpu->pc==0xcbe2 && !s_world.test_city) {population_saved_city(true);world_saved_city(true);}
+      if(cpu->pc==0xc8ce) {
+        if(s_test_load_pending) {
+          uint32_t n;const uint8_t *record=ScSram_Extra(&n);
+          bool ok=ScTestCityDecode(record,n,&s_world,&s_population);
+          test_city_restore_sram();s_test_load_pending=false;
+          if(ok) {
+            ScPopulationMirror(&s_population,g_ram);ScWorldMirror(&s_world,g_ram);
+            ram_set_w(0x1c5,ScWorldWidth(&s_world)-(ram_w(0x1d7)?25:30));
+            ram_set_w(0x1c9,ScWorldHeight(&s_world)-(ram_w(0x1d7)?22:26));
+            fprintf(stderr,"[test city] loaded saved City 3, population %llu\n",(unsigned long long)s_population.value);
+          }
+        } else {population_saved_city(false);world_saved_city(false);}
+      }
       if (cpu->pc == 0xc8dd) s_city_loading=false;
-      if (cpu->pc == 0xcbe2) world_saved_city(true);
+      if(cpu->pc==0xc633 && s_test_generate_pending) {
+        ScTestCityStats stats;
+        bool ok=ScTestCityGenerate(&s_world,&s_population,g_ram,g_snes->cart->rom,g_snes->cart->romSize,&stats);
+        s_test_generate_pending=false;s_practice_size_pending=false;s_journey_arming=false;
+        reset_refresh_clocks();ScDevelopmentReset(&s_development);memset(&s_world_guest,0,sizeof s_world_guest);
+        ScRendererResetHistory(&s_custom_renderer);
+        if(!ok)fprintf(stderr,"[test city] generation failed\n");
+      }
+      if(cpu->pc==0xc63c && s_world.test_city)ram_set_w(0x38,0);
       if(cpu->pc==0xc633 && s_practice_size_pending) {
         ScMapGenPrng pr={ram_w(0x59),ram_w(0x5b),ram_w(0x5d)};
         if(s_large_maps==4) ScWorldGenerateColossal(&s_world,&pr); else if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr);
@@ -4208,6 +4766,10 @@ static bool run_one_frame(void) {
       if (next_pc != cpu->pc) { cpu->mf = false; cpu->xf = false; }
       cpu->pc = next_pc;
     }
+    if(native_simulation && !atomic_reference && s_rom_fnv==SC_ROM_FNV_US &&
+       s_development.repeating && sc_run_development_lane(&guard))continue;
+    if(native_simulation && !atomic_reference && s_rom_fnv==SC_ROM_FNV_US &&
+       sc_run_city_lane(target,&guard))continue;
     sc_note_executed_pc(((uint32_t)cpu->k << 16) | cpu->pc,
                         cpu->mf ? 1 : 0, cpu->xf ? 1 : 0);
     if (s_pc_capture_after > 0) {
@@ -4258,13 +4820,35 @@ static bool run_one_frame(void) {
       cpu->a=(cpu->a&0xff00)|ScMusicCommand((uint8_t)cpu->a);
     if(s_rom_is_us && !interrupt_work && cpu->k==1 && cpu->pc==0xa9c4 && !cpu->mf)
       ScMusicEnabled((cpu->a&8)!=0);
-    ScWorldGuestBegin(&s_world_guest, &s_world, cpu, g_snes->cart->rom, g_snes->cart->romSize);
+    const bool defer_native_binding=!s_native_bind_eager && native_simulation &&
+        s_rom_fnv==SC_ROM_FNV_US && cpu->k==3 && !interrupt_work;
+    if(defer_native_binding) {s_world_guest.mapped=false;if(s_bank_profile)++s_native_bind_deferred;}
+    else ScWorldGuestBeginPrepared(&s_world_guest,&s_world,cpu,g_snes->cart->rom,g_snes->cart->romSize);
     unsigned fast_cycles=0,fast_budget=0;
-    static int native_simulation=-1;
-    if(native_simulation<0) {const char *e=getenv("SC_NATIVE_SIMULATION");native_simulation=!e || *e!='0';}
     static int extra_beam_reference=-1;
     if(extra_beam_reference<0) {const char *e=getenv("SC_EXTRA_BEAM_REFERENCE");extra_beam_reference=e && *e=='1';}
     const bool extra_native=development_work && native_simulation && !extra_beam_reference;
+    if(native_simulation && s_rom_fnv==SC_ROM_FNV_US && !interrupt_work &&
+       !cpu->k && ScSpriteOwns(cpu->pc)) {
+      static int sprite_diag=-1;static unsigned sprite_reports;
+      if(sprite_diag<0) {const char *e=getenv("SC_SPRITE_DIAG");sprite_diag=e && *e=='1';}
+      if(sprite_diag && sprite_reports<30 && s_frames>=620 && cpu->pc==0x9080) {
+        fprintf(stderr,"[sprite C] frame=%llu db=%x sp=%x pc=%x x=%x y=%x pointer=%x count=%x mf=%u xf=%u e=%u d=%u\n",
+            (unsigned long long)s_frames,cpu->db,cpu->sp,cpu->pc,cpu->x,cpu->y,
+            ram_w(cpu->sp+3),ram_w(0x287),cpu->mf,cpu->xf,cpu->e,cpu->d);++sprite_reports;
+      }
+      unsigned boundary=snes->hPos<1024?1024:1364;
+      if(snes->hIrqEnabled && (!snes->vIrqEnabled || snes->vPos==snes->vTimer+1)) {
+        unsigned irq=4*snes->hTimer;
+        if(irq>=snes->hPos && irq<boundary) boundary=irq;
+      }
+      if(snes->hPos && boundary>snes->hPos+2)
+        fast_cycles=ScSpriteStep(cpu,g_ram,(boundary-snes->hPos-2)/8);
+      /* Exactly the original one-instruction overrun at the deadline. The
+       * C edge only touches cartridge/WRAM, so its publication and clock
+       * order are the same as the fallback opcode it replaces. */
+      if(!fast_cycles) fast_cycles=ScSpriteInstructionStep(cpu,g_ram);
+    }
     if(native_simulation && s_rom_fnv==SC_ROM_FNV_US && !interrupt_work &&
        cpu->k==1 && ScTileLookupOwns(cpu->pc)) {
       /* Tile lookup publishes scratch and hardware-multiply state at its
@@ -4307,10 +4891,8 @@ static bool run_one_frame(void) {
     if(math_reference<0) {const char *e=getenv("SC_MATH_REFERENCE");math_reference=e && *e=='1';}
     if(!fast_cycles && native_simulation && !math_reference &&
        s_rom_fnv==SC_ROM_FNV_US && !interrupt_work && cpu->k==3 &&
-       ((cpu->pc>=0xa32e && cpu->pc<=0xa342) || cpu->pc==0xa395 || cpu->pc==0xa3cf ||
-        (cpu->pc>=0xa406 && cpu->pc<=0xa420) || cpu->pc==0xa462 ||
-        cpu->pc==0x9035 || cpu->pc==0x904d || cpu->pc==0x905b || cpu->pc==0x907e ||
-        cpu->pc==0x9092 || cpu->pc==0x90a0 || cpu->pc==0x90a6)) {
+       ((cpu->pc>=0xa32e && cpu->pc<=0xa342) || cpu->pc==0xa395 || ScMathDivideOwns(cpu->pc) || cpu->pc==0xa462 ||
+        ScMathRngOwns(cpu->pc))) {
       /* Multiply/divide keeps the original clock on every map size. RNG is
        * inside the existing map-scaled spatial clock range ($88f3-$90a6),
        * so its deadline budget must include that same area and remainder. */
@@ -4330,7 +4912,8 @@ static bool run_one_frame(void) {
     }
     static int kernel_enabled=-1;
     if(kernel_enabled<0) {const char *e=getenv("SC_SPATIAL_KERNELS");kernel_enabled=!e || *e!='0';}
-    if(!fast_cycles && kernel_enabled && s_rom_fnv==SC_ROM_FNV_US && s_world.active && !interrupt_work) {
+    if(!fast_cycles && kernel_enabled && s_rom_fnv==SC_ROM_FNV_US &&
+       (s_world.active || (cpu->k==3 && (ScPostpassOwns(cpu->pc) || ScSweepOwns(cpu->pc)))) && !interrupt_work) {
       /* Stop before scanout, HDMA, line wrap, or the programmable IRQ. No
        * batched cell can delay an interrupt or render a row after its time. */
       unsigned boundary=snes->hPos<1024?1024:1364;
@@ -4361,15 +4944,23 @@ static bool run_one_frame(void) {
     if(!fast_cycles && s_rom_fnv==SC_ROM_FNV_US &&
        (cpu->pc!=0x9dca || (cpu->a&1023)<0x28 || fast_budget>=192 || development_work))
       fast_cycles=ScWorldGuestFastStep(&s_world,cpu,g_ram,g_snes->cart->rom,g_snes->cart->romSize);
-    static int atomic_reference=-1;
-    if(atomic_reference<0) {const char *e=getenv("SC_NATIVE_ATOMIC_REFERENCE");atomic_reference=e && *e=='1';}
     if(!fast_cycles && native_simulation && !atomic_reference &&
        s_rom_fnv==SC_ROM_FNV_US && !interrupt_work) {
-      fast_cycles=ScWorldGuestInstructionStep(&s_world,cpu,g_ram,
+      fast_cycles=ScWaitInstructionStep(cpu,g_ram);
+      if(!fast_cycles && !math_reference) fast_cycles=ScMathInstructionStep(cpu,g_ram);
+      if(!fast_cycles) fast_cycles=ScWorldGuestInstructionStep(&s_world,cpu,g_ram,
           g_snes->cart->rom,g_snes->cart->romSize);
       if(fast_cycles) s_world_guest.mapped=false;
     }
     if(fast_cycles) ++s_perf_spatial_cells;
+    if(!fast_cycles && defer_native_binding) {
+      ScWorldGuestBeginPrepared(&s_world_guest,&s_world,cpu,g_snes->cart->rom,g_snes->cart->romSize);
+      if(s_bank_profile)++s_native_bind_fallback;
+    }
+    if(!fast_cycles && native_simulation && s_rom_fnv==SC_ROM_FNV_US && !interrupt_work)
+      fast_cycles=ScProgramStep(cpu);
+    if(!fast_cycles && native_simulation && s_rom_fnv==SC_ROM_FNV_US)
+      fast_cycles=ScProgramControlStep(cpu);
     if(s_bank_profile && !fast_cycles) {
       ++s_interpreter_bank_ops[cpu->k];
       if(cpu->k==s_bank_page_sel) {
@@ -4377,7 +4968,7 @@ static bool run_one_frame(void) {
         if((cpu->pc>>8)==s_pc_profile_page) ++s_interpreter_pc[cpu->pc&255];
       }
     }
-    int cyc = fast_cycles?fast_cycles:interp816_runOpcode(cpu);
+    int cyc = fast_cycles?fast_cycles:sc_interpreter_fallback(cpu);
     /* Extra development attempts are host work, like the native map
      * generator. They do not advance the SNES beam, audio clock or calendar
      * cadence. The original attempt and final PLD/RTS retain normal timing. */
@@ -4780,7 +5371,7 @@ static void oam_put(int i, int x, int y, int tile, int attr, int size) {
   if (size)        *hb = (uint8_t)(*hb | (2u << bit));
 }
 
-/* ── The scenario selector's pins and win marks ───────────────────────────
+/* â”€â”€ The scenario selector's pins and win marks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  *
  * Where each sprite is, the game's and Sylt's, is src/sc_selector.c's to say.
  * Here the classic renderer acts on it: the game's own sprites that lie in a
@@ -6729,7 +7320,7 @@ static void report_sram_header(const char *when) {
           (uint16_t)(h[14] | (h[15] << 8)) == sum ? "" : "  MISMATCH");
 }
 
-/* ── save states -- for reproducing a specific screen/input scenario (e.g.
+/* â”€â”€ save states -- for reproducing a specific screen/input scenario (e.g.
  * "on the map, cursor visible, nothing else held") instantly and
  * deterministically, instead of re-navigating menus by hand or by guessed
  * --input timing every single test run. snes_saveload() already covers the
@@ -6822,8 +7413,11 @@ static bool load_state(const char *path) {
   fs.base.func = file_sli_read;
   fs.f = f;
   fs.ok = true;
+  test_city_restore_sram();s_test_load_pending=s_test_generate_pending=s_test_saving=s_test_menu_pending=false;
   ScSram_Hold();   /* the saved cities on disk stay the player's */
   s_mouse_dialog=SC_MOUSE_DIALOG_NONE;
+  s_save_dialog_pending=s_save_dialog_active=false;
+  s_escape_back_frames=0;
   ScMusicLock();snes_saveload(g_snes, &fs.base);ScMusicResetLocked();ScMusicUnlock();
   interp816_saveload(g_cpu, &fs.base);
   fs.base.func(&fs.base, &s_frames, sizeof(s_frames));
@@ -6914,12 +7508,12 @@ static uint8_t *read_file(const char *path, uint32_t *size_out) {
   return b;
 }
 
-/* ── synthetic input injection for headless repro (mirrors the --input
+/* â”€â”€ synthetic input injection for headless repro (mirrors the --input
  * flag in snesrecomp/cosim/ref_driver.c) -- lets a specific controller
  * press be reproduced deterministically at an exact frame, instead of
  * guessing from an interactive session. Player 2 gets its own identical
  * array/parser (--input2) -- needed for the documented debug-menu code
- * entry, which is read on controller 2. ──────────────────────────────── */
+ * entry, which is read on controller 2. â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 typedef struct InputEvent { uint64_t start, duration; uint16_t mask; } InputEvent;
 static InputEvent s_input_events[64];
 static uint32_t s_input_event_count;
@@ -7177,6 +7771,10 @@ static void apply_frame_input(uint64_t frame) {
  * use a different anchor from the city HUD. */
 static bool s_mouse_enabled = true;
 static ScMouseUiResult mouse_ui_point(uint8_t *ram,int x,int y,bool select,bool ninth) {
+  if(s_test_revealed && ram_w(0x14)==17 && x>=48 && x<222 && y>=196 && y<220) {
+    if(select)ram_set_w(0x421,2);
+    return (ScMouseUiResult){true,true};
+  }
   if(s_size_selecting && ram_w(0x14)==3) {
     ScMouseUiResult result={true,false};
     for(unsigned i=0;i<5;++i) if(x>=48 && x<232 && y>=(int)ScJourneyMenuY(false,i+1) && y<(int)ScJourneyMenuY(false,i+1)+16) {
@@ -7251,7 +7849,7 @@ static void apply_mouse_delta(int dx, int dy) {
   g_ram[0x01ed] = (uint8_t)y;
 }
 
-/* ── minimal in-game settings menu ───────────────────────────────────────
+/* â”€â”€ minimal in-game settings menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  * Follows the pattern researched from ar-recomp (ActRaiser recomp)'s
  * settings_overlay.c/settings.c/config.c (see task #20/#34): a single
  * descriptor table (SettingDesc[]) drives a generic renderer/input
@@ -8564,10 +9162,10 @@ static void render_replay_menu(SDL_Renderer *renderer) {
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
-/* ── generic activity qualification (--qualify N): the same pass/fail bar
+/* â”€â”€ generic activity qualification (--qualify N): the same pass/fail bar
  * as snesrecomp/cosim/ref_driver.c's standalone mode -- "goes through the
  * attract demo without logic, video, or audio errors" made concrete and
- * automatable, with zero game-specific WRAM knowledge required. ─────── */
+ * automatable, with zero game-specific WRAM knowledge required. â”€â”€â”€â”€â”€â”€â”€ */
 static void write_mx_bitmap_dump(void) {
   if (!s_mx_bitmap || !s_mx_bitmap_path) return;
   FILE *f = fopen(s_mx_bitmap_path, "wb");
@@ -9388,6 +9986,7 @@ int main(int argc, char **argv) {
                      : region == 0x09 ? "Germany" : "unknown";
     s_rom_is_us = (fp == 0xec01686au);
     s_rom_fnv = fp;
+    ScProgramEnable(s_rom_is_us);
     ScMapView_SetRomIsUs(s_rom_is_us);
     ScMapView_SetWorld(&s_world);
     fprintf(stderr, "rom: %s  region=%s (%02x)  fnv=%08x%s\n",
@@ -9935,6 +10534,9 @@ int main(int argc, char **argv) {
   { const char *e = getenv("SC_BANK_PROFILE_PAGE");
     if (e && *e) s_bank_page_sel = (int)strtol(e, NULL, 16) & 0xff; }
   {const char *e=getenv("SC_PC_PROFILE_PAGE");if(e && *e) s_pc_profile_page=(int)strtol(e,NULL,16)&255;}
+  {const char *e=getenv("SC_NATIVE_BIND_REFERENCE");s_native_bind_eager=e && *e=='1';}
+  {const char *e=getenv("SC_DEVELOPMENT_PROFILE");if(e && *e=='1')
+    ScDevelopmentSetProfileClock(SDL_GetPerformanceCounter,SDL_GetPerformanceFrequency());}
   { const char *e = getenv("SC_WS_CLAMP");
     if (e && *e) { s_ws_clamp = (uint8_t)strtol(e, NULL, 0); s_ws_clamp_auto = false; } }
   { const char *e = getenv("SC_HOST_HDMA");
@@ -9995,7 +10597,10 @@ int main(int argc, char **argv) {
     }
   }
   s_custom_renderer.population=&s_population;
-  if(s_rom_is_us) ScJourneyMenuInit(g_snes->cart->rom,rom_size);
+  if(s_rom_is_us) {
+    ScJourneyMenuInit(g_snes->cart->rom,rom_size);
+    ScWorldGuestBindRom(g_snes->cart->rom,rom_size);
+  }
   { const char *large=getenv("SC_LARGE_MAPS");
     s_large_maps=large?atoi(large):s_launch_settings.large_maps; if(s_large_maps<0 || s_large_maps>4) s_large_maps=0; }
   s_custom_renderer.world=&s_world;
@@ -10255,6 +10860,65 @@ int main(int argc, char **argv) {
     if(perf_on) memset(perf_current,0,sizeof perf_current);
     double zoom_factor=1;
     SDL_Event ev;
+    /* Owned regression windows exercise the actual SDL wheel/pinch routing.
+     * SC_ZOOM_EVENTS=tick:kind:amount:ctrl,...; kind is w (wheel) or p (pinch).
+     * This does not move the system pointer or affect another application's
+     * input. Absent the test variable, the block stays inactive. */
+    {
+      static const char *events;
+      static bool initialized;
+      static unsigned tick;
+      if(!initialized) {events=getenv("SC_ZOOM_EVENTS");initialized=true;}
+      if(events) {
+        const char *cursor=events;unsigned at,ctrl;char kind;double amount;int used;
+        while(sscanf(cursor,"%u:%c:%lf:%u%n",&at,&kind,&amount,&ctrl,&used)==4) {
+          if(at==tick && isfinite(amount)) {
+            SDL_Event gesture={0};
+            if(kind=='w') {
+              SDL_SetModState(ctrl?KMOD_CTRL:KMOD_NONE);
+              gesture.type=SDL_MOUSEWHEEL;
+              gesture.wheel.windowID=SDL_GetWindowID(window);
+              gesture.wheel.y=fmax(-32,fmin(32,amount));
+#if !SNESRECOMP_SDL3 && SDL_VERSION_ATLEAST(2,0,18)
+              gesture.wheel.preciseY=(float)amount;
+#endif
+            }
+#if SNESRECOMP_SDL3 && SDL_VERSION_ATLEAST(3,4,0)
+            else if(kind=='p') {
+              gesture.type=SDL_EVENT_PINCH_UPDATE;
+              gesture.pinch.windowID=SDL_GetWindowID(window);
+              gesture.pinch.scale=(float)amount;
+            }
+#endif
+            if(gesture.type) SDL_PushEvent(&gesture);
+          }
+          cursor+=used;if(*cursor++!=',')break;
+        }
+        ++tick;
+      }
+    }
+    /* Owned regression windows can deliver frame-stable keyboard events
+     * without changing the user's foreground window or keyboard state. */
+    { const char *events=getenv("SC_KEY_EVENTS");
+      static unsigned tick;
+      if(events) {
+        unsigned at,code,repeat,mods;int consumed;
+        while(*events) {
+          mods=0;
+          if(sscanf(events,"%u:%u:%u:%u%n",&at,&code,&repeat,&mods,&consumed)!=4 &&
+             sscanf(events,"%u:%u:%u%n",&at,&code,&repeat,&consumed)!=3)break;
+          if(at==tick && code<SDL_NUM_SCANCODES) {
+            SDL_Event key={0};key.type=SDL_KEYDOWN;
+            SC_EVENT_SCANCODE(key)=(SDL_Scancode)code;key.key.repeat=repeat!=0;
+            SC_EVENT_KEYMOD(key)=mods;
+            SDL_PushEvent(&key);
+          }
+          events+=consumed;
+          if(*events++!=',') break;
+        }
+        ++tick;
+      }
+    }
     for (;;) {
       /* SC_PERF also names a poll that stalls, and the event it returned. */
       const uint64_t poll_t0 = perf_on ? SDL_GetPerformanceCounter() : 0;
@@ -10272,7 +10936,33 @@ int main(int argc, char **argv) {
       }
       if (!got) break;
       if (ev.type == SDL_QUIT) quit = true;
-      if (getenv("SC_SCRIPTED_INPUT")) continue; /* owned UI regression window */
+      if(ev.type==SDL_KEYDOWN && SC_EVENT_SCANCODE(ev)==SDL_SCANCODE_GRAVE &&
+          !ev.key.repeat && (SC_EVENT_KEYMOD(ev)&KMOD_CTRL) && (SC_EVENT_KEYMOD(ev)&KMOD_SHIFT) &&
+          s_rom_is_us && (ram_w(0x14)==17 || ram_w(0x14)==3)) {
+        s_test_revealed=!s_test_revealed;
+        if(ram_w(0x14)==3 && s_test_revealed)s_test_menu_pending=true;
+        if(!s_test_revealed && ram_w(0x421)==2)ram_set_w(0x421,0);
+        fprintf(stderr,"[test city] hidden Load City entry %s\n",s_test_revealed?"revealed":"hidden");
+        continue;
+      }
+      if(ev.type==SDL_KEYDOWN && SC_EVENT_SCANCODE(ev)==SDL_SCANCODE_ESCAPE && !ev.key.repeat) {
+        if(getenv("SC_SAVE_DIALOG_DIAG")) fprintf(stderr,"[escape save] key frame %llu mode=%u city=%u modal=%u/%u/%u/%u dialog=%u\n",
+            (unsigned long long)s_frames,ram_w(0x14),ram_w(0x3e),ram_w(0xd7),ram_w(0x379),g_ram[0x391],g_ram[0xe3],s_mouse_dialog);
+        if(s_menu_open) s_menu_open=false;
+        else if(s_rom_is_us && g_ram[0x14]==0 && ram_w(0x3e) &&
+            !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3] &&
+            s_mouse_dialog==SC_MOUSE_DIALOG_NONE && !s_save_dialog_active) {
+          s_save_dialog_pending=true;
+          s_middle_pan=(ScMousePan){0};
+        } else {
+          s_escape_back_frames=2;
+          s_escape_back_input=(s_mouse_dialog==SC_MOUSE_DIALOG_SLOTS ||
+              s_mouse_dialog==SC_MOUSE_DIALOG_SAVE_CONFIRM)?kPad_X:kPad_A;
+        }
+        continue;
+      }
+      if (getenv("SC_SCRIPTED_INPUT") && !(getenv("SC_KEY_EVENTS") &&
+          ev.type==SDL_KEYDOWN && ev.key.windowID==0)) continue; /* owned UI regression window */
       if(!s_menu_open && !s_build_active && !s_build_pending && !s_clip_drag && !s_clip_pending && host_map_screen_live() &&
          !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3]) {
         if(ev.type==SDL_MOUSEWHEEL && (SDL_GetModState()&KMOD_CTRL)) {
@@ -10302,7 +10992,6 @@ int main(int argc, char **argv) {
         SDL_SetWindowFullscreen(window,s_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 #endif
       }
-      if (ev.type == SDL_KEYDOWN && SNESRECOMP_SDL_EVENT_KEY(ev) == SDLK_ESCAPE) quit = true;
       if (ev.type == SDL_KEYDOWN && SC_EVENT_SCANCODE(ev) == SDL_SCANCODE_F1) {
         if (s_pc_bitmap_bank != -1) {
           if (s_pc_bitmap_bank == -2) memset(s_pc_bitmap_all, 0, sizeof(s_pc_bitmap_all));
@@ -10525,6 +11214,8 @@ int main(int argc, char **argv) {
         }
       }
     }
+    s_custom_renderer.map_zoom=s_custom_video.map_zoom>0?s_custom_video.map_zoom:1;
+    {const char *e=getenv("SC_CITY_ZOOM");if(e && atof(e)>0)s_custom_renderer.map_zoom=atof(e);}
     int drawable_w = 0, drawable_h = 0;
     SDL_GetRendererOutputSize(renderer, &drawable_w, &drawable_h);
     /* Older Fit preferences have no captured scale. Lock their initial view
@@ -10679,8 +11370,8 @@ int main(int argc, char **argv) {
       const bool pan_land=inside && !mouse_navigation_hit && !mouse_clip_hit &&
           (s_custom_video.enabled?mouse_city_hit:(!ram_w(0x1d7) || (mouse_target_x>=56 && mouse_target_y>=48)));
       ScMousePanDirection middle_direction=ScMousePanUpdate(&s_middle_pan,pan_allowed,middle,pan_land,mx,my,
-          ww>0 && s_destination.w>0?(double)drawable_w/ww*pointer_view.width/s_destination.w:0,
-          wh>0 && s_destination.h>0?(double)drawable_h/wh*pointer_view.height/s_destination.h:0,
+          ww>0 && s_destination.w>0?(double)drawable_w/ww*pointer_view.width/s_destination.w/(s_custom_renderer.zoom_frame?s_custom_renderer.map_zoom:1):0,
+          wh>0 && s_destination.h>0?(double)drawable_h/wh*pointer_view.height/s_destination.h/(s_custom_renderer.zoom_frame?s_custom_renderer.map_zoom:1):0,
           (int16_t)ram_w(0x1bd)*8+(g_ppu->hScroll[1]&7),
           (int16_t)ram_w(0x1bf)*8+(g_ppu->vScroll[1]&7));
       if(getenv("SC_MOUSE_PAN_DIAG") && (middle_was_active || s_middle_pan.active))
@@ -11065,6 +11756,7 @@ int main(int argc, char **argv) {
      * them immediately, but whatever is held on the frame the menu closes
      * would otherwise leak straight through as a real button press. */
     if (s_menu_open || scripted_input) input = 0;
+    if(s_escape_back_frames) {input|=s_escape_back_input;--s_escape_back_frames;}
     apply_frame_input(s_frames);
     apply_freezes();
     g_snes->input1_currentState |= input;
@@ -11098,6 +11790,7 @@ int main(int argc, char **argv) {
      * the one that mattered, and the other was advancing the simulation during
      * ordinary play. Only explicit held gestures remain. */
     bool fast_forward = keys[SDL_SCANCODE_TAB] || test_fast_forward;
+    s_wait_lane_enabled=fast_forward;
     /* Mouse pans consume their queued motion at the faster native scroll rate
      * at every zoom. Ctrl uses the same rate, rather than multiplying it again. */
     s_scroll_multiplier=(keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL] ||
@@ -11112,7 +11805,12 @@ int main(int argc, char **argv) {
       if(gpu_terrain && (!field_reference || *field_reference!='1')) {
         gpu_fields=ScGpuFieldsCreate(renderer);
         if(gpu_fields) {
-          ScStencilBackend backend={gpu_fields,ScGpuFieldsBegin,ScGpuFieldsData};
+          ScStencilBackend backend={gpu_fields,ScGpuFieldsBegin,ScGpuFieldsData,
+              ScGpuFieldsCrimeBegin,ScGpuFieldsCrimeData,ScGpuFieldsLandBegin,ScGpuFieldsLandData};
+          /* Land readback is correct but has not improved production timings.
+           * Keep this job opt-in while retaining the established GPU fields. */
+          const char *gpu_land=getenv("SC_GPU_LAND");
+          if(!gpu_land || *gpu_land!='1') {backend.land_begin=NULL;backend.land_data=NULL;}
           ScWorldGuestSetStencilBackend(&backend);
         }
       }
@@ -11167,7 +11865,8 @@ int main(int argc, char **argv) {
          * background image is never presented. The final frame is always full. */
         { static int skip_native=-1;
           if(skip_native<0) {const char *e=getenv("SC_TAB_SKIP_PIXELS");skip_native=!e || *e!='0';}
-          ScPpuSkipPixels(s_skip_custom_frame && skip_native); }
+          ScPpuSkipPixels(s_skip_custom_frame && skip_native);
+          ScPpuSkipObjects(s_skip_custom_frame && skip_native); }
         ScPpuMeasurePixels((fast_forward || perf_on)?SDL_GetPerformanceCounter:NULL,s_perf_clock_ms);
         s_custom_frame_ms=0;
         uint64_t guest_t0=SDL_GetPerformanceCounter();
@@ -11212,7 +11911,7 @@ int main(int argc, char **argv) {
       }
     }
     s_skip_custom_frame=false;
-    ScPpuSkipPixels(false);
+    ScPpuSkipPixels(false);ScPpuSkipObjects(false);
     ScPpuMeasurePixels(NULL,0);
     if (guard_tripped) break;
     const uint64_t emu_t1 = perf_on ? SDL_GetPerformanceCounter() : 0;
@@ -11417,10 +12116,12 @@ int main(int argc, char **argv) {
             s_custom_renderer.scroll_x+s_custom_renderer.scroll_adjust_x : s_build_scroll_x*8);
         int gy = s_build_plan.cells[i].y * 8 - (s_custom_video.enabled ?
             s_custom_renderer.scroll_y+s_custom_renderer.scroll_adjust_y : s_build_scroll_y*8);
-        if (gx+v.core_x < 0 || gy+v.core_y < 0 ||
-            gx+v.core_x+step*8 > v.width || gy+v.core_y+step*8 > v.height) continue;
-        ScRect r = SC_RECT(s_destination.x + (v.core_x + gx) * sx,
-                          s_destination.y + (v.core_y + gy) * sy, step * 8 * sx, step * 8 * sy);
+        double px=gx,py=gy,px1=gx+step*8,py1=gy+step*8;
+        if(s_custom_video.enabled) {ScRendererProjectCity(&s_custom_renderer,&px,&py);ScRendererProjectCity(&s_custom_renderer,&px1,&py1);}
+        if (px+v.core_x < 0 || py+v.core_y < 0 ||
+            px1+v.core_x > v.width || py1+v.core_y > v.height) continue;
+        ScRect r = SC_RECT(s_destination.x + (v.core_x + px) * sx,
+                          s_destination.y + (v.core_y + py) * sy, (px1-px) * sx, (py1-py) * sy);
         SDL_RenderDrawRect(renderer, &r);
       }
     }
@@ -11441,8 +12142,9 @@ int main(int argc, char **argv) {
       SDL_SetRenderDrawColor(renderer,255,valid?230:70,valid?60:70,240);
       SDL_Rect clip={(int)s_destination.x,(int)s_destination.y,(int)s_destination.w,(int)s_destination.h};
       SDL_RenderSetClipRect(renderer,&clip);
-      int dx0=(scroll_x-v.core_x)/8-left-1,dy0=(scroll_y-v.core_y)/8-top-1;
-      int dx1=dx0+v.width/8+3,dy1=dy0+v.height/8+3;
+      double z=s_custom_renderer.zoom_frame?s_custom_renderer.map_zoom:1;
+      int dx0=(scroll_x-v.core_x/z-56/z)/8-left-1,dy0=(scroll_y-v.core_y/z-46/z)/8-top-1;
+      int dx1=dx0+v.width/(8*z)+16,dy1=dy0+v.height/(8*z)+16;
       if(dx0<0) dx0=0;if(dy0<0) dy0=0;if(dx1>w) dx1=w;if(dy1>h) dy1=h;
       static const int neighbour[4][2]={{0,-1},{1,0},{0,1},{-1,0}};
       for(int dy=dy0;dy<dy1;++dy) for(int dx=dx0;dx<dx1;++dx) {
@@ -11453,9 +12155,11 @@ int main(int argc, char **argv) {
           if(nx>=0 && ny>=0 && nx<w && ny<h && (copy || s_clipboard.mask[ny*w+nx])) continue;
           int ax=gx+(edge==1?8:0),ay=gy+(edge==2?8:0);
           int bx=ax+(edge==0 || edge==2?8:0),by=ay+(edge==1 || edge==3?8:0);
-          if((ay<46 && by>=0) || (ax<56 && bx>=8 && ay<224 && by>=46)) continue;
-          SDL_RenderDrawLine(renderer,s_destination.x+(v.core_x+ax)*sx,s_destination.y+(v.core_y+ay)*sy,
-              s_destination.x+(v.core_x+bx)*sx,s_destination.y+(v.core_y+by)*sy);
+          double pax=ax,pay=ay,pbx=bx,pby=by;
+          if(s_custom_video.enabled) {ScRendererProjectCity(&s_custom_renderer,&pax,&pay);ScRendererProjectCity(&s_custom_renderer,&pbx,&pby);}
+          if((pay<46 && pby>=0) || (pax<56 && pbx>=8 && pay<224 && pby>=46)) continue;
+          SDL_RenderDrawLine(renderer,s_destination.x+(v.core_x+pax)*sx,s_destination.y+(v.core_y+pay)*sy,
+              s_destination.x+(v.core_x+pbx)*sx,s_destination.y+(v.core_y+pby)*sy);
         }
       }
       SDL_RenderSetClipRect(renderer,NULL);
@@ -11648,8 +12352,11 @@ int main(int argc, char **argv) {
   ScMusicStop();
   if(perf_frame_file) fclose(perf_frame_file);
   if(bank_frame_file) fclose(bank_frame_file);
+  if(s_native_missing_file) {fclose(s_native_missing_file);s_native_missing_file=NULL;}
   if (audio_dev) sc_audio_close(&audio);
+  test_city_restore_sram();
   ScSram_Flush();
+  ScDevelopmentReportProfile(stderr);
   if(perf_on && perf_total_frames) fprintf(stderr,
       "[perf total] display %llu guest %llu emu %.3f draw %.3f present %.3f ms/frame\n",
       (unsigned long long)perf_total_frames,(unsigned long long)perf_total_guests,
@@ -11669,6 +12376,21 @@ int main(int argc, char **argv) {
     for(unsigned bank=0;bank<256;++bank) if(s_interpreter_bank_ops[bank])
       fprintf(stderr," bank%02x=%llu",bank,(unsigned long long)s_interpreter_bank_ops[bank]);
     fputc('\n',stderr);
+    fprintf(stderr,"[native binding] deferred=%llu fallback=%llu\n",
+        (unsigned long long)s_native_bind_deferred,(unsigned long long)s_native_bind_fallback);
+    fprintf(stderr,"[program C] edges=%llu guest-clocks=%llu\n",
+        (unsigned long long)ScProgramCalls(),(unsigned long long)ScProgramCycles());
+    fprintf(stderr,"[program control] edges=%llu\n",
+        (unsigned long long)ScProgramControlCalls());
+    fprintf(stderr,"[program lane] entries=%llu edges=%llu\n",
+        (unsigned long long)s_program_lane_entries,(unsigned long long)s_program_lane_edges);
+    fprintf(stderr,"[program blocks] entries=%llu edges=%llu\n",
+        (unsigned long long)s_program_block_entries,(unsigned long long)s_program_block_edges);
+    fprintf(stderr,"[wait lane] entries=%llu spans=%llu\n",
+        (unsigned long long)s_wait_lane_entries,(unsigned long long)s_wait_lane_spans);
+    fprintf(stderr,"[development lane] entries=%llu spans=%llu\n",
+        (unsigned long long)s_development_lane_entries,(unsigned long long)s_development_lane_spans);
+      fprintf(stderr,"[city lane] entries=%llu spans=%llu\n",(unsigned long long)s_city_lane_entries,(unsigned long long)s_city_lane_spans);
     uint64_t pages[256];memcpy(pages,s_interpreter_pages,sizeof pages);
     fprintf(stderr,"[main interpreter pages] bank %02x:\n",s_bank_page_sel);
     for(unsigned n=0;n<12;++n) {
@@ -11697,7 +12419,11 @@ int main(int argc, char **argv) {
   }
   if(gpu_fields) fprintf(stderr,"[gpu fields] native publication cells=%llu\n",(unsigned long long)ScWorldGuestStencilCells());
   fprintf(stderr,"[gpu service] fused cells=%llu GPU cells=%llu\n",(unsigned long long)ScWorldGuestServiceCells(),(unsigned long long)ScWorldGuestServiceGpuCells());
+  fprintf(stderr,"[gpu crime] published cells=%llu\n",(unsigned long long)ScWorldGuestCrimeGpuCells());
+  fprintf(stderr,"[gpu land] published summaries=%llu\n",(unsigned long long)ScWorldGuestLandGpuCells());
   fprintf(stderr,"[power stages] spans=%llu guest-clocks=%llu\n",(unsigned long long)ScPowerTraversalStageSpans(),(unsigned long long)ScPowerTraversalStageClocks());
+  if(perf_on || s_bank_profile)fprintf(stderr,"[power cache] solved=%llu reused=%llu\n",
+      (unsigned long long)s_power_refresh.network_solves,(unsigned long long)s_power_refresh.policy_reuses);
   ScWorldGuestSetStencilBackend(NULL);ScGpuFieldsDestroy(gpu_fields);
   ScGpuTerrainDestroy(gpu_terrain);
   if(s_bank_profile && s_pc_profile_page>=0) {

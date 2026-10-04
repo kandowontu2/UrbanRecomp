@@ -153,11 +153,30 @@ static size_t encoded_size(unsigned version) {
     return n;
 }
 size_t ScWorldEncodedSize(void) { return encoded_size(5); }
+bool ScWorldAdvanceScan(ScWorld *w) {
+    unsigned width=ScWorldWidth(w),height=ScWorldHeight(w);
+    if(w->scan_spread) {
+        /* All expanded widths are multiples of sixteen. width/4+1 and
+         * 3*width/4+1 are modular inverses. This visits every cell once,
+         * while each short batch reaches all four quadrants of the city.
+         * The live physical coordinates also encode progress, so no queued
+         * jobs or lost iterator state are needed when saving/loading. */
+        unsigned column=(w->scan_x*(3*width/4+1))%width;
+        unsigned row=(w->scan_y+height-(column*(height/8+1))%height)%height;
+        if(++column==width) {column=0;++row;}
+        if(row==height) {w->scan_x=0;w->scan_y=height;return false;}
+        w->scan_x=(column*(width/4+1))%width;
+        w->scan_y=(row+column*(height/8+1))%height;
+        return true;
+    }
+    if(++w->scan_x<width)return true;
+    w->scan_x=0;return ++w->scan_y<height;
+}
 bool ScWorldEncode(const ScWorld *w,uint8_t *p,size_t size) {
     if (size!=ScWorldEncodedSize()) return false;
     memset(p,0,80); memcpy(p,"SCWORLD",7); p[7]=5;
     put(p+8,ScWorldWidth(w)); put(p+10,ScWorldHeight(w));
-    p[12]=w->active; p[13]=w->colossal?3:w->giant?2:w->huge?1:0; put32(p+16,w->map_anchor);
+    p[12]=w->active; p[13]=w->colossal?3:w->giant?2:w->huge?1:0; p[14]=w->test_city; p[15]=w->scan_spread; put32(p+16,w->map_anchor);
     put32(p+20,(uint32_t)size); put32(p+24,SC_WORLD_FIELDS);
     for(unsigned i=0;i<3;++i) put32(p+28+i*4,w->bank_anchor[i]);
     put(p+40,w->scan_x); put(p+42,w->scan_y);
@@ -178,19 +197,27 @@ bool ScWorldDecode(ScWorld *w,const uint8_t *p,size_t size) {
     bool legacy=p[7]==2,huge=!legacy && p[13]!=0,giant=p[7]>=4 && p[13]>=2,colossal=p[7]==5 && p[13]==3;
     unsigned width=colossal?1920:giant?960:huge?480:240,height=colossal?1600:giant?800:huge?400:200,bytes=width*height*2;
     if(size!=encoded_size(p[7]) || word(p+8)!=width || word(p+10)!=height ||
-        p[12]>1 || (!legacy && p[13]>(p[7]==5?3:p[7]==4?2:1)) ||
+        p[12]>1 || (p[7]==5 && (p[14]>1 || p[15]>1 || (p[14] && (!p[12] || !colossal)))) || (!legacy && p[13]>(p[7]==5?3:p[7]==4?2:1)) ||
         (get32(p+16)>=bytes && get32(p+16)!=UINT32_MAX) ||
         get32(p+20)!=size || get32(p+24)!=SC_WORLD_FIELDS) return false;
     for(unsigned i=0;i<3;++i) if(get32(p+28+i*4)>=bytes && get32(p+28+i*4)!=UINT32_MAX) return false;
     if(!legacy && (word(p+40)>width || word(p+42)>height)) return false;
-    if(!legacy && (p[60]>1 || (p[60] && (word(p+56)>=width || word(p+58)>=height)))) return false;
+    if(!legacy && p[60]>1) return false;
     if(!legacy && (p[61]>1 || p[62]>2 || p[63]>5 || (!p[61] && (p[62] || p[63])))) return false;
     ScWorldReset(w);w->active=p[12]!=0;w->huge=huge;w->giant=giant;w->colossal=colossal;w->map_anchor=get32(p+16);
+    w->test_city=p[7]==5 && p[14]!=0;
+    w->scan_spread=p[7]==5 && p[15]!=0;
     for(unsigned i=0;i<3;++i) w->bank_anchor[i]=get32(p+28+i*4);
     if(!legacy) {
         w->scan_x=word(p+40);w->scan_y=word(p+42);
         for(unsigned i=0;i<3;++i) for(unsigned j=0;j<2;++j) w->coord[i][j]=(int16_t)word(p+44+4*i+2*j);
         w->center_x=word(p+56);w->center_y=word(p+58);w->center_valid=p[60]!=0;
+        /* Older dense-city scans could wrap their 16-bit owner count and
+         * serialize an impossible center. The map and field data remain valid;
+         * discard only that derived position until the next corrected scan. */
+        if(w->center_x>=width || w->center_y>=height) {
+            w->center_valid=false;w->center_x=width/2;w->center_y=height/2;
+        }
         w->journey=p[61]!=0;w->journey_notice=p[62];w->journey_announcing=(p[63]&1)!=0;
         w->journey_target=p[63]>>1;
     }

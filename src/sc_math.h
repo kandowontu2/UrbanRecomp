@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
 typedef struct Interp816 Interp816;
 /* Verified US bank-03 arithmetic and additive RNG helpers, in C. Execute complete iterations
  * within the caller's next beam event budget. Return original cycles;
@@ -8,3 +9,9 @@ unsigned ScMathStep(Interp816 *cpu,uint8_t *ram,unsigned max_cycles);
 /* Fuse RNG setup, iterations and return within that same clock budget. Stops
  * before a caller or arithmetic-helper entry needs its own scheduler hooks. */
 unsigned ScMathBatchStep(Interp816 *cpu,uint8_t *ram,unsigned max_cycles);
+/* Connected division setup/body/return continuations, including a single
+ * indivisible original-clock edge when a beam deadline cannot fit it. */
+bool ScMathDivideOwns(unsigned pc);
+/* Range and full-word additive RNG setup, residual loop and caller returns. */
+bool ScMathRngOwns(unsigned pc);
+unsigned ScMathInstructionStep(Interp816 *cpu,uint8_t *ram);

@@ -1,5 +1,6 @@
 #include "sc_zoning.h"
 #include "sc_world_guest.h"
+#include "sc_native_specialize.h"
 #include "snes/interp816.h"
 #include <stdlib.h>
 
@@ -21,28 +22,32 @@ static void add(Interp816 *c,unsigned v,bool subtract) {
 bool ScZoningOwns(uint16_t pc) {
     return (pc>=0x9468 && pc<0x961d) || (pc>=0x9653 && pc<0x9733) || (pc>=0x9745 && pc<0x97c9);
 }
-static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
-    uint8_t *restrict r,const uint8_t *restrict rom,unsigned budget,bool single) {
+SC_NATIVE_SPECIALIZE unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
+    uint8_t *restrict r,const uint8_t *restrict rom,unsigned budget,bool single,bool accelerated) {
     static int reference=-1;
-    /* Exactness is proven; timing controls have not shown a consistent gain.
-     * Keep this connected family opt-in until its throughput improves. */
-    if(reference<0) {const char *e=getenv("SC_ZONING_REFERENCE");reference=!e || *e!='0';}
-    if(reference || !w || !w->active || !c || !r || !rom || c->k!=3 || c->db!=3 ||
+    /* The beam-clock instruction family stays opt-in. Stationary-clock extra
+     * attempts connect it to their native driver; an explicit reference keeps
+     * either caller on the preceding path for matched comparisons. */
+    if(reference<0) {const char *e=getenv("SC_ZONING_REFERENCE");reference=e && *e=='0'?0:e && *e=='1'?1:2;}
+    if((reference && (!accelerated || reference==1)) || !w || !w->active || !c || !r || !rom || c->k!=3 || c->db!=3 ||
        c->e || c->d || c->xf || c->waiting || c->stopped || c->nmiWanted || (c->irqWanted && !c->i) ||
        c->dp<0x20 || c->dp>0x1fc0) return 0;
     unsigned cycles=0,cost,addr,value;ScWorldGuest mapped;
+    /* This body only clears X width and changes M width. Emulation and
+     * decimal mode cannot change here; retain their context guard at span
+     * entry, while every edge still checks stack bounds and its deadline. */
     for(;;) {
         if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
         switch(c->pc) {
         case 0x849e:case 0x84c4:case 0xa29a:
             if(6>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;c->cyclesUsed=6;cycles+=6;if(single) return cycles;break;
         case 0x84c3:case 0x84ea:case 0xa2b8:
             if(6>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;c->cyclesUsed=6;cycles+=6;if(single) return cycles;break;
         case 0x9468: native_9468: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -51,7 +56,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_946a;
         case 0x946a: native_946a: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b86>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b86;
@@ -61,7 +66,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_946d;
         case 0x946d: native_946d: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -71,7 +76,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_946e;
         case 0x946e: native_946e: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -80,7 +85,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_946f;
         case 0x946f: native_946f: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -90,7 +95,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9472;
         case 0x9472: native_9472: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -100,7 +105,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9473;
         case 0x9473: native_9473: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9475);c->sp-=2;c->pc=0xa29a;
@@ -108,7 +113,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9476: native_9476: /* LDY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->xf?0:1);
             if(c->xf || cost>budget-cycles) return cycles;
             c->y=(uint16_t)0x0000;nz(c,c->y,false);
@@ -117,10 +122,10 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9479;
         case 0x9479: native_9479: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             value=mapped.data?(c->mf?mapped.data[0]:word(mapped.data,0)):0;
             load(c,value);
             c->pc=0x947d;
@@ -128,7 +133,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_947d;
         case 0x947d: native_947d: /* SEC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             c->c=true;
@@ -137,10 +142,10 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_947e;
         case 0x947e: native_947e: /* SBC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             value=mapped.data?(c->mf?mapped.data[0]:word(mapped.data,0)):0;
             add(c,value,true);
             c->pc=0x9482;
@@ -148,7 +153,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9482;
         case 0x9482: native_9482: /* BCC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->c?0x9493:0x9484;
@@ -157,7 +162,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->c) goto native_9493;
             goto native_9484;
         case 0x9484: native_9484: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             compare(c,c->a,0x001e,c->mf);
@@ -166,7 +171,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9486;
         case 0x9486: native_9486: /* BCC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->c?0x9493:0x9488;
@@ -175,7 +180,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->c) goto native_9493;
             goto native_9488;
         case 0x9488: native_9488: /* INY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             ++c->y;nz(c,c->y,false);
@@ -184,7 +189,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9489;
         case 0x9489: native_9489: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0050,c->mf);
@@ -193,7 +198,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_948b;
         case 0x948b: native_948b: /* BCC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->c?0x9493:0x948d;
@@ -202,7 +207,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->c) goto native_9493;
             goto native_948d;
         case 0x948d: native_948d: /* INY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             ++c->y;nz(c,c->y,false);
@@ -211,7 +216,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_948e;
         case 0x948e: native_948e: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0096,c->mf);
@@ -220,7 +225,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9490;
         case 0x9490: native_9490: /* BCC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->c?0x9493:0x9492;
@@ -229,7 +234,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->c) goto native_9493;
             goto native_9492;
         case 0x9492: native_9492: /* INY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             ++c->y;nz(c,c->y,false);
@@ -238,7 +243,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9493;
         case 0x9493: native_9493: /* TYA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             load(c,c->y);
@@ -247,7 +252,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9494;
         case 0x9494: native_9494: /* RTS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;
@@ -255,7 +260,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9495: native_9495: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -264,7 +269,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9497;
         case 0x9497: native_9497: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b86>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b86;
@@ -274,7 +279,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_949a;
         case 0x949a: native_949a: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -284,7 +289,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_949b;
         case 0x949b: native_949b: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -293,7 +298,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_949c;
         case 0x949c: native_949c: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -303,7 +308,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_949f;
         case 0x949f: native_949f: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -313,7 +318,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94a0;
         case 0x94a0: native_94a0: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x94a2);c->sp-=2;c->pc=0xa29a;
@@ -321,10 +326,10 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x94a3: native_94a3: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             value=mapped.data?(c->mf?mapped.data[0]:word(mapped.data,0)):0;
             load(c,value);
             c->pc=0x94a7;
@@ -332,7 +337,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94a7;
         case 0x94a7: native_94a7: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0081,c->mf);
@@ -341,7 +346,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94a9;
         case 0x94a9: native_94a9: /* BCS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->c?0x9503:0x94ab;
@@ -350,7 +355,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->c) goto native_9503;
             goto native_94ab;
         case 0x94ab: native_94ab: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xdf));
@@ -359,7 +364,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94ad;
         case 0x94ad: native_94ad: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b89>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b89;
@@ -369,7 +374,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94b0;
         case 0x94b0: native_94b0: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0084,c->mf);
@@ -378,7 +383,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94b3;
         case 0x94b3: native_94b3: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x94e6:0x94b5;
@@ -387,7 +392,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_94e6;
             goto native_94b5;
         case 0x94b5: native_94b5: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -397,7 +402,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94b7;
         case 0x94b7: native_94b7: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0008,c->mf);
@@ -406,7 +411,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94ba;
         case 0x94ba: native_94ba: /* BCS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->c?0x94ca:0x94bc;
@@ -415,7 +420,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->c) goto native_94ca;
             goto native_94bc;
         case 0x94bc: native_94bc: /* PHX */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+(c->xf?0:1);
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,c->x);c->sp-=2;
@@ -424,7 +429,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94bd;
         case 0x94bd: native_94bd: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x94bf);c->sp-=2;c->pc=0x97c9;
@@ -432,7 +437,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x94c0: native_94c0: /* PLX */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->xf?0:1);
             if(cost>budget-cycles) return cycles;
             c->x=(uint16_t)word(r,c->sp+1);c->sp+=2;nz(c,c->x,false);
@@ -441,7 +446,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94c1;
         case 0x94c1: native_94c1: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -450,7 +455,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94c3;
         case 0x94c3: native_94c3: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x0001);
@@ -459,7 +464,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94c5;
         case 0x94c5: native_94c5: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x94c7);c->sp-=2;c->pc=0x961d;
@@ -467,7 +472,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x94c8: native_94c8: /* BRA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->pc=0x9503;
@@ -475,7 +480,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9503;
         case 0x94ca: native_94ca: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -484,10 +489,10 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94cc;
         case 0x94cc: native_94cc: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             value=mapped.data?(c->mf?mapped.data[0]:word(mapped.data,0)):0;
             load(c,value);
             c->pc=0x94d0;
@@ -495,7 +500,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94d0;
         case 0x94d0: native_94d0: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0041,c->mf);
@@ -504,7 +509,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94d2;
         case 0x94d2: native_94d2: /* BCC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->c?0x9503:0x94d4;
@@ -513,7 +518,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->c) goto native_9503;
             goto native_94d4;
         case 0x94d4: native_94d4: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x94d6);c->sp-=2;c->pc=0x9468;
@@ -521,7 +526,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9468;
         case 0x94d7: native_94d7: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -530,7 +535,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94d8;
         case 0x94d8: native_94d8: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x0000);
@@ -539,7 +544,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94da;
         case 0x94da: native_94da: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x94dc);c->sp-=2;c->pc=0x98b8;
@@ -547,7 +552,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x94dd: native_94dd: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -556,7 +561,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94df;
         case 0x94df: native_94df: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x0008);
@@ -565,7 +570,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94e1;
         case 0x94e1: native_94e1: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x94e3);c->sp-=2;c->pc=0x961d;
@@ -573,7 +578,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x94e4: native_94e4: /* BRA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->pc=0x9503;
@@ -581,7 +586,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9503;
         case 0x94e6: native_94e6: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xdf));
@@ -590,7 +595,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94e8;
         case 0x94e8: native_94e8: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -600,7 +605,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94ea;
         case 0x94ea: native_94ea: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0028,c->mf);
@@ -609,7 +614,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94ed;
         case 0x94ed: native_94ed: /* BCS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->c?0x9504:0x94ef;
@@ -618,7 +623,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->c) goto native_9504;
             goto native_94ef;
         case 0x94ef: native_94ef: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x94f1);c->sp-=2;c->pc=0x9468;
@@ -626,7 +631,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9468;
         case 0x94f2: native_94f2: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -635,7 +640,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94f3;
         case 0x94f3: native_94f3: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -645,7 +650,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94f5;
         case 0x94f5: native_94f5: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -655,7 +660,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94f6;
         case 0x94f6: native_94f6: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -665,7 +670,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94f7;
         case 0x94f7: native_94f7: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -675,7 +680,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94f8;
         case 0x94f8: native_94f8: /* DEC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:0);
             if(cost>budget-cycles) return cycles;
             load(c,c->a-1);
@@ -684,7 +689,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94f9;
         case 0x94f9: native_94f9: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x94fb);c->sp-=2;c->pc=0x98b8;
@@ -692,7 +697,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x94fc: native_94fc: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -701,7 +706,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_94fe;
         case 0x94fe: native_94fe: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x0008);
@@ -710,7 +715,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9500;
         case 0x9500: native_9500: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9502);c->sp-=2;c->pc=0x961d;
@@ -718,7 +723,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9503: native_9503: /* RTS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;
@@ -726,7 +731,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9504: native_9504: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xcf));
@@ -735,7 +740,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9506;
         case 0x9506: native_9506: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b89>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b89;
@@ -745,7 +750,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9509;
         case 0x9509: native_9509: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0120,c->mf);
@@ -754,7 +759,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_950c;
         case 0x950c: native_950c: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x9566:0x950e;
@@ -763,7 +768,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_9566;
             goto native_950e;
         case 0x950e: native_950e: /* LDX */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->xf?0:1);
             if(0x0b49>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b49;
@@ -773,10 +778,10 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9511;
         case 0x9511: native_9511: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             value=mapped.data?(c->mf?mapped.data[0]:word(mapped.data,0)):0;
             load(c,value);
             c->pc=0x9515;
@@ -784,7 +789,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9515;
         case 0x9515: native_9515: /* AND */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,c->a&0x03ff);
@@ -793,7 +798,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9518;
         case 0x9518: native_9518: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0120,c->mf);
@@ -802,7 +807,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_951b;
         case 0x951b: native_951b: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x953c:0x951d;
@@ -811,7 +816,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_953c;
             goto native_951d;
         case 0x951d: native_951d: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x0376);
@@ -820,7 +825,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9520;
         case 0x9520: native_9520: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9522);c->sp-=2;c->pc=0x9940;
@@ -828,7 +833,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9523: native_9523: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -838,7 +843,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9526;
         case 0x9526: native_9526: /* PHA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
             if(c->mf) r[c->sp--]=(uint8_t)c->a;else {put(r,c->sp-1,c->a);c->sp-=2;}
@@ -847,7 +852,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9527;
         case 0x9527: native_9527: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -857,7 +862,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_952a;
         case 0x952a: native_952a: /* CLC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             c->c=false;
@@ -866,7 +871,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_952b;
         case 0x952b: native_952b: /* ADC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             add(c,0x0003,false);
@@ -875,7 +880,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_952e;
         case 0x952e: native_952e: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -885,7 +890,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9531;
         case 0x9531: native_9531: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x037f);
@@ -894,7 +899,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9534;
         case 0x9534: native_9534: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9536);c->sp-=2;c->pc=0x9940;
@@ -902,7 +907,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9537: native_9537: /* PLA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
             value=c->mf?r[c->sp+1]:word(r,c->sp+1);c->sp+=c->mf?1:2;load(c,value);
@@ -911,7 +916,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9538;
         case 0x9538: native_9538: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -921,7 +926,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_953b;
         case 0x953b: native_953b: /* RTS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;
@@ -929,10 +934,10 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x953c: native_953c: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             value=mapped.data?(c->mf?mapped.data[0]:word(mapped.data,0)):0;
             load(c,value);
             c->pc=0x9540;
@@ -940,7 +945,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9540;
         case 0x9540: native_9540: /* AND */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,c->a&0x03ff);
@@ -949,7 +954,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9543;
         case 0x9543: native_9543: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0120,c->mf);
@@ -958,7 +963,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9546;
         case 0x9546: native_9546: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x9566:0x9548;
@@ -967,7 +972,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_9566;
             goto native_9548;
         case 0x9548: native_9548: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x0388);
@@ -976,7 +981,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_954b;
         case 0x954b: native_954b: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x954d);c->sp-=2;c->pc=0x9940;
@@ -984,7 +989,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x954e: native_954e: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -994,7 +999,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9551;
         case 0x9551: native_9551: /* PHA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
             if(c->mf) r[c->sp--]=(uint8_t)c->a;else {put(r,c->sp-1,c->a);c->sp-=2;}
@@ -1003,7 +1008,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9552;
         case 0x9552: native_9552: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1013,7 +1018,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9555;
         case 0x9555: native_9555: /* CLC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             c->c=false;
@@ -1022,7 +1027,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9556;
         case 0x9556: native_9556: /* ADC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             add(c,0x0300,false);
@@ -1031,7 +1036,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9559;
         case 0x9559: native_9559: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1041,7 +1046,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_955c;
         case 0x955c: native_955c: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x0391);
@@ -1050,7 +1055,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_955f;
         case 0x955f: native_955f: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9561);c->sp-=2;c->pc=0x9940;
@@ -1058,7 +1063,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9562: native_9562: /* PLA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
             value=c->mf?r[c->sp+1]:word(r,c->sp+1);c->sp+=c->mf?1:2;load(c,value);
@@ -1067,7 +1072,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9563;
         case 0x9563: native_9563: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1077,7 +1082,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9566;
         case 0x9566: native_9566: /* RTS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;
@@ -1085,7 +1090,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9567: native_9567: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -1094,7 +1099,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9569;
         case 0x9569: native_9569: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b86>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b86;
@@ -1104,7 +1109,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_956c;
         case 0x956c: native_956c: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -1114,7 +1119,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_956d;
         case 0x956d: native_956d: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -1123,7 +1128,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_956e;
         case 0x956e: native_956e: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1133,7 +1138,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9571;
         case 0x9571: native_9571: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -1143,7 +1148,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9572;
         case 0x9572: native_9572: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9574);c->sp-=2;c->pc=0xa29a;
@@ -1151,10 +1156,10 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9575: native_9575: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             value=mapped.data?(c->mf?mapped.data[0]:word(mapped.data,0)):0;
             load(c,value);
             c->pc=0x9579;
@@ -1162,7 +1167,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9579;
         case 0x9579: native_9579: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -1172,7 +1177,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_957a;
         case 0x957a: native_957a: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -1182,7 +1187,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_957b;
         case 0x957b: native_957b: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -1192,7 +1197,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_957c;
         case 0x957c: native_957c: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -1202,7 +1207,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_957d;
         case 0x957d: native_957d: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -1212,7 +1217,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_957e;
         case 0x957e: native_957e: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -1222,7 +1227,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9580;
         case 0x9580: native_9580: /* BCC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->c?0x9598:0x9582;
@@ -1231,7 +1236,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->c) goto native_9598;
             goto native_9582;
         case 0x9582: native_9582: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -1241,7 +1246,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9584;
         case 0x9584: native_9584: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0005,c->mf);
@@ -1250,7 +1255,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9586;
         case 0x9586: native_9586: /* BCS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->c?0x9599:0x9588;
@@ -1259,7 +1264,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->c) goto native_9599;
             goto native_9588;
         case 0x9588: native_9588: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x958a);c->sp-=2;c->pc=0x9468;
@@ -1267,7 +1272,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9468;
         case 0x958b: native_958b: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -1276,7 +1281,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_958c;
         case 0x958c: native_958c: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -1286,7 +1291,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_958e;
         case 0x958e: native_958e: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9590);c->sp-=2;c->pc=0x98dd;
@@ -1294,7 +1299,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9591: native_9591: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -1303,7 +1308,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9593;
         case 0x9593: native_9593: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x0008);
@@ -1312,7 +1317,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9595;
         case 0x9595: native_9595: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9597);c->sp-=2;c->pc=0x961d;
@@ -1320,7 +1325,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9598: native_9598: /* RTS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;
@@ -1328,7 +1333,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9599: native_9599: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xcf));
@@ -1337,7 +1342,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_959b;
         case 0x959b: native_959b: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b89>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b89;
@@ -1347,7 +1352,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_959e;
         case 0x959e: native_959e: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x01ef,c->mf);
@@ -1356,7 +1361,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95a1;
         case 0x95a1: native_95a1: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x95fb:0x95a3;
@@ -1365,7 +1370,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_95fb;
             goto native_95a3;
         case 0x95a3: native_95a3: /* LDX */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->xf?0:1);
             if(0x0b49>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b49;
@@ -1375,10 +1380,10 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95a6;
         case 0x95a6: native_95a6: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             value=mapped.data?(c->mf?mapped.data[0]:word(mapped.data,0)):0;
             load(c,value);
             c->pc=0x95aa;
@@ -1386,7 +1391,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95aa;
         case 0x95aa: native_95aa: /* AND */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,c->a&0x03ff);
@@ -1395,7 +1400,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95ad;
         case 0x95ad: native_95ad: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x01ef,c->mf);
@@ -1404,7 +1409,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95b0;
         case 0x95b0: native_95b0: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x95d1:0x95b2;
@@ -1413,7 +1418,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_95d1;
             goto native_95b2;
         case 0x95b2: native_95b2: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x039a);
@@ -1422,7 +1427,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95b5;
         case 0x95b5: native_95b5: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x95b7);c->sp-=2;c->pc=0x9940;
@@ -1430,7 +1435,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x95b8: native_95b8: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1440,7 +1445,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95bb;
         case 0x95bb: native_95bb: /* PHA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
             if(c->mf) r[c->sp--]=(uint8_t)c->a;else {put(r,c->sp-1,c->a);c->sp-=2;}
@@ -1449,7 +1454,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95bc;
         case 0x95bc: native_95bc: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1459,7 +1464,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95bf;
         case 0x95bf: native_95bf: /* CLC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             c->c=false;
@@ -1468,7 +1473,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95c0;
         case 0x95c0: native_95c0: /* ADC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             add(c,0x0003,false);
@@ -1477,7 +1482,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95c3;
         case 0x95c3: native_95c3: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1487,7 +1492,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95c6;
         case 0x95c6: native_95c6: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x03a3);
@@ -1496,7 +1501,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95c9;
         case 0x95c9: native_95c9: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x95cb);c->sp-=2;c->pc=0x9940;
@@ -1504,7 +1509,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x95cc: native_95cc: /* PLA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
             value=c->mf?r[c->sp+1]:word(r,c->sp+1);c->sp+=c->mf?1:2;load(c,value);
@@ -1513,7 +1518,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95cd;
         case 0x95cd: native_95cd: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1523,7 +1528,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95d0;
         case 0x95d0: native_95d0: /* RTS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;
@@ -1531,10 +1536,10 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x95d1: native_95d1: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             value=mapped.data?(c->mf?mapped.data[0]:word(mapped.data,0)):0;
             load(c,value);
             c->pc=0x95d5;
@@ -1542,7 +1547,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95d5;
         case 0x95d5: native_95d5: /* AND */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,c->a&0x03ff);
@@ -1551,7 +1556,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95d8;
         case 0x95d8: native_95d8: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x01ef,c->mf);
@@ -1560,7 +1565,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95db;
         case 0x95db: native_95db: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x95fb:0x95dd;
@@ -1569,7 +1574,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_95fb;
             goto native_95dd;
         case 0x95dd: native_95dd: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x03ac);
@@ -1578,7 +1583,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95e0;
         case 0x95e0: native_95e0: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x95e2);c->sp-=2;c->pc=0x9940;
@@ -1586,7 +1591,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x95e3: native_95e3: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1596,7 +1601,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95e6;
         case 0x95e6: native_95e6: /* PHA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
             if(c->mf) r[c->sp--]=(uint8_t)c->a;else {put(r,c->sp-1,c->a);c->sp-=2;}
@@ -1605,7 +1610,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95e7;
         case 0x95e7: native_95e7: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1615,7 +1620,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95ea;
         case 0x95ea: native_95ea: /* CLC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             c->c=false;
@@ -1624,7 +1629,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95eb;
         case 0x95eb: native_95eb: /* ADC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             add(c,0x0300,false);
@@ -1633,7 +1638,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95ee;
         case 0x95ee: native_95ee: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1643,7 +1648,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95f1;
         case 0x95f1: native_95f1: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x03b5);
@@ -1652,7 +1657,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95f4;
         case 0x95f4: native_95f4: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x95f6);c->sp-=2;c->pc=0x9940;
@@ -1660,7 +1665,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x95f7: native_95f7: /* PLA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
             value=c->mf?r[c->sp+1]:word(r,c->sp+1);c->sp+=c->mf?1:2;load(c,value);
@@ -1669,7 +1674,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95f8;
         case 0x95f8: native_95f8: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -1679,7 +1684,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95fb;
         case 0x95fb: native_95fb: /* RTS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;
@@ -1687,7 +1692,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x95fc: native_95fc: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xdf));
@@ -1696,7 +1701,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_95fe;
         case 0x95fe: native_95fe: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -1706,7 +1711,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9600;
         case 0x9600: native_9600: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0004,c->mf);
@@ -1715,7 +1720,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9603;
         case 0x9603: native_9603: /* BCS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->c?0x961c:0x9605;
@@ -1724,7 +1729,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->c) goto native_961c;
             goto native_9605;
         case 0x9605: native_9605: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xdf));
@@ -1733,7 +1738,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9607;
         case 0x9607: native_9607: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9609);c->sp-=2;c->pc=0x907e;
@@ -1741,7 +1746,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x960a: native_960a: /* AND */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,c->a&0x0001);
@@ -1750,7 +1755,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_960d;
         case 0x960d: native_960d: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -1759,7 +1764,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_960f;
         case 0x960f: native_960f: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -1768,7 +1773,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9610;
         case 0x9610: native_9610: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -1778,7 +1783,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9612;
         case 0x9612: native_9612: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9614);c->sp-=2;c->pc=0x9906;
@@ -1786,7 +1791,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9615: native_9615: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -1795,7 +1800,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9617;
         case 0x9617: native_9617: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x0008);
@@ -1804,7 +1809,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9619;
         case 0x9619: native_9619: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x961b);c->sp-=2;c->pc=0x961d;
@@ -1812,7 +1817,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x961c: native_961c: /* RTS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;
@@ -1820,7 +1825,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9653: native_9653: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x011c);
@@ -1829,7 +1834,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9656;
         case 0x9656: native_9656: /* JMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->pc=0x9940;
@@ -1837,7 +1842,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9659: native_9659: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xdf));
@@ -1846,7 +1851,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_965b;
         case 0x965b: native_965b: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b89>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b89;
@@ -1856,7 +1861,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_965e;
         case 0x965e: native_965e: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x037a,c->mf);
@@ -1865,7 +1870,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9661;
         case 0x9661: native_9661: /* BEQ */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->z?0x9653:0x9663;
@@ -1874,7 +1879,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->z) goto native_9653;
             goto native_9663;
         case 0x9663: native_9663: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x038c,c->mf);
@@ -1883,7 +1888,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9666;
         case 0x9666: native_9666: /* BEQ */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->z?0x9653:0x9668;
@@ -1892,7 +1897,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->z) goto native_9653;
             goto native_9668;
         case 0x9668: native_9668: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0383,c->mf);
@@ -1901,7 +1906,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_966b;
         case 0x966b: native_966b: /* BEQ */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->z?0x96d5:0x966d;
@@ -1910,7 +1915,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->z) goto native_96d5;
             goto native_966d;
         case 0x966d: native_966d: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0395,c->mf);
@@ -1919,7 +1924,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9670;
         case 0x9670: native_9670: /* BEQ */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->z?0x96d5:0x9672;
@@ -1928,7 +1933,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->z) goto native_96d5;
             goto native_9672;
         case 0x9672: native_9672: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -1937,7 +1942,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9674;
         case 0x9674: native_9674: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -1947,7 +1952,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9676;
         case 0x9676: native_9676: /* BEQ */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->z?0x96d5:0x9678;
@@ -1956,7 +1961,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->z) goto native_96d5;
             goto native_9678;
         case 0x9678: native_9678: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0010,c->mf);
@@ -1965,7 +1970,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_967a;
         case 0x967a: native_967a: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x96d7:0x967c;
@@ -1974,7 +1979,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_96d7;
             goto native_967c;
         case 0x967c: native_967c: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x00f8);
@@ -1983,7 +1988,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_967e;
         case 0x967e: native_967e: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9680);c->sp-=2;c->pc=0x961d;
@@ -1991,7 +1996,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9681: native_9681: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xdf));
@@ -2000,7 +2005,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9683;
         case 0x9683: native_9683: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -2010,7 +2015,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9686;
         case 0x9686: native_9686: /* LDY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->xf?0:1);
             if(c->xf || cost>budget-cycles) return cycles;
             c->y=(uint16_t)0x0084;nz(c,c->y,false);
@@ -2019,7 +2024,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9689;
         case 0x9689: native_9689: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x968b);c->sp-=2;c->pc=0x84c4;
@@ -2027,7 +2032,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x968c: native_968c: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x968e);c->sp-=2;c->pc=0x9468;
@@ -2035,7 +2040,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9468;
         case 0x968f: native_968f: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xdf));
@@ -2044,7 +2049,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9691;
         case 0x9691: native_9691: /* AND */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,c->a&0x00ff);
@@ -2053,7 +2058,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9694;
         case 0x9694: native_9694: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0006)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0006)&65535);
@@ -2063,7 +2068,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9696;
         case 0x9696: native_9696: /* ASL */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -2073,7 +2078,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9697;
         case 0x9697: native_9697: /* ADC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0006)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0006)&65535);
@@ -2083,7 +2088,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9699;
         case 0x9699: native_9699: /* ADC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             add(c,0x0089,false);
@@ -2092,7 +2097,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_969c;
         case 0x969c: native_969c: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0006)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0006)&65535);
@@ -2102,7 +2107,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_969e;
         case 0x969e: native_969e: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -2111,7 +2116,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96a0;
         case 0x96a0: native_96a0: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b86>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b86;
@@ -2121,7 +2126,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96a3;
         case 0x96a3: native_96a3: /* DEC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:0);
             if(cost>budget-cycles) return cycles;
             load(c,c->a-1);
@@ -2130,7 +2135,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96a4;
         case 0x96a4: native_96a4: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -2139,7 +2144,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96a5;
         case 0x96a5: native_96a5: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -2149,7 +2154,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96a8;
         case 0x96a8: native_96a8: /* DEC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:0);
             if(cost>budget-cycles) return cycles;
             load(c,c->a-1);
@@ -2158,7 +2163,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96a9;
         case 0x96a9: native_96a9: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x96ab);c->sp-=2;c->pc=0x849e;
@@ -2166,7 +2171,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x96ac: native_96ac: /* STX */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->xf?0:1);
             if(((c->dp+0x0008)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0008)&65535);
@@ -2176,7 +2181,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96ae;
         case 0x96ae: native_96ae: /* LDY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->xf?0:1);
             if(c->xf || cost>budget-cycles) return cycles;
             c->y=(uint16_t)0x0000;nz(c,c->y,false);
@@ -2185,7 +2190,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96b1;
         case 0x96b1: native_96b1: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0008)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0008)&65535);
@@ -2195,7 +2200,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96b3;
         case 0x96b3: native_96b3: /* CLC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             c->c=false;
@@ -2204,7 +2209,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96b4;
         case 0x96b4: native_96b4: /* ADC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+((0x9733&255)+c->y>255)+(c->mf?0:1);
             if(c->y>=18 || cost>budget-cycles) return cycles;
             value=(c->mf?rom[0x10000+0x9733+c->y]:word(rom,0x10000+0x9733+c->y));if(!c->mf && value!=65535) value=(value/240)*(2*ScWorldWidth(w))+value%240;
@@ -2214,7 +2219,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96b7;
         case 0x96b7: native_96b7: /* TAX */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             c->x=c->a;nz(c,c->x,false);
@@ -2223,10 +2228,10 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96b8;
         case 0x96b8: native_96b8: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             value=mapped.data?(c->mf?mapped.data[0]:word(mapped.data,0)):0;
             load(c,value);
             c->pc=0x96bc;
@@ -2234,7 +2239,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96bc;
         case 0x96bc: native_96bc: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0084,c->mf);
@@ -2243,7 +2248,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96bf;
         case 0x96bf: native_96bf: /* BEQ */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->z?0x96ce:0x96c1;
@@ -2252,7 +2257,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->z) goto native_96ce;
             goto native_96c1;
         case 0x96c1: native_96c1: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x0002);
@@ -2261,7 +2266,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96c4;
         case 0x96c4: native_96c4: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x96c6);c->sp-=2;c->pc=0x9035;
@@ -2269,7 +2274,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x96c7: native_96c7: /* CLC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             c->c=false;
@@ -2278,7 +2283,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96c8;
         case 0x96c8: native_96c8: /* ADC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0006)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0006)&65535);
@@ -2288,17 +2293,17 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96ca;
         case 0x96ca: native_96ca: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             ScWorldGuestWrite(&mapped,mapped.address,(uint8_t)c->a);if(!c->mf) ScWorldGuestWrite(&mapped,mapped.address+1,(uint8_t)(c->a>>8));
             c->pc=0x96ce;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;
             if(single) return cycles;
             goto native_96ce;
         case 0x96ce: native_96ce: /* INY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             ++c->y;nz(c,c->y,false);
@@ -2307,7 +2312,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96cf;
         case 0x96cf: native_96cf: /* INY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             ++c->y;nz(c,c->y,false);
@@ -2316,7 +2321,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96d0;
         case 0x96d0: native_96d0: /* CPY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->xf?0:1);
             if(c->xf || cost>budget-cycles) return cycles;
             compare(c,c->y,0x0012,false);
@@ -2325,7 +2330,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96d3;
         case 0x96d3: native_96d3: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x96b1:0x96d5;
@@ -2334,7 +2339,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_96b1;
             goto native_96d5;
         case 0x96d5: native_96d5: /* BRA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->pc=0x9732;
@@ -2342,7 +2347,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9732;
         case 0x96d7: native_96d7: /* BCC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->c?0x96f3:0x96d9;
@@ -2351,7 +2356,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->c) goto native_96f3;
             goto native_96d9;
         case 0x96d9: native_96d9: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -2360,7 +2365,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96db;
         case 0x96db: native_96db: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x96dd);c->sp-=2;c->pc=0x9468;
@@ -2368,7 +2373,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9468;
         case 0x96de: native_96de: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -2377,7 +2382,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96df;
         case 0x96df: native_96df: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -2387,7 +2392,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96e1;
         case 0x96e1: native_96e1: /* SEC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             c->c=true;
@@ -2396,7 +2401,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96e2;
         case 0x96e2: native_96e2: /* SBC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             add(c,0x0018,true);
@@ -2405,7 +2410,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96e4;
         case 0x96e4: native_96e4: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -2415,7 +2420,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96e5;
         case 0x96e5: native_96e5: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -2425,7 +2430,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96e6;
         case 0x96e6: native_96e6: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -2435,7 +2440,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96e7;
         case 0x96e7: native_96e7: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x96e9);c->sp-=2;c->pc=0x98b8;
@@ -2443,7 +2448,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x96ea: native_96ea: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -2452,7 +2457,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96ec;
         case 0x96ec: native_96ec: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x00f8);
@@ -2461,7 +2466,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96ee;
         case 0x96ee: native_96ee: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x96f0);c->sp-=2;c->pc=0x961d;
@@ -2469,7 +2474,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x96f1: native_96f1: /* BRA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->pc=0x9732;
@@ -2477,7 +2482,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9732;
         case 0x96f3: native_96f3: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x00ff);
@@ -2486,7 +2491,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96f5;
         case 0x96f5: native_96f5: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x96f7);c->sp-=2;c->pc=0x961d;
@@ -2494,7 +2499,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x96f8: native_96f8: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -2503,7 +2508,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96fa;
         case 0x96fa: native_96fa: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b86>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b86;
@@ -2513,7 +2518,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96fd;
         case 0x96fd: native_96fd: /* DEC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:0);
             if(cost>budget-cycles) return cycles;
             load(c,c->a-1);
@@ -2522,7 +2527,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96fe;
         case 0x96fe: native_96fe: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -2531,7 +2536,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_96ff;
         case 0x96ff: native_96ff: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b85>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b85;
@@ -2541,7 +2546,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9702;
         case 0x9702: native_9702: /* DEC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:0);
             if(cost>budget-cycles) return cycles;
             load(c,c->a-1);
@@ -2550,7 +2555,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9703;
         case 0x9703: native_9703: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9705);c->sp-=2;c->pc=0x849e;
@@ -2558,7 +2563,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9706: native_9706: /* STX */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->xf?0:1);
             if(((c->dp+0x0008)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0008)&65535);
@@ -2568,7 +2573,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9708;
         case 0x9708: native_9708: /* LDY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->xf?0:1);
             if(c->xf || cost>budget-cycles) return cycles;
             c->y=(uint16_t)0x0000;nz(c,c->y,false);
@@ -2577,7 +2582,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_970b;
         case 0x970b: native_970b: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0008)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0008)&65535);
@@ -2587,7 +2592,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_970d;
         case 0x970d: native_970d: /* CLC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             c->c=false;
@@ -2596,7 +2601,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_970e;
         case 0x970e: native_970e: /* ADC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+((0x9733&255)+c->y>255)+(c->mf?0:1);
             if(c->y>=18 || cost>budget-cycles) return cycles;
             value=(c->mf?rom[0x10000+0x9733+c->y]:word(rom,0x10000+0x9733+c->y));if(!c->mf && value!=65535) value=(value/240)*(2*ScWorldWidth(w))+value%240;
@@ -2606,7 +2611,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9711;
         case 0x9711: native_9711: /* TAX */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             c->x=c->a;nz(c,c->x,false);
@@ -2615,10 +2620,10 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9712;
         case 0x9712: native_9712: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             value=mapped.data?(c->mf?mapped.data[0]:word(mapped.data,0)):0;
             load(c,value);
             c->pc=0x9716;
@@ -2626,7 +2631,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9716;
         case 0x9716: native_9716: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0089,c->mf);
@@ -2635,7 +2640,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9719;
         case 0x9719: native_9719: /* BCC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->c?0x972b:0x971b;
@@ -2644,7 +2649,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->c) goto native_972b;
             goto native_971b;
         case 0x971b: native_971b: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0095,c->mf);
@@ -2653,7 +2658,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_971e;
         case 0x971e: native_971e: /* BCS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->c?0x972b:0x9720;
@@ -2662,7 +2667,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->c) goto native_972b;
             goto native_9720;
         case 0x9720: native_9720: /* TYA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             load(c,c->y);
@@ -2671,7 +2676,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9721;
         case 0x9721: native_9721: /* LSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             value=c->a&(c->mf?255:65535);
@@ -2681,7 +2686,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9722;
         case 0x9722: native_9722: /* ADC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             add(c,0x0080,false);
@@ -2690,17 +2695,17 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9725;
         case 0x9725: native_9725: /* STA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestBegin(&mapped,w,c,rom,0x80000);
+            ScWorldGuestBeginPrepared(&mapped,w,c,rom,0x80000);
             ScWorldGuestWrite(&mapped,mapped.address,(uint8_t)c->a);if(!c->mf) ScWorldGuestWrite(&mapped,mapped.address+1,(uint8_t)(c->a>>8));
             c->pc=0x9729;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;
             if(single) return cycles;
             goto native_9729;
         case 0x9729: native_9729: /* BRA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->pc=0x9732;
@@ -2708,7 +2713,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9732;
         case 0x972b: native_972b: /* INY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             ++c->y;nz(c,c->y,false);
@@ -2717,7 +2722,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_972c;
         case 0x972c: native_972c: /* INY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2;
             if(cost>budget-cycles) return cycles;
             ++c->y;nz(c,c->y,false);
@@ -2726,7 +2731,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_972d;
         case 0x972d: native_972d: /* CPY */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->xf?0:1);
             if(c->xf || cost>budget-cycles) return cycles;
             compare(c,c->y,0x0012,false);
@@ -2735,7 +2740,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9730;
         case 0x9730: native_9730: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x970b:0x9732;
@@ -2744,7 +2749,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_970b;
             goto native_9732;
         case 0x9732: native_9732: /* RTS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;
@@ -2752,7 +2757,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9745: native_9745: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x01eb);
@@ -2761,7 +2766,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9748;
         case 0x9748: native_9748: /* JMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->pc=0x9940;
@@ -2769,7 +2774,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x974b: native_974b: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xdf));
@@ -2778,7 +2783,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_974d;
         case 0x974d: native_974d: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0b89>0x1ffe || cost>budget-cycles) return cycles;
             addr=0x0b89;
@@ -2788,7 +2793,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9750;
         case 0x9750: native_9750: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x039e,c->mf);
@@ -2797,7 +2802,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9753;
         case 0x9753: native_9753: /* BEQ */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->z?0x9745:0x9755;
@@ -2806,7 +2811,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->z) goto native_9745;
             goto native_9755;
         case 0x9755: native_9755: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x03b0,c->mf);
@@ -2815,7 +2820,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9758;
         case 0x9758: native_9758: /* BEQ */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->z?0x9745:0x975a;
@@ -2824,7 +2829,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->z) goto native_9745;
             goto native_975a;
         case 0x975a: native_975a: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x03a7,c->mf);
@@ -2833,7 +2838,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_975d;
         case 0x975d: native_975d: /* BEQ */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->z?0x9793:0x975f;
@@ -2842,7 +2847,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->z) goto native_9793;
             goto native_975f;
         case 0x975f: native_975f: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x03b9,c->mf);
@@ -2851,7 +2856,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9762;
         case 0x9762: native_9762: /* BEQ */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=c->z?0x9793:0x9764;
@@ -2860,7 +2865,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->z) goto native_9793;
             goto native_9764;
         case 0x9764: native_9764: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xdf));
@@ -2869,7 +2874,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9766;
         case 0x9766: native_9766: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -2879,7 +2884,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9768;
         case 0x9768: native_9768: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0002,c->mf);
@@ -2888,7 +2893,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_976b;
         case 0x976b: native_976b: /* BCC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->c?0x9781:0x976d;
@@ -2897,7 +2902,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->c) goto native_9781;
             goto native_976d;
         case 0x976d: native_976d: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x976f);c->sp-=2;c->pc=0x9468;
@@ -2905,7 +2910,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9468;
         case 0x9770: native_9770: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -2914,7 +2919,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9771;
         case 0x9771: native_9771: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -2924,7 +2929,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9773;
         case 0x9773: native_9773: /* DEC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:0);
             if(cost>budget-cycles) return cycles;
             load(c,c->a-1);
@@ -2933,7 +2938,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9774;
         case 0x9774: native_9774: /* DEC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:0);
             if(cost>budget-cycles) return cycles;
             load(c,c->a-1);
@@ -2942,7 +2947,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9775;
         case 0x9775: native_9775: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9777);c->sp-=2;c->pc=0x98dd;
@@ -2950,7 +2955,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9778: native_9778: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -2959,7 +2964,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_977a;
         case 0x977a: native_977a: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x00f8);
@@ -2968,7 +2973,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_977c;
         case 0x977c: native_977c: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x977e);c->sp-=2;c->pc=0x961d;
@@ -2976,7 +2981,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x977f: native_977f: /* BRA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->pc=0x9793;
@@ -2984,7 +2989,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9793;
         case 0x9781: native_9781: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0001,c->mf);
@@ -2993,7 +2998,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9784;
         case 0x9784: native_9784: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x9793:0x9786;
@@ -3002,7 +3007,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_9793;
             goto native_9786;
         case 0x9786: native_9786: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x0137);
@@ -3011,7 +3016,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9789;
         case 0x9789: native_9789: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x978b);c->sp-=2;c->pc=0x9940;
@@ -3019,7 +3024,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x978c: native_978c: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -3028,7 +3033,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_978e;
         case 0x978e: native_978e: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x00f8);
@@ -3037,7 +3042,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9790;
         case 0x9790: native_9790: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x9792);c->sp-=2;c->pc=0x961d;
@@ -3045,7 +3050,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9793: native_9793: /* RTS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;
@@ -3053,7 +3058,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x9794: native_9794: /* REP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)&0xdf));
@@ -3062,7 +3067,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9796;
         case 0x9796: native_9796: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -3072,7 +3077,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_9798;
         case 0x9798: native_9798: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0002,c->mf);
@@ -3081,7 +3086,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_979b;
         case 0x979b: native_979b: /* BCC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->c?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->c?0x97b6:0x979d;
@@ -3090,7 +3095,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->c) goto native_97b6;
             goto native_979d;
         case 0x979d: native_979d: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x979f);c->sp-=2;c->pc=0x907e;
@@ -3098,7 +3103,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x97a0: native_97a0: /* AND */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,c->a&0x0001);
@@ -3107,7 +3112,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97a3;
         case 0x97a3: native_97a3: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -3116,7 +3121,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97a5;
         case 0x97a5: native_97a5: /* XBA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->a=(uint16_t)((c->a<<8)|(c->a>>8));nz(c,c->a,true);
@@ -3125,7 +3130,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97a6;
         case 0x97a6: native_97a6: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0000)&65535)>0x1ffe || cost>budget-cycles) return cycles;
             addr=((c->dp+0x0000)&65535);
@@ -3135,7 +3140,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97a8;
         case 0x97a8: native_97a8: /* DEC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:0);
             if(cost>budget-cycles) return cycles;
             load(c,c->a-1);
@@ -3144,7 +3149,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97a9;
         case 0x97a9: native_97a9: /* DEC */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:0);
             if(cost>budget-cycles) return cycles;
             load(c,c->a-1);
@@ -3153,7 +3158,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97aa;
         case 0x97aa: native_97aa: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x97ac);c->sp-=2;c->pc=0x9906;
@@ -3161,7 +3166,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x97ad: native_97ad: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -3170,7 +3175,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97af;
         case 0x97af: native_97af: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x00f8);
@@ -3179,7 +3184,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97b1;
         case 0x97b1: native_97b1: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x97b3);c->sp-=2;c->pc=0x961d;
@@ -3187,7 +3192,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x97b4: native_97b4: /* BRA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             c->pc=0x97c8;
@@ -3195,7 +3200,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97c8;
         case 0x97b6: native_97b6: /* CMP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             compare(c,c->a,0x0001,c->mf);
@@ -3204,7 +3209,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97b9;
         case 0x97b9: native_97b9: /* BNE */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=(!c->z?3:2);
             if(cost>budget-cycles) return cycles;
             c->pc=!c->z?0x97c8:0x97bb;
@@ -3213,7 +3218,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(!c->z) goto native_97c8;
             goto native_97bb;
         case 0x97bb: native_97bb: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=false || cost>budget-cycles) return cycles;
             load(c,0x01f4);
@@ -3222,7 +3227,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97be;
         case 0x97be: native_97be: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x97c0);c->sp-=2;c->pc=0x9940;
@@ -3230,7 +3235,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x97c1: native_97c1: /* SEP */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3;
             if(cost>budget-cycles) return cycles;
             interp816_setFlags(c,(uint8_t)(interp816_getFlags(c)|0x20));
@@ -3239,7 +3244,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97c3;
         case 0x97c3: native_97c3: /* LDA */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
             load(c,0x00f8);
@@ -3248,7 +3253,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             goto native_97c5;
         case 0x97c5: native_97c5: /* JSR */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             put(r,c->sp-1,0x97c7);c->sp-=2;c->pc=0x961d;
@@ -3256,7 +3261,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(single) return cycles;
             break;
         case 0x97c8: native_97c8: /* RTS */
-            if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
+            if(c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;
@@ -3270,11 +3275,15 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
 
 unsigned ScZoningStep(ScWorld *restrict w,Interp816 *restrict c,
     uint8_t *restrict r,const uint8_t *restrict rom,unsigned budget) {
-    return execute(w,c,r,rom,budget,false);
+    return execute(w,c,r,rom,budget,false,false);
 }
 unsigned ScZoningInstructionStep(ScWorld *restrict w,Interp816 *restrict c,
     uint8_t *restrict r,const uint8_t *restrict rom) {
-    return execute(w,c,r,rom,12,true);
+    return execute(w,c,r,rom,12,true,false);
+}
+unsigned ScZoningAcceleratedStep(ScWorld *restrict w,Interp816 *restrict c,
+    uint8_t *restrict r,const uint8_t *restrict rom,unsigned budget) {
+    return execute(w,c,r,rom,budget,false,true);
 }
 
 unsigned ScZoningQualityStep(ScWorld *w,Interp816 *c,uint8_t *r,unsigned budget) {

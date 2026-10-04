@@ -32,11 +32,14 @@ the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) an
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 11 is one portable Windows EXE; run it and select your own clean US ROM.
+Beta 12 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution
-path. Some game routines still use the interpreter. Enhanced releases are prereleases; see
+path. The filled-city correctness replay retires no main/kernel interpreter
+calls; unsupported paths retain a compatibility fallback. The tested 1920x1600
+city averages 60.14 FPS at X50 with adaptive Tab, with occasional frame spikes.
+Enhanced releases are prereleases; see
 [features, controls, save compatibility and testing limits](docs/PC_ENHANCEMENTS.md).
 
 **Adaptive Widescreen, the default renderer:** the shared Mods launcher offers
@@ -58,13 +61,17 @@ left to investigate, with the evidence already gathered for each.
 
 ## How it runs
 
-The game's code runs on snesrecomp's interpreter over the real PPU, APU, DMA
-and cartridge device models, driven by this host's own H/V master-clock frame
-loop. `tools/regen.sh` also generates ahead-of-time compiled banks from the
-ROM, and the build links them; `SC_FIBER=1` runs the guest through them.
-Everything about that -- the analyzer's coverage, the COP syscall work, the
-fiber and the migration steps -- is in
-[`docs/AOT_LLE.md`](docs/AOT_LLE.md).
+Enhanced Windows releases run compatible ROM-generated C alongside connected
+native C simulation routines over snesrecomp's PPU, APU, DMA and cartridge
+device models. The host retains original H/V clocks, interrupts and bus order;
+Vulkan shares presentation and compute for supported graphics and derived
+city fields. Unsupported execution/layouts retain compatibility fallback.
+Generated game code and the player's ROM remain private build inputs.
+
+The earlier interpreter and optional AOT/fiber bring-up are documented in
+[`docs/AOT_LLE.md`](docs/AOT_LLE.md). Enhanced builds use `SC_PROGRAM=ON` and
+`SC_AOT=OFF`; contributor generation instructions are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 **No full disassembly.** This project will not produce a complete, labelled
 disassembly of the game. Another fan project already works on that:
@@ -229,6 +236,8 @@ Keys that are not SNES buttons:
 | Action | Key |
 |---|---|
 | Fast-forward (hold) | Tab |
+| Open Save City during play; Back/Close in menus | Escape |
+| Reveal hidden 1920x1600 test City 3 on Load City | Ctrl+Shift+tilde |
 | Zoom the map in / out (city view) | + / - |
 | Save state to slot 1-9/0 | Shift+1 .. Shift+9, Shift+0 |
 | Load state from slot 1-9/0 | 1 .. 9, 0 |
@@ -351,3 +360,21 @@ PolyForm Noncommercial 1.0.0, so the program itself may be used and passed on
 for noncommercial purposes only. All third-party licences are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Nothing here grants any
 right to the game itself.
+
+The hidden **TEST CITY 3** starts with approximately 62 million residents at
+ordinary zone capacities. Its districts contain connected road, rail and power
+networks, funded police and fire stations, parks and nuclear power plants;
+the civic precinct includes buildable gifts, a stadium and airports, with
+seaports along the eastern coast. The usual simulation rules still apply.
+Press **Ctrl+Shift+tilde** on **Resume Saved City** to reveal it. If you have
+no regular saved cities, the same shortcut on the main menu opens that page.
+Selecting City 3 loads its saved SRM record if present, otherwise generates
+it from code. **Escape, Save?, Yes** saves this city back to City 3 without
+replacing City 1 or 2. Its full map is stored inside the SRM; the original
+32 KiB cartridge area remains intact. Keep the whole SRM when backing up
+City 3. Save-state loads also retain its hidden-city identity.
+
+Ctrl+mouse-wheel zoom can expose terrain spanning up to **4096x4096** native
+pixels, twice the previous maximum width and height. Only the land zooms;
+the HUD, minimap, overview panels and menus keep their normal display size.
+Expanded cities update across the map instead of sweeping visibly row by row.

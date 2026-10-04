@@ -42,14 +42,15 @@ bool ScVideoLoad(ScVideoSettings *s, const char *path) {
             if (strcmp(value, "0") && strcmp(value, "1")) { valid = false; continue; }
             if (!strcmp(key, "Enabled")) parsed.enabled = value[0] == '1';
             else parsed.centered = value[0] == '1';
-        } else if (!strcmp(key, "FitScale") || !strcmp(key, "FitPixelAspect")) {
+        } else if (!strcmp(key, "FitScale") || !strcmp(key, "FitPixelAspect") || !strcmp(key, "MapZoom")) {
             char *end;
             double number = strtod(value, &end);
             if (*end || !isfinite(number) || number < 0 || number > 16384) {
                 valid = false; continue;
             }
             if (!strcmp(key, "FitScale")) parsed.fit_scale = number;
-            else parsed.fit_pixel_aspect = number;
+            else if (!strcmp(key,"FitPixelAspect")) parsed.fit_pixel_aspect = number;
+            else parsed.map_zoom=number;
         }
     }
     valid &= !ferror(f);
@@ -64,9 +65,9 @@ bool ScVideoSave(const ScVideoSettings *s, const char *path) {
     FILE *f = fopen(temp, "w");
     if (!f) return false;
     bool ok = fprintf(f, "[Widescreen]\nEnabled=%d\nAspect=%s\nCentered=%d\n"
-                        "FitScale=%.17g\nFitPixelAspect=%.17g\n",
+                        "FitScale=%.17g\nFitPixelAspect=%.17g\nMapZoom=%.17g\n",
                       s->enabled, ScAspectName(s->aspect), s->centered,
-                      s->fit_scale, s->fit_pixel_aspect) > 0;
+                      s->fit_scale, s->fit_pixel_aspect,s->map_zoom) > 0;
     if (fclose(f)) ok = false;
     if (ok) {
 #ifdef _WIN32
@@ -152,15 +153,11 @@ void ScVideoCaptureScale(ScVideoSettings *s, ScViewport v, int w, int h) {
 bool ScVideoZoom(ScVideoSettings *s,ScViewport current,int w,int h,double factor) {
     if(!s || w<=0 || h<=0 || !isfinite(factor) || factor<=0 ||
        !isfinite(current.pixel_aspect) || current.pixel_aspect<=0) return false;
-    ScVideoSettings next=*s;ScVideoCaptureScale(&next,current,w,h);
-    double minimum=fmax(w/(SC_MAX_CANVAS*next.fit_pixel_aspect),(double)h/SC_MAX_CANVAS);
-    double maximum=fmin(w/(256*next.fit_pixel_aspect),(double)h/224);
-    if(minimum>maximum) minimum=maximum;
-    double scale=fmax(minimum,fmin(maximum,next.fit_scale*factor));
-    if(!isfinite(scale) || scale<=0) return false;
-    next.enabled=true;next.aspect=SC_FIT;next.fit_scale=scale;
-    bool changed=!s->enabled || s->aspect!=SC_FIT || fabs(s->fit_scale-scale)>1e-9;
-    if(changed) *s=next;
+    double previous=s->map_zoom>0?s->map_zoom:1;
+    double minimum=fmax((double)current.width/SC_MAX_CANVAS,(double)current.height/SC_MAX_CANVAS);
+    double zoom=fmax(minimum,fmin(4,previous*factor));
+    bool changed=fabs(previous-zoom)>1e-9;
+    if(changed) s->map_zoom=zoom;
     return changed;
 }
 bool ScVideoToGuest(ScViewport v, ScVideoRect d, double x, double y, int *gx, int *gy) {

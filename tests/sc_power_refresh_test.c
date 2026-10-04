@@ -125,6 +125,7 @@ static void electrical_signature_tests(void) {
         /* A plant-type change must still schedule a solve, even though both
          * tile IDs have the same conductivity bit. */
         unsigned plant=ScWorldCell(&world,x+1,y+1)&1023;
+        if(!getenv("SC_POWER_POLICY_CACHE_REFERENCE"))assert(power.policy_reuses==1);
         assert(plant==0x27c || plant==0x28c);
         ScWorldPutCell(&world,x+1,y+1,plant==0x27c?0x28c:0x27c);
         assert(!ScPowerRefreshStep(&power,ram,&world,rom,sizeof rom,21,50,false));
@@ -134,10 +135,55 @@ static void electrical_signature_tests(void) {
     }
     puts("PASS: all 1024 electrical signatures preserve ordered power results across four expanded sizes; plant types, scratch traversal transitions and cadence remain distinct");
 }
+static void exhausted_policy_cache_tests(void) {
+    for(unsigned map=0;map<4;++map) {
+        memset(ram,0,sizeof ram);ram[0x193]=2;ScWorldReset(&world);
+        world.active=true;world.huge=map>=1;world.giant=map>=2;world.colossal=map==3;
+        unsigned width=ScWorldWidth(&world),height=ScWorldHeight(&world);
+        for(unsigned cell=0;cell<ScWorldCells(&world);++cell) {
+            world.tiles[2*cell]=0x62;world.tiles[2*cell+1]=0;
+        }
+        ScWorldTilesTouch(&world,0,2*ScWorldCells(&world));
+        ScWorldPutCell(&world,0,0,0x27c);
+        ScWorldPutCell(&world,width-1,height-1,0x28c);
+        ScWorldPutCell(&world,width/2,height/2,0);
+        assert(ScPowerRefreshRestore(&power,ram,&world,rom,sizeof rom,0));
+        compare_power(&world);
+        assert(!memcmp(actual,power.bitmap,ScWorldCells(&world)/8));
+        memcpy(expected,power.bitmap,ScWorldCells(&world)/8);
+        /* An exhausted network must reuse precisely the original ordered
+         * brownout result when the scratch traversal policy returns. */
+        put(0xb89,0x27c);ScWorldPutCell(&world,width/2,height/2,1);
+        assert(ScPowerRefreshStep(&power,ram,&world,rom,sizeof rom,4,50,true));
+        assert(ScConstructionPowerBitmapReference(ram,&world,rom,sizeof rom,actual,sizeof actual));
+        assert(!memcmp(actual,power.bitmap,ScWorldCells(&world)/8));
+        assert(memcmp(expected,power.bitmap,ScWorldCells(&world)/8));
+        put(0xb89,0x827c);ScWorldPutCell(&world,width/2,height/2,0);
+        assert(ScPowerRefreshStep(&power,ram,&world,rom,sizeof rom,8,50,true));
+        assert(!memcmp(expected,power.bitmap,ScWorldCells(&world)/8));
+        assert(ScConstructionPowerBitmapReference(ram,&world,rom,sizeof rom,actual,sizeof actual));
+        assert(!memcmp(actual,power.bitmap,ScWorldCells(&world)/8));
+        if(!getenv("SC_POWER_POLICY_CACHE_REFERENCE"))assert(power.policy_reuses==1);
+        /* Changing generator capacity invalidates both cached policies. */
+        uint64_t solves=power.network_solves;
+        ScWorldPutCell(&world,0,0,0x28c);
+        assert(ScPowerRefreshStep(&power,ram,&world,rom,sizeof rom,12,50,true));
+        assert(power.network_solves==solves+1);
+        assert(ScConstructionPowerBitmapReference(ram,&world,rom,sizeof rom,actual,sizeof actual));
+        assert(!memcmp(actual,power.bitmap,ScWorldCells(&world)/8));
+        assert(memcmp(expected,power.bitmap,ScWorldCells(&world)/8));
+        put(0xb89,0x27c);ScWorldPutCell(&world,width/2,height/2,1);
+        assert(ScPowerRefreshStep(&power,ram,&world,rom,sizeof rom,16,50,true));
+        assert(power.network_solves==solves+2);
+        assert(ScConstructionPowerBitmapReference(ram,&world,rom,sizeof rom,actual,sizeof actual));
+        assert(!memcmp(actual,power.bitmap,ScWorldCells(&world)/8));
+    }
+    puts("PASS: exhausted-network policy reuse and generator-capacity invalidation match the ordered interpreter oracle on all expanded sizes");
+}
 int main(int argc,char **argv) {
     assert(argc==2); FILE *f=fopen(argv[1],"rb");assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);
-    if(getenv("SC_POWER_REGIONS_TEST")) {regional_cache_tests();electrical_signature_tests();return 0;}
+    if(getenv("SC_POWER_REGIONS_TEST")) {regional_cache_tests();electrical_signature_tests();exhausted_policy_cache_tests();return 0;}
     unsigned conductive[1024],conductive_count=0;
     for(unsigned i=0;i<958;++i)
         if((rom[0x184eb+i]&128) && i!=0x27c && i!=0x28c) conductive[conductive_count++]=i;
@@ -263,6 +309,7 @@ int main(int argc,char **argv) {
     assert(!memcmp(actual,world.fields[5],ScWorldCells(&world)/8));
     regional_cache_tests();
     electrical_signature_tests();
+    exhausted_policy_cache_tests();
     puts("PASS: 70,000 full-width power seeds and reload publication on 1920x1600");
     puts("PASS: 30 ordered power oracle comparisons, speed ratios on every map size, fractional cadence, nuclear-first connection, full-map reload recovery, disconnected zones and native bitmap ownership");
 }

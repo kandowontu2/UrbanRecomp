@@ -8,13 +8,14 @@ typedef enum ScAspect {
 typedef struct ScVideoSettings {
     bool enabled; ScAspect aspect; bool centered;
     double fit_scale, fit_pixel_aspect;
+    double map_zoom; /* terrain magnification; UI scale is independent */
 } ScVideoSettings;
 typedef struct ScViewport {
     int width, height, core_x, core_y; double pixel_aspect;
     double pixel_scale; /* Fit keeps this drawable-pixel scale across resizes. */
 } ScViewport;
 typedef struct ScVideoRect { int x, y, w, h; } ScVideoRect;
-enum { SC_MAX_CANVAS = 2048 };
+enum { SC_MAX_CANVAS = 4096 };
 const char *ScAspectName(ScAspect aspect);
 const char *ScAspectLabel(ScAspect aspect);
 bool ScParseAspect(const char *value, ScAspect *out);
@@ -25,8 +26,8 @@ ScViewport ScVideoViewport(const ScVideoSettings *settings, int width, int heigh
 ScVideoRect ScVideoDestination(ScViewport view, int width, int height);
 /* Capture the displayed tile scale before expanding the drawable window. */
 void ScVideoCaptureScale(ScVideoSettings *settings, ScViewport view, int width, int height);
-/* Change tile scale while retaining a complete native HUD and the drawable
- * window. Smaller scales expose more land rather than resizing the window. */
+/* Change terrain magnification while retaining the HUD, menu and drawable
+ * scale. Smaller factors expose more land within the same window. */
 bool ScVideoZoom(ScVideoSettings *settings,ScViewport current,int width,int height,double factor);
 bool ScVideoToGuest(ScViewport view, ScVideoRect destination, double x, double y,
                    int *guest_x, int *guest_y);

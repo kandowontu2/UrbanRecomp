@@ -284,3 +284,40 @@ bool ScConstructionRefreshPower(uint8_t *ram,ScWorld *w,const uint8_t *rom,size_
   else memcpy(ram+0x1a598,power,1500);
   return true;
 }
+
+/* Generated districts need live density, land value and service fields before
+ * their first development pass. Run the original stock scans on private WRAM;
+ * the generator tiles the surrounded district's resulting spatial fields. */
+bool ScConstructionPrimeFields(uint8_t *ram,const uint8_t *rom,size_t size) {
+  if(!ram || !rom || size!=0x80000)return false;
+  BuildBus *b=calloc(1,sizeof *b);if(!b)return false;
+  b->rom=rom;b->size=size;memcpy(b->ram,ram,sizeof b->ram);
+  /* 03:ab0e/ab67 contribute the full 1000-point funded service strength
+   * at each powered, transport-connected ordinary fire/police station. */
+  for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x) {
+    unsigned raw=word(ram,0x10200+2*(y*120+x)),tile=raw&1023;
+    if(tile!=0x249 && tile!=0x252)continue;
+    unsigned a=0x10000+(tile==0x249?0xb2f4:0xb16e)+2*((y/8)*15+x/8);
+    put(b->ram,a,word(b->ram,a)+((raw&0x8000)?1000:500));
+  }
+  Interp816 *c=interp816_init(b,read_bus,write_bus);if(!c){free(b);return false;}
+  const unsigned scans[]={0x9ad7,0x9aa3,0x9c11,0x9e8e};bool ok=true;
+  for(unsigned n=0;n<sizeof scans/sizeof *scans && ok;++n) {
+    interp816_reset(c);c->k=c->db=3;c->pc=scans[n];c->sp=0x1ffd;c->dp=0x1e00;
+    c->mf=c->xf=c->e=false;c->i=true;put(b->ram,0x1ffe,0x6fff);
+    unsigned steps=0;
+    while(c->pc!=0x7000 || c->k!=3) {
+      if(++steps>20000000 || b->fault || c->stopped || c->waiting){ok=false;break;}
+      interp816_runOpcode(c);
+    }
+    ok=ok && c->sp==0x1fff && c->dp==0x1e00;
+  }
+  if(ok) {
+    for(unsigned f=0;f<17;++f) {
+      const ScWorldField *field=&ScWorldFields[f];
+      memcpy(ram+0x10000+field->base,b->ram+0x10000+field->base,
+          field->stock_width*field->stock_height*field->element_bytes);
+    }
+  }
+  interp816_free(c);free(b);return ok;
+}

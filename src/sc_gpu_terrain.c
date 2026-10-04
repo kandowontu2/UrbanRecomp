@@ -18,7 +18,7 @@ struct ScGpuTerrain {
     unsigned width,height,stride,frames,resource_capacity,city_capacity,offsets[8],bytes[8];
     bool validate,linear_filter;
 };
-_Static_assert(sizeof(ScTerrainRow)==308*4,"shader scanline layout");
+_Static_assert(sizeof(ScTerrainRow)==311*4,"shader scanline layout");
 _Static_assert(sizeof(ScNativeRow)==202*4,"shader native scanline layout");
 _Static_assert(sizeof(ScTerrainTile)==6*4,"shader terrain span layout");
 SDL_Renderer *ScGpuTerrainRenderer(SDL_Window *window) {
@@ -73,7 +73,7 @@ ScGpuTerrain *ScGpuTerrainCreate(SDL_Renderer *renderer,bool linear_filter) {
 static bool surface(ScGpuTerrain *g,const ScTerrainFrame *f) {
     if(g->width==f->width && g->height==f->height && g->stride==f->stride && g->resource_capacity==f->resource_capacity && g->city_capacity==f->city_capacity) return true;
     SDL_FlushRenderer(g->renderer);release_surface(g);
-    const unsigned counts[]={f->width*f->height,f->stride*f->height,f->height*256,f->height*308,f->width*f->height,f->height*202,f->resource_capacity?f->resource_capacity:1,f->city_capacity?f->city_capacity:1};
+    const unsigned counts[]={f->width*f->height,f->stride*f->height,f->height*256,f->height*311,f->width*f->height,f->height*202,f->resource_capacity?f->resource_capacity:1,f->city_capacity?f->city_capacity:1};
     const unsigned elements[]={4,sizeof(ScTerrainTile),4,4,sizeof(ScTerrainOverlay),4,4,4};unsigned total=0;
     for(unsigned i=0;i<8;++i) {
         total=(total+15)&~15u;g->offsets[i]=total;g->bytes[i]=counts[i]*elements[i];total+=g->bytes[i];

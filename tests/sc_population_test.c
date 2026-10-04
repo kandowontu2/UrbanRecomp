@@ -162,6 +162,15 @@ static void cached_census_tests(void) {
         compare_cached_census(c,&s,w);assert(ScPopulationCensusEvaluatedCells(c)==0);
         /* Free centers immediately across a chunk seam, one row above it,
          * and in the last corner depend on edits outside their own chunk. */
+        /* Commit a new free center and all eight houses simultaneously.
+         * Old/new neighborhood snapshots must not mix within the batch. */
+        int cx=(int)width/2,cy=(int)height/2;
+        for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)ScWorldPutCell(w,cx+dx,cy+dy,0);
+        compare_cached_census(c,&s,w);
+        for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)ScWorldPutCell(w,cx+dx,cy+dy,(dx || dy)?0x89:0x84);
+        compare_cached_census(c,&s,w);assert(ScPopulationCensusEvaluatedCells(c)<=9);
+        for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)ScWorldPutCell(w,cx+dx,cy+dy,(dx || dy)?0:0x99);
+        compare_cached_census(c,&s,w);assert(ScPopulationCensusEvaluatedCells(c)<=9);
         unsigned positions[]={256*11,256*11+width,256*11-width,cells-1};
         for(unsigned j=0;j<4;++j) {
             unsigned pos=positions[j],x=pos%width,y=pos/width;

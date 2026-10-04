@@ -1,5 +1,6 @@
 #include "sc_smoothing.h"
 #include "sc_world_guest.h"
+#include "sc_native_specialize.h"
 #include "snes/interp816.h"
 #include <stdlib.h>
 
@@ -22,7 +23,7 @@ static void add(Interp816 *c,unsigned v,bool subtract) {
 bool ScSmoothingOwns(uint16_t pc) {
     return pc>=0xa02f && pc<0xa13b;
 }
-static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
+SC_NATIVE_SPECIALIZE unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
     uint8_t *restrict r,const uint8_t *restrict rom,unsigned budget,bool single) {
     static int reference=-1;
     if(reference<0) {const char *e=getenv("SC_SMOOTHING_REFERENCE");reference=e && *e=='1';}
@@ -35,7 +36,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
         switch(c->pc) {
         case 0xa29a:
             if(6>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;c->cyclesUsed=6;cycles+=6;if(single) return cycles;break;
         case 0xa2b8:
             if(6>budget-cycles) return cycles;
@@ -148,7 +149,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(cost) {cycles+=cost;break;}
             cost=3;
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             c->mf=true;
             c->pc=0xa042;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;
@@ -774,7 +775,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(cost) {cycles+=cost;break;}
             cost=3;
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             c->mf=true;
             c->pc=0xa0c8;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;

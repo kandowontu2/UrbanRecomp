@@ -2,6 +2,9 @@
 #include "sc_world.h"
 #include "sc_stencil.h"
 typedef struct Interp816 Interp816;
+/* The game's live owner-property table is needed for full-width centroid
+ * carry at the density iterator. Bind the verified ROM before execution. */
+void ScWorldGuestBindRom(const uint8_t *rom,size_t size);
 /* Fused smoothing cell/control primitives used by the connected C family. */
 unsigned ScWorldGuestSmoothingStageStep(ScWorld *world,Interp816 *cpu,uint8_t *ram,unsigned max_cycles);
 unsigned ScWorldGuestServiceStageStep(ScWorld *world,Interp816 *cpu,uint8_t *ram,unsigned max_cycles);
@@ -26,6 +29,13 @@ void ScWorldGuestStep(ScWorld *world, Interp816 *cpu, uint8_t *ram);
 void ScWorldGuestVehicles(ScWorld *world, Interp816 *cpu, const uint8_t *ram, uint8_t multiply_y);
 void ScWorldGuestBegin(ScWorldGuest *guest, ScWorld *world,
                        const Interp816 *cpu, const uint8_t *rom, size_t size);
+/* Compiled hook ownership and cached live-validated operand plans. The
+ * preceding preparation functions remain independent qualification oracles.
+ * SC_WORLD_PREPARATION_REFERENCE=1 selects those functions in the host. */
+void ScWorldGuestStepPrepared(ScWorld *world,Interp816 *cpu,uint8_t *ram);
+void ScWorldGuestVehiclesPrepared(ScWorld *world,Interp816 *cpu,const uint8_t *ram,uint8_t multiply_y);
+void ScWorldGuestBeginPrepared(ScWorldGuest *guest,ScWorld *world,
+    const Interp816 *cpu,const uint8_t *rom,size_t size);
 bool ScWorldGuestRead(const ScWorldGuest *guest, uint32_t address, uint8_t *value);
 bool ScWorldGuestWrite(ScWorldGuest *guest, uint32_t address, uint8_t value);
 /* Added land must not multiply the time spent in the spatial simulation.
@@ -74,6 +84,11 @@ unsigned ScWorldGuestLandStageStep(ScWorld *world,Interp816 *cpu,
  * entry into the program-counter dispatcher; zero leaves state untouched. */
 unsigned ScWorldGuestDensityStageStep(ScWorld *world,Interp816 *cpu,
     uint8_t *ram,const uint8_t *rom,unsigned max_cycles);
+/* Shared whole-field fusions for the resumable native postpass control. */
+unsigned ScWorldGuestFieldStageStep(ScWorld *world,Interp816 *cpu,uint8_t *ram,unsigned max_cycles);
+/* Shared whole ordinary-cell fusion for connected city sweep control. */
+unsigned ScWorldGuestSweepStageStep(ScWorld *world,Interp816 *cpu,uint8_t *ram,
+    const uint8_t *rom,unsigned max_cycles);
 
 /* Exactly one original instruction in a converted C family, with the CPU's
  * indivisible timing rule. Use after bounded batches reject a short deadline.
@@ -88,6 +103,8 @@ uint64_t ScWorldGuestStencilCells(void);
 
 uint64_t ScWorldGuestServiceCells(void);
 uint64_t ScWorldGuestServiceGpuCells(void);
+uint64_t ScWorldGuestCrimeGpuCells(void);
+uint64_t ScWorldGuestLandGpuCells(void);
 
 /* Whole RCI artwork selection, ordered footprint update and frame restoration. */
 /* Ordered shared zone redraw; keeps each validation/write scheduler boundary. */
@@ -99,3 +116,8 @@ unsigned ScWorldGuestZoneArtStep(ScWorld *world,Interp816 *cpu,uint8_t *ram,
  * quality/RNG helpers retain their own native scheduling boundaries. */
 unsigned ScWorldGuestHouseArtStep(ScWorld *world,Interp816 *cpu,uint8_t *ram,
     const uint8_t *rom,unsigned max_cycles);
+
+/* Direct road artwork and infrastructure distance calculation; no state changes
+ * when the complete call does not fit the beam budget. */
+unsigned ScWorldGuestInfrastructureStep(ScWorld *world,Interp816 *cpu,
+    uint8_t *ram,unsigned max_cycles);

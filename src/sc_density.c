@@ -1,5 +1,6 @@
 #include "sc_density.h"
 #include "sc_world_guest.h"
+#include "sc_native_specialize.h"
 #include "snes/interp816.h"
 #include <stdlib.h>
 
@@ -22,7 +23,7 @@ static void add(Interp816 *c,unsigned v,bool subtract) {
 bool ScDensityOwns(uint16_t pc) {
     return (pc>=0x9ad7 && pc<0x9b99) || (pc>=0x9b9c && pc<0x9ba8) || (pc>=0x9bab && pc<0x9c3e);
 }
-static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
+SC_NATIVE_SPECIALIZE unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
     uint8_t *restrict r,const uint8_t *restrict rom,unsigned budget,bool single) {
     static int reference=-1;
     if(reference<0) {const char *e=getenv("SC_DENSITY_FAMILY_REFERENCE");reference=e && *e=='1';}
@@ -35,7 +36,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
         switch(c->pc) {
         case 0x849e:case 0xa29a:
             if(6>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;c->cyclesUsed=6;cycles+=6;if(single) return cycles;break;
         case 0x84c3:case 0xa2b8:
             if(6>budget-cycles) return cycles;
@@ -220,7 +221,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(cost) {cycles+=cost;break;}
             cost=3;
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             c->mf=true;
             c->pc=0x9af9;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;
@@ -706,7 +707,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
                  * Do not expose its writes unless the next opcode fits. */
                 unsigned minimum=word(r,c->dp+18)+((word(r,c->dp+16)+1)==ScWorldWidth(w))>=ScWorldHeight(w)?6:3;
                 if(minimum>budget-cycles) return cycles;
-                ScWorldGuestStep(w,c,r);break;
+                ScWorldGuestStepPrepared(w,c,r);break;
             }
             cost=5+((c->dp&255)!=0)+(c->mf?0:2);
             if(((c->dp+0x0010)&65535)>0x1ffe || cost>budget-cycles) return cycles;
@@ -798,7 +799,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=6;
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             put(r,c->sp-1,0x9b71);c->sp-=2;c->pc=0xa0b5;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;
             if(single) return cycles;
@@ -824,7 +825,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->xf?0:1);
             if(c->xf || cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             c->x=(uint16_t)0x0000;nz(c,c->x,false);
             c->pc=0x9b7a;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;
@@ -897,7 +898,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
                  * Do not expose its writes unless the next opcode fits. */
                 unsigned minimum=(w->field_scan+1==ScWorldFieldSizeWorld(w,0)?2:3);
                 if(minimum>budget-cycles) return cycles;
-                ScWorldGuestStep(w,c,r);break;
+                ScWorldGuestStepPrepared(w,c,r);break;
             }
             cost=2+(c->xf?0:1);
             if(c->xf || cost>budget-cycles) return cycles;
@@ -983,7 +984,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0ba9>0x1ffe || cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             addr=0x0ba9;
             if(c->mf) r[addr]=(uint8_t)c->a;else put(r,addr,c->a);
             c->pc=0x9ba3;
@@ -1030,7 +1031,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=4+(c->mf?0:1);
             if(0x0baa>0x1ffe || cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             addr=0x0baa;
             if(c->mf) r[addr]=(uint8_t)c->a;else put(r,addr,c->a);
             c->pc=0x9bb2;
@@ -1058,7 +1059,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->mf?0:1);
             if(c->mf!=true || cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             load(c,0x003c);
             c->pc=0x9bb8;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;
@@ -1527,7 +1528,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=2+(c->xf?0:1);
             if(c->xf || cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             c->x=(uint16_t)0x0000;nz(c,c->x,false);
             c->pc=0x9c21;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;
@@ -1580,7 +1581,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
                  * Do not expose its writes unless the next opcode fits. */
                 unsigned minimum=(w->field_scan+2==ScWorldFieldSizeWorld(w,15)?2:3);
                 if(minimum>budget-cycles) return cycles;
-                ScWorldGuestStep(w,c,r);break;
+                ScWorldGuestStepPrepared(w,c,r);break;
             }
             cost=2+(c->xf?0:1);
             if(c->xf || cost>budget-cycles) return cycles;
@@ -1651,7 +1652,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x000a)&65535)>0x1ffe || cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             addr=((c->dp+0x000a)&65535);
             if(c->mf) r[addr]=(uint8_t)0;else put(r,addr,0);
             c->pc=0x9c39;
@@ -1662,7 +1663,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
             cost=3+((c->dp&255)!=0)+(c->mf?0:1);
             if(((c->dp+0x0008)&65535)>0x1ffe || cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             addr=((c->dp+0x0008)&65535);
             if(c->mf) r[addr]=(uint8_t)0;else put(r,addr,0);
             c->pc=0x9c3b;
@@ -1675,7 +1676,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(cost) {cycles+=cost;break;}
             cost=6;
             if(cost>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             put(r,c->sp-1,0x9c3d);c->sp-=2;c->pc=0x9cdf;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;
             if(single) return cycles;

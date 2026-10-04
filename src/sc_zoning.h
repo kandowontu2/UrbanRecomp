@@ -9,6 +9,11 @@ unsigned ScZoningStep(ScWorld *world,Interp816 *cpu,uint8_t *ram,
 /* One indivisible original instruction at beam/IRQ deadlines. */
 unsigned ScZoningInstructionStep(ScWorld *world,Interp816 *cpu,uint8_t *ram,const uint8_t *rom);
 
+/* Connected growth/mutation body for stationary-clock extra attempts. Explicit
+ * SC_ZONING_REFERENCE=1 retains the preceding driver path. */
+unsigned ScZoningAcceleratedStep(ScWorld *world,Interp816 *cpu,uint8_t *ram,
+                                const uint8_t *rom,unsigned max_cycles);
+
 /* Complete quality classification with one deadline preflight and direct fields. */
 unsigned ScZoningQualityStep(ScWorld *world,Interp816 *cpu,uint8_t *ram,unsigned max_cycles);
 

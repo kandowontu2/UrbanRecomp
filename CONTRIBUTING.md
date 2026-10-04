@@ -25,6 +25,55 @@ bash tools/regen.sh --no-tests
 
 The ROM and `src/gen/` are ignored and must never be committed.
 
+The enhanced host also has a compatible per-address native C tier. Generate
+it directly from the clean US ROM, without changing the framework checkout:
+
+```bash
+python tools/compile_native_program.py --rom /path/to/your/us.sfc
+```
+
+Its generated `src/program_gen/` files stay local too. When present, CMake's
+`SC_PROGRAM=ON` links them through `ScProgramRuntime`. Keep `SC_AOT=OFF` for
+the enhanced host: the older AOT/fiber execution path uses a different ABI
+and skips required game hooks. This native tier preserves live bus operands,
+register widths and original instruction boundaries. `SC_PROGRAM_REFERENCE=1`
+runs the preceding instruction execution path for matched checks;
+`SC_PROGRAM_CONTROL_REFERENCE=1` also restores the original IRQ/NMI/WAI/STP
+control path. The generator includes the verified 56-entry city-tool dispatch
+table rather than depending on which indirect targets a profiling run visits.
+Compile and run
+`UrbanRecompProgramTest` with the same ROM to compare every generated site
+against the original CPU. Details and limits are in
+[GPU_PERFORMANCE.md](docs/GPU_PERFORMANCE.md).
+
+World-hook ownership is generated from host source by
+`tools/compile_world_layout.py`; CMake refreshes it when its source changes.
+Run the script with `--check` to verify the checked-in header. Build and run
+`UrbanRecompWorldPreparationTest /path/to/your/us.sfc` for the independent
+preparation oracle; it does not use generated game instructions. Keep live ROM
+operand guards and world/register-dependent binding outside the cache.
+`SC_WORLD_PREPARATION_REFERENCE=1` retains original hooks for matched replays
+and timing controls.
+
+The connected UI/driver lane in `src/main.c` admits only banks 00/01 and
+yields at `sc_program_host_boundary`. When adding a hook in either bank,
+add its PC to that boundary function. Keep the per-edge world-coordinate,
+operand mapping, coverage, beam and APU work inside the lane. Trace and
+PC-triggered capture modes retain the complete dispatcher. Use
+`SC_PROGRAM_LANE_REFERENCE=1` to compare against the preceding C tier
+without disabling the compiled program itself. Membership generation does
+not replace the live opcode validation performed by each C action.
+
+The generator also emits direct C blocks for the driver/UI banks. Their
+before/after callbacks retain world preparation and real event retirement;
+unexpected live targets yield to page dispatch and patched opcodes retain
+the prepared fallback. `SC_PROGRAM_BLOCKS_REFERENCE=1` keeps the preceding
+compact C scheduler for same-binary controls. The program test additionally
+compares connected spans against the original CPU, including persistent RAM
+writes, ordered bus accesses, interrupt/control yields and preparation
+redirects. Keep generated block sources private alongside the other ROM
+generation outputs. Correctness results do not establish a speed improvement.
+
 ## Build and run
 
 ```bash

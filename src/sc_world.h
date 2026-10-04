@@ -24,6 +24,8 @@ typedef struct ScWorld {
     bool huge;
     bool giant;
     bool colossal;
+    bool test_city; /* hidden City 3; saved with the world, including save states */
+    bool scan_spread; /* resumable, bijective city scan across distant districts */
     uint16_t scan_x, scan_y;
     uint16_t center_x,center_y;
     bool center_valid;
@@ -47,6 +49,7 @@ static inline bool ScWorldContains(const ScWorld *w,int x,int y) {
     return x>=0 && y>=0 && (unsigned)x<ScWorldWidth(w) && (unsigned)y<ScWorldHeight(w);
 }
 void ScWorldReset(ScWorld *world);
+bool ScWorldAdvanceScan(ScWorld *world);
 void ScWorldGenerate(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateHuge(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateGiant(ScWorld *world, ScMapGenPrng *prng);

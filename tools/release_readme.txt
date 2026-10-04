@@ -1,5 +1,5 @@
-URBAN RECOMP ENHANCED - 1.2.0 BETA 11
-===================================
+URBAN RECOMP ENHANCED BETA 12
+===========================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
 The runtime, assets, documentation, credits and all 19 restored songs are
@@ -24,6 +24,18 @@ Select map size before starting a city/Practice: 120x100, 240x200, 480x400,
 1,000,000 residents, with Dr. Wright celebrations. F12 development speed
 is Normal, 2x, 5x, 10x or 50x; calendar/budget scheduling remains normal.
 Fit to Screen increases visible land at the chosen tile scale.
+Ctrl+wheel zoom-out now exposes up to 4096x4096 native pixels, twice the
+previous width and height.
+
+Hidden TEST CITY 3: press Ctrl+Shift+tilde on Resume Saved City to reveal
+the 1920x1600 developed test city. With no saved cities, the same shortcut
+works on the main menu. It starts with about 62 million residents at normal
+zone capacities, connected power/road/rail networks, police/fire, parks,
+gifts, stadium, airports and coastal seaports. The usual simulation applies.
+Select City 3 to load its SRM record or generate it if no record exists.
+Escape opens Save?; choose Yes to save City 3 without replacing City 1 or 2.
+The hidden city's full map is appended inside the SRM. Keep that entire file
+when backing it up. Long-term maximum population is still being tested.
 
 All 19 restored PCM tracks play with their authored loops and native sound
 effects. Credits: Pinci / Church of Kondo (restoration), Relikk (PCM set).
@@ -32,8 +44,11 @@ Change history: CHANGELOG.md. Software licenses are in the licenses folder.
 Run the portable EXE with --portable-docs to open the embedded documents,
 or --portable-extract <folder> to extract the full bundle for inspection.
 
-Substantial interpreted work has been replaced with C, but complete removal
-of the interpreter and sustained 60 FPS in every heavy phase remain open.
+The filled 1920x1600 X50 city averages 60.14 FPS with adaptive Tab pacing
+on the tested PC. Native C road/rail/bridge work reduces average processing
+time by about 11% in local comparisons. Complete-city state/pixels match,
+with zero main/kernel interpreter calls on that replay. Occasional late
+frames and compatibility fallback on unsupported paths remain.
 Touchpad hardware delivery needs hands-on testing. The reported yearly
 black budget popup remains deferred. See GPU_PERFORMANCE.md for evidence.
 
@@ -60,6 +75,8 @@ Start        Enter
 Select       B
 
 Tab          fast-forward (hold)
+Escape       Save City during play; Back/Close in menus
+Ctrl+Shift+tilde  reveal hidden test City 3 on the load-city page
 Ctrl         3x scrolling (hold)
 + / -        zoom the map in the city view
 Ctrl+wheel   zoom (touchpad pinch events also supported)
@@ -76,7 +93,7 @@ SAVING
 ------
 
 Cities saved in the game are kept in urbanrecomp-us.srm in this folder, a
-plain SRAM image like other SNES emulators write. The file as it was at the
+SRAM image with an optional checked hidden-city trailer. The file as it was at the
 last start is kept as urbanrecomp-us.srm.bak. Save states are separate files
 (savestate_<digit>.bin) and do not change your saved cities.
 

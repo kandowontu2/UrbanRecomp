@@ -281,9 +281,10 @@ static void native_batches(void) {
     const unsigned skips[]={0x9242,0x92ee,0x93a4},attempts[]={0x926f,0x931b,0x93d1};
     const unsigned zones[]={0x922f,0x92ce,0x937a},tiles[]={0x201,0x144,0x99};
     Interp816 *c=interp816_init(NULL,read_bus,write_bus);assert(c);unsigned cases=0;
-    for(unsigned map=0;map<4;++map) for(unsigned kind=0;kind<3;++kind) for(unsigned sample=0;sample<128;++sample) {
-        ScWorldReset(&world);world.active=true;world.huge=map>0;world.giant=map>=2;world.colossal=map==3;
-        unsigned x=ScWorldWidth(&world)-40,y=ScWorldHeight(&world)-30;
+    for(unsigned map=0;map<5;++map) for(unsigned kind=0;kind<3;++kind) for(unsigned sample=0;sample<128;++sample) {
+        ScWorldReset(&world);world.active=map>0;world.huge=map>=2;world.giant=map>=3;world.colossal=map==4;
+        unsigned width=world.active?ScWorldWidth(&world):120,height=world.active?ScWorldHeight(&world):100;
+        unsigned x=width-40,y=height-30;
         memset(ram,0,sizeof ram);memset(&guest,0,sizeof guest);interp816_reset(c);
         c->k=c->db=3;c->pc=entries[kind];c->dp=kind==2?0x1df4:0x1df6;c->sp=sample&16?0x1ffa:0x01fa;
         c->e=c->d=c->mf=c->xf=false;c->i=true;
@@ -295,8 +296,9 @@ static void native_batches(void) {
             unsigned artwork=tile+dy*3+dx;
             if(tile==0x84 && (dx || dy) && neighbour++<(sample>>2)%9) artwork=0x89+(neighbour%12);
             ScWorldPutCell(&world,x+dx,y+dy,(powered?0x8000:0)|artwork);
+            if(!world.active)put(0x10200+2*((y+dy)*width+x+dx),(powered?0x8000:0)|artwork);
         }
-        world.coord[2][0]=x;world.coord[2][1]=y;world.map_anchor=2*(y*ScWorldWidth(&world)+x);
+        world.coord[2][0]=x;world.coord[2][1]=y;world.map_anchor=2*(y*width+x);
         ram[0xb85]=x;ram[0xb86]=y;put(0xb49,world.map_anchor);
         put(0xb87,ScWorldCell(&world,x,y));put(0xb89,tile);put(c->dp+4,sample%7==0?65535:sample%2);
         put(0xbad,sample&2?2500:65536-2000);put(0xbaf,word(0xbad));put(0xbb1,word(0xbad));

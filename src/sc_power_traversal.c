@@ -39,7 +39,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
         case 0x849e:case 0x8ff4:case 0xb120:
             if(c->pc==0x8ff4 && !w->huge) return cycles;
             if(6>budget-cycles) return cycles;
-            ScWorldGuestStep(w,c,r);
+            ScWorldGuestStepPrepared(w,c,r);
             c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;c->cyclesUsed=6;cycles+=6;if(single) return cycles;break;
         case 0x84c3:case 0x9034:
             if(6>budget-cycles) return cycles;
@@ -727,7 +727,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
             if(w->huge) {
                 if(6>budget-cycles) return cycles;
-                ScWorldGuestStep(w,c,r);
+                ScWorldGuestStepPrepared(w,c,r);
                 c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;c->cyclesUsed=6;cycles+=6;if(single) return cycles;break;
             }
             cost=4+(c->xf?0:1);
@@ -829,7 +829,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(c->xf || c->e || c->d || c->sp<0x100 || c->sp>0x1ffd) return cycles;
             if(w->huge) {
                 if(6>budget-cycles) return cycles;
-                ScWorldGuestStep(w,c,r);
+                ScWorldGuestStepPrepared(w,c,r);
                 c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;c->cyclesUsed=6;cycles+=6;if(single) return cycles;break;
             }
             cost=4+(c->xf?0:1);
@@ -1076,7 +1076,7 @@ static unsigned execute(ScWorld *restrict w,Interp816 *restrict c,
             if(w->giant) {
                 cost=ScWorldContains(w,w->coord[2][0],w->coord[2][1])?2:3;
                 if(cost>budget-cycles) return cycles;
-                ScWorldGuestStep(w,c,r);goto native_b10e;
+                ScWorldGuestStepPrepared(w,c,r);goto native_b10e;
             }
             cost=2+(c->xf?0:1);
             if(c->xf || cost>budget-cycles) return cycles;

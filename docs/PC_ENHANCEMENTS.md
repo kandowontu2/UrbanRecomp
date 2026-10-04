@@ -13,7 +13,7 @@ Developers can build with `-DSC_CONSOLE=ON` to retain the console. Command-line
 arguments, exit codes and diagnostics redirected to files remain available in
 the default desktop build.
 
-Enhanced Beta 11 generates music on a dedicated sound CPU/DSP
+Enhanced releases generate music on a dedicated sound CPU/DSP
 thread. Playback continues during slow simulation frames. Settings pause and
 save/load synchronize with that thread; sound commands retain their order.
 The portable release includes the restored soundtrack on this worker.
@@ -160,7 +160,7 @@ rendering and camera limits use the expanded dimensions without wrapping native
 16-bit byte offsets or 8-bit coordinates. Power stacks, population density,
 city-center calculations and spatial fields also use the full world. The city
 overview samples the entire map, and its viewport marker uses those dimensions.
-This feature supports the verified US ROM with the default interpreter.
+This feature supports the verified US ROM with the supported host execution path.
 
 Huge terrain rendering now checks full coordinates on the native path as well
 as the widescreen extension. Crossing coordinates 224/144 or 256 no longer
@@ -216,7 +216,7 @@ and file pages) receive absolute coordinates without added D-pad travel.
 Scenario edge scrolling respects the original unlock gate. A stationary
 pointer leaves pad selection alone.
 
-On the US interpreter, left-drag roads, rail and power lines creates a line
+On the supported US host path, left-drag roads, rail and power lines creates a line
 along the dominant axis. Parks and bulldozing create rectangles; RCI, police
 and fire stations create rectangles of non-overlapping 3x3 placements. Yellow
 outlines preview the gesture. Release commits it; right-click cancels it.
@@ -273,7 +273,7 @@ their payloads. Without matching metadata, loading imports the population and
 original game and contains the bounded population and top-left 120x100 region.
 
 The population and development hooks support the verified clean US ROM with
-the default interpreter, not the optional fiber path or regional ROMs.
+the supported host execution path, not the optional fiber path or regional ROMs.
 
 ## Verified
 
@@ -525,11 +525,14 @@ Eligible city Mode 1 scanlines now capture native background planes for Vulkan
 composition, including candidates used by repaired cells. Native sprite
 evaluation, menus, unsupported display modes and some simulation routines remain
 on the CPU.
-This is ongoing local work toward 60 FPS on a filled X50 Fit view; that target
-has not yet been achieved. Reference controls and measured limits are documented
-in [GPU_PERFORMANCE.md](GPU_PERFORMANCE.md). No new release is published.
+Beta 12's filled 1920x1600 X50 adaptive-Tab sample averages 60.14 FPS;
+p99 active work is 14.64 ms, with four of 3,174 warm frames over 16.7 ms.
+The complete-city replay matches all integer state bytes and rendered pixels,
+with zero main/kernel interpreter calls on that tested path. Other paths retain
+compatibility fallback, and occasional frame spikes remain. Reference controls
+and measured limits are documented in [GPU_PERFORMANCE.md](GPU_PERFORMANCE.md).
 
-## Interactive zoom and extended population limit (local work)
+## Interactive zoom and extended population limit
 
 Ctrl + mouse wheel changes the tile scale in the adaptive view without resizing
 the window. Pinch/spread events use SDL 3.4 gesture scale where the platform
@@ -546,7 +549,7 @@ compatibility fields retain their safe six-digit mirror. ROM-backed arithmetic
 tests exercise the former ten-billion boundary and the new calculation cap,
 including mixed capacities, saturation, reports and save-slot round trips.
 
-The local city HUD has Copy and Paste buttons in the original adviser font.
+The city HUD has Copy and Paste buttons in the original adviser font.
 Drag a rectangle with Copy; releasing selects Paste automatically. Leaving the
 window during a drag retains the last valid selection. Every intersecting
 ordinary building is included in full, without recursively pulling in adjacent
@@ -656,3 +659,23 @@ replace earlier installations or migrate their files automatically. Keep all
 three city save files together when moving them to a new folder.
 `--portable-docs` opens the embedded documentation; `--portable-extract <folder>`
 extracts the complete bundled files for inspection. Game arguments are forwarded.
+
+
+## Hidden test City 3 (Beta 12)
+
+Press Ctrl+Shift+tilde on Resume Saved City to reveal the 1920x1600 test city.
+When no ordinary saves exist, the shortcut also works on the main menu and
+uses the normal fade/load-screen setup. The generated city starts with about
+62 million residents at normal zone capacities, connected power/road/rail
+networks, police/fire coverage, parks, gifts, stadium, airports and seaports.
+The ordinary simulation applies; this is not a fixed-population cheat.
+
+Selecting City 3 loads its saved data when present, otherwise generates it
+from code. Escape opens the native save dialog during city play and acts as
+Back/Close in menus. Saving City 3 appends its checked full-world record inside
+the SRM without replacing the two original cartridge slots. Back up the entire
+SRM, together with the normal .world and .population sidecars for Cities 1/2.
+
+Zoom changes terrain scale while HUD, minimap, overview panels and menus keep
+their normal size. Expanded-city scans distribute zone visits around the map,
+and save/load preserves the scan order and position.

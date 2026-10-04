@@ -1,5 +1,6 @@
 #include "sc_renderer.h"
 #include "sc_native_ppu.h"
+#include "sc_obj.h"
 #include "snes/ppu.h"
 #ifdef SC_TEST_GPU
 #include "sc_gpu_terrain.h"
@@ -247,6 +248,17 @@ int main(void) {
                 for(unsigned a=0;a<4096;++a) p->vram[(PPU_objTileAdr1(p)+a)&32767]^=0x5739;
                 for(unsigned a=0;a<4096;++a) p->vram[(PPU_objTileAdr2(p)+a)&32767]^=0x3957;
             }
+            if(line==120) {p->highOam[0]^=0xaa;p->obsel^=0x20;}
+            if(line==145) p->oamaddl^=0x32;
+            if(line==170) {
+                ScRenderer *targets[]={cpu,optimized};
+                for(unsigned k=0;k<2;++k) {
+                    targets[k]->object_x[10]+=37;targets[k]->object_y[10]=185;
+                    targets[k]->object_grace[11]=0;
+                    targets[k]->vehicles[0].y=290; /* vehicles do not wrap like OAM */
+                    targets[k]->vehicles[1].y=-5;
+                }
+            }
             for(unsigned x=0;x<256;++x) p->objBuffer.data[x+kPpuExtraLeftRight]=
                 x%13<3?(129+x%127)|((2+4*(x%4))<<12):0;
             unsigned ay=line+view.core_y;optimized->terrain.rows[ay].core_x=view.core_x;
@@ -255,9 +267,15 @@ int main(void) {
             assert(ScRendererDeferNativeLine(optimized,p,ram,line));
             ScRendererLine(cpu,p,ram,line,native);ScRendererLine(optimized,p,ram,line,native);
         }
+        unsigned grid_headers[8],grid_count=0,grid_rows=0;
         for(unsigned y=0;y<(unsigned)view.height;++y) {
             ScTerrainRow *row=optimized->terrain.rows+y;
             if((row->math&SC_ROW_GPU_OBJECTS) && row->reserved!=UINT32_MAX) ++object_rows;
+            if((row->math&SC_ROW_OBJECT_GRID) && row->reserved!=UINT32_MAX) {
+                ++grid_rows;unsigned i=0;
+                while(i<grid_count && grid_headers[i]!=row->reserved) ++i;
+                if(i==grid_count) {assert(grid_count<8);grid_headers[grid_count++]=row->reserved;}
+            }
             for(unsigned x=0;x<(unsigned)view.width;++x) {
                 uint32_t got=ScRendererPixel(optimized,x,y),expected=cpu->pixels[(size_t)y*view.width+x];
                 if(got!=expected) {
@@ -265,6 +283,12 @@ int main(void) {
                     abort();
                 }
             }
+        }
+        if(!getenv("SC_GPU_OBJECT_GRID_REFERENCE") && grid_rows) {
+            /* One immutable grid per live version, rather than a stream per
+             * scanline. Mid-frame attribute/size/rotation/position edits must
+             * split versions; a CHR edit alone uses the VRAM snapshot. */
+            assert(grid_count>=5 && grid_count<=6);assert(grid_rows>grid_count*10);
         }
 #ifdef SC_TEST_GPU
         SDL_Texture *objects=ScGpuTerrainDraw(gpu,optimized);assert(objects);
@@ -279,11 +303,19 @@ int main(void) {
     printf("PASS: %u extended OBJ frames, %u immutable sprite rows, all sizes/CHR banks/flips/rotations/vehicles/core seams, HUD and pan exclusions\n",object_frames,object_rows);
     /* Independent native-PPU oracle lives in sc_ppu_test. Here its captured
      * protocol also crosses the actual GPU upload/dispatch/presentation path. */
-    for(unsigned v=0;v<3;++v) for(unsigned id=0;id<32;++id) {
+    for(unsigned raw=0;raw<2;++raw) for(unsigned v=0;v<3;++v) for(unsigned id=0;id<32;++id) {
         assert(ScRendererResize(cpu,views[v]) && ScRendererResize(deferred,views[v]));
         assert(ScRendererDeferTerrain(deferred,true));
         ScTerrainFrame *f=&deferred->terrain;f->deferred=0;
+        if(raw && f->resource_capacity<2048+f->height*16384) {
+            f->resource_capacity=2048+f->height*16384;
+            f->resources=realloc(f->resources,(size_t)f->resource_capacity*sizeof *f->resources);
+            assert(f->resources);
+        }
+        if(raw) f->snapshots=f->height;
         p->bgmode=1|(id&1?8:0);p->inidisp=15;p->renderFlags=id&2?kPpuRenderFlags_NewRenderer:0;
+        for(unsigned layer=0;layer<3;++layer)
+            p->bgXsc[layer]=(0x40+layer*0x10)|((id>>(layer*2))&3);
         p->screenEnabled[0]=(id*7)&31;p->screenEnabled[1]=(id*13)&31;
         p->screenWindowed[0]=(id*19)&31;p->screenWindowed[1]=(id*23)&31;
         p->windowsel=(id*0x1b2935)&0xffffff;p->wbgobjlog=id*157;
@@ -300,6 +332,19 @@ int main(void) {
             for(unsigned i=0;i<32;++i) p->brightnessMult[i]=((i<<3)|(i>>2))*((id+y/32)%16)/15;
             for(unsigned x=0;x<256;++x) p->objBuffer.data[x+kPpuExtraLeftRight]=x%7?
                 (129+((x+id)%127))|((2+4*((x+id)%4))<<12):0;
+            unsigned slivers=id==31?SC_OBJ_GPU_SLIVERS+1:id*3;
+            if(raw) {
+                ScObjBegin(p);
+                for(unsigned i=0;i<slivers;++i) {
+                    int left=(int)((i*17+id*11)%288)-16;
+                    unsigned palette=128+16*((i+id)&7),priority=SPRITE_PRIO_TO_PRIO((i+id)&3,palette<192);
+                    unsigned at=0x2000+((i*31+id*19)%512)*16+(y&7);
+                    unsigned planes=p->vram[at]|(uint32_t)p->vram[at+8]<<16;
+                    ScObjAppend((uint16_t)left|((palette+(priority<<8))<<16),
+                        at|((i+id)&1?0x8000:0)|((i%4)<<16)|((8-i%3)<<20),planes);
+                }
+                ScObjMaterialize(p);
+            } else ScObjInvalidate(p);
             assert(ScNativePpuSupported(p));ScNativePpuCapture(f,p,ay,y+1);
             /* Fresh terrain can reuse captured native BG1/BG3 candidates
              * without decoding those candidates on the host. Feed BG2's
@@ -328,6 +373,17 @@ int main(void) {
                 }
                 assert(ScRendererPixel(deferred,ax,ay)==cpu->pixels[at]);
             }
+            if(raw) {
+                f->rows[ay].chr_snapshot=2048+ay*16384;
+                memcpy(f->resources+2048+ay*16384,p->vram,65536);
+                ScNativePpuCaptureRaw(f,p,ay,y+1);
+                assert(f->native[ay].flags&SC_NATIVE_RAW_BG);
+                assert(!!(f->native[ay].flags&SC_NATIVE_RAW_OBJ)==(slivers<=SC_OBJ_GPU_SLIVERS));
+                for(unsigned x=0;x<256;++x) {
+                    unsigned ax=x+views[v].core_x;
+                    assert(ScRendererPixel(deferred,ax,ay)==cpu->pixels[ay*f->width+ax]);
+                }
+            }
         }
         /* Relocating a native panel must use its source row's live palette,
          * windows, planes and OBJ data even across centered/tall canvases.
@@ -354,9 +410,9 @@ int main(void) {
 #endif
     ScRendererDestroy(cpu);ScRendererDestroy(deferred);
     ScRendererDestroy(optimized);
-    free(cpu);free(deferred);free(optimized);free(p);free(world);free(rom);free(ram);
+    ScObjInvalidate(p);free(cpu);free(deferred);free(optimized);free(p);free(world);free(rom);free(ram);
     printf("PASS: %u CPU/deferred frames, Huge/Giant/1920x1600 coordinates, wide/tall views, live planes/palettes, flips, windows, colour math, fades and fallback\n",captures);
-    puts("PASS: 96 native PPU captures, low/high OBJ palettes, both renderer window contracts, GPU protocol and materialized fallback");
+    puts("PASS: 192 decoded/raw native PPU captures, immutable VRAM, low/high OBJ palettes, both renderer window contracts, GPU protocol and materialized fallback");
     if(!getenv("SC_GPU_SUB_BG_REFERENCE") && !getenv("SC_TERRAIN_CAPTURE_REFERENCE")) {
         assert(sub_bg_rows>1000);
         printf("PASS: %u BG3 descriptor rows, all map layouts, scroll seams and live VRAM\n",sub_bg_rows);

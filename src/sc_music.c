@@ -3,6 +3,7 @@
 #include "snes/apu.h"
 #include "snes/dsp.h"
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 
 static struct {
@@ -16,6 +17,10 @@ static struct {
 } music;
 static ScPcm restored;
 static uint64_t output_phase;
+static bool profile_sync;
+static uint64_t sync_calls,sync_cycles,sync_ticks,sync_max_ticks;
+static uint64_t sync_lock_ticks,sync_lock_max_ticks;
+static _Thread_local uint64_t last_lock_ticks;
 bool ScMusicLoadRestored(const char *directory) {
     if(ScMusicRunning()) return false;
     bool ready=ScPcmLoad(&restored,directory,44100);
@@ -50,15 +55,32 @@ void ScMusicRestoreLocked(uint8_t command,bool enabled) {
 }
 
 bool ScMusicRunning(void) {return atomic_load_explicit(&music.running,memory_order_acquire);}
-void ScMusicLock(void) {if(music.mutex) SDL_LockMutex(music.mutex);}
+void ScMusicLock(void) {
+    if(!music.mutex)return;
+    uint64_t started=profile_sync?SDL_GetPerformanceCounter():0;
+    SDL_LockMutex(music.mutex);
+    if(profile_sync)last_lock_ticks=SDL_GetPerformanceCounter()-started;
+}
 void ScMusicUnlock(void) {if(music.mutex) SDL_UnlockMutex(music.mutex);}
 void ScMusicSyncLocked(uint64_t guest) {
     if(!ScMusicRunning()) return;
+    uint64_t started=profile_sync?SDL_GetPerformanceCounter():0;
     uint64_t before=music.apu->portClock;
     /* Synchronous protocol reads may need an echo before the next worker
      * wakeup. Only those reads advance the SPC on the game thread. */
     apu_runToGuestCycle(music.apu,guest,1u<<20);
     music.stats.cycles+=music.apu->portClock-before;
+    if(profile_sync) {
+        uint64_t ticks=SDL_GetPerformanceCounter()-started,cycles=music.apu->portClock-before;
+        ++sync_calls;sync_cycles+=cycles;sync_ticks+=ticks;
+        if(ticks>sync_max_ticks)sync_max_ticks=ticks;
+        sync_lock_ticks+=last_lock_ticks;
+        if(last_lock_ticks>sync_lock_max_ticks)sync_lock_max_ticks=last_lock_ticks;
+        double ms=ticks*1000.0/SDL_GetPerformanceFrequency();
+        double lock_ms=last_lock_ticks*1000.0/SDL_GetPerformanceFrequency();
+        if(ms>=5 || lock_ms>=5)fprintf(stderr,"[music sync] guest=%llu cycles=%llu host-ms=%.3f lock-ms=%.3f\n",
+            (unsigned long long)guest,(unsigned long long)cycles,ms,lock_ms);
+    }
 }
 void ScMusicWrite(uint8_t port,uint8_t value,uint64_t guest) {
     if(!ScMusicRunning()) return;
@@ -129,6 +151,9 @@ static int worker(void *unused) {
 bool ScMusicStart(Apu *apu,ScAudio *output) {
     if(ScMusicRunning() || !apu || !output || !sc_audio_opened(output)) return false;
     memset(&music.stats,0,sizeof music.stats);music.apu=apu;music.output=output;
+    const char *profile=getenv("SC_MUSIC_PROFILE");profile_sync=profile && *profile=='1';
+    sync_calls=sync_cycles=sync_ticks=sync_max_ticks=0;
+    sync_lock_ticks=sync_lock_max_ticks=0;
     music.mutex=SDL_CreateMutex();if(!music.mutex) return false;
     atomic_store(&music.paused,false);atomic_store(&music.guest,0);atomic_store(&music.running,true);
     output_phase=0;
@@ -142,6 +167,10 @@ void ScMusicStop(void) {
     if(!ScMusicRunning()) {ScPcmDestroy(&restored);return;}
     atomic_store_explicit(&music.running,false,memory_order_release);
     SDL_WaitThread(music.thread,NULL);music.thread=NULL;
+    if(profile_sync)fprintf(stderr,"[music sync total] calls=%llu cycles=%llu host-ms=%.3f max-ms=%.3f lock-ms=%.3f max-lock-ms=%.3f\n",
+        (unsigned long long)sync_calls,(unsigned long long)sync_cycles,
+        sync_ticks*1000.0/SDL_GetPerformanceFrequency(),sync_max_ticks*1000.0/SDL_GetPerformanceFrequency(),
+        sync_lock_ticks*1000.0/SDL_GetPerformanceFrequency(),sync_lock_max_ticks*1000.0/SDL_GetPerformanceFrequency());
     SDL_DestroyMutex(music.mutex);music.mutex=NULL;music.apu=NULL;music.output=NULL;
     ScPcmDestroy(&restored);
 }

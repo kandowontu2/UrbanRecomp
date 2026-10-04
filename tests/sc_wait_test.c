@@ -48,6 +48,48 @@ int main(int argc,char **argv) {
             ++cases;if(cost>100) ++fused;
         }
     }
+    /* The complete driver must stop on every original instruction boundary,
+     * including setup and the native/emulation stack return. */
+    unsigned driver_cases=0,edges=0,fallbacks=0;
+    const unsigned driver_starts[]={0x930d,0x930f,0x9311,0x9313,0x9315,0x9317};
+    for(unsigned stage=0;stage<6;++stage) for(unsigned sample=0;sample<256;++sample)
+    for(unsigned emulation=0;emulation<2;++emulation) {
+        memset(ram,0x5a,sizeof ram);interp816_reset(cpu);
+        cpu->k=0;cpu->db=(uint8_t)sample;cpu->pc=driver_starts[stage];
+        cpu->dp=pages[(sample>>2)&3];
+        cpu->sp=emulation?(uint16_t)(0x100+(sample&255)):(sample&1?0x1ffd:0x1fd);
+        cpu->a=(uint16_t)(0x7300+sample);cpu->x=sample*197;cpu->y=sample*313;
+        cpu->e=emulation;cpu->mf=stage!=0 || emulation || (sample&1);
+        cpu->xf=emulation || (sample&2);cpu->d=sample&4;
+        cpu->i=sample&8;cpu->irqWanted=cpu->i && (sample&16);
+        cpu->c=sample&32;cpu->v=sample&64;cpu->z=sample&128;cpu->n=!cpu->z;
+        ram[cpu->dp+0xb9]=sample%4==0?0:sample%4==1?1:sample%4==2?128:255;
+        ram[cpu->dp+0xc7]=(uint8_t)sample;
+        unsigned lo=emulation?0x100|((cpu->sp+1)&255):cpu->sp+1;
+        unsigned hi=emulation?0x100|((cpu->sp+2)&255):cpu->sp+2;
+        ram[lo]=0xff;ram[hi]=0x6f;
+        Interp816 initial=*cpu;memcpy(initial_ram,ram,sizeof ram);
+        for(unsigned b=0;b<=sizeof budgets/sizeof *budgets;++b) {
+            *cpu=initial;memcpy(ram,initial_ram,sizeof ram);
+            unsigned cost=b==sizeof budgets/sizeof *budgets?ScWaitInstructionStep(cpu,ram):
+                ScWaitDriverStep(cpu,ram,budgets[b]);
+            if(b<sizeof budgets/sizeof *budgets) assert(cost<=budgets[b]);
+            else assert(cost);
+            Interp816 actual=*cpu;memcpy(expected_ram,ram,sizeof ram);
+            *cpu=initial;memcpy(ram,initial_ram,sizeof ram);unsigned elapsed=0;
+            while(elapsed<cost) elapsed+=interp816_runOpcode(cpu);
+            if(elapsed!=cost || memcmp(cpu,&actual,sizeof actual) || memcmp(ram,expected_ram,sizeof ram)) {
+                fprintf(stderr,"wait driver stage=%u sample=%u E=%u budget-index=%u clocks=%u/%u pc=%x/%x SP=%x/%x A=%x/%x flags=%x/%x\n",
+                    stage,sample,emulation,b,cost,elapsed,cpu->pc,actual.pc,cpu->sp,actual.sp,cpu->a,actual.a,
+                    interp816_getFlags(cpu),interp816_getFlags(&actual));abort();
+            }
+            if(b<sizeof budgets/sizeof *budgets) ++driver_cases;else ++edges;
+        }
+        *cpu=initial;cpu->nmiWanted=true;memcpy(ram,initial_ram,sizeof ram);
+        initial=*cpu;
+        assert(!ScWaitDriverStep(cpu,ram,4096) && !ScWaitInstructionStep(cpu,ram));
+        assert(!memcmp(cpu,&initial,sizeof initial) && !memcmp(ram,initial_ram,sizeof ram));++fallbacks;
+    }
     /* Invalid execution layouts and pending interrupts must remain immutable. */
     for(unsigned guard=0;guard<7;++guard) {
         interp816_reset(cpu);cpu->k=0;cpu->pc=0x9311;cpu->dp=0x1e00;cpu->mf=true;cpu->i=false;
@@ -57,8 +99,11 @@ int main(int argc,char **argv) {
         else cpu->irqWanted=true;
         Interp816 initial=*cpu;memcpy(initial_ram,ram,sizeof ram);
         assert(!ScWaitStep(cpu,ram,4096));assert(!memcmp(cpu,&initial,sizeof initial) && !memcmp(ram,initial_ram,sizeof ram));
+        assert(!ScWaitDriverStep(cpu,ram,4096) && !ScWaitInstructionStep(cpu,ram));
+        assert(!memcmp(cpu,&initial,sizeof initial) && !memcmp(ram,initial_ram,sizeof ram));
     }
     assert(fused>100);interp816_free(cpu);
     printf("PASS: %u native frame-wait spans (%u fused), original ROM registers/RAM/clocks, byte wraps, ready exits, interrupt/unsafe fallback\n",cases,fused);
+    printf("PASS: %u complete wait-driver spans, %u original instruction edges, %u immutable interrupt fallbacks, setup and both stack modes\n",driver_cases,edges,fallbacks);
     return 0;
 }

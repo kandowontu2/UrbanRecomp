@@ -80,8 +80,9 @@ int main(int argc,char **argv) {
         if(!native && getenv("SC_DIV16_SETUP_REFERENCE")) continue;
         assert(native);Interp816 expected=*cpu;memcpy(expected_ram,ram,sizeof ram);
         *cpu=initial;memcpy(ram,initial_ram,sizeof ram);
-        assert(!ScMathStep(cpu,ram,native-1));
-        assert(!memcmp(cpu,&initial,sizeof initial) && !memcmp(ram,initial_ram,sizeof ram));
+        unsigned partial=ScMathStep(cpu,ram,native-1);assert(partial<native);
+        if(!getenv("SC_DIV16_DRIVER_REFERENCE")) assert(partial);
+        *cpu=initial;memcpy(ram,initial_ram,sizeof ram);
         assert(ScMathStep(cpu,ram,native)==native);
         same(cpu,&expected,0xa3cf,native,n);
         *cpu=initial;memcpy(ram,initial_ram,sizeof ram);unsigned elapsed=0,guard=0;
@@ -165,7 +166,7 @@ int main(int argc,char **argv) {
             Interp816 expected=*cpu;memcpy(expected_ram,ram,sizeof ram);
             if(!native) {assert(!memcmp(cpu,&initial,sizeof initial) && !memcmp(ram,initial_ram,sizeof ram));continue;}
             *cpu=initial;memcpy(ram,initial_ram,sizeof ram);unsigned elapsed=0,guard=0;
-            while(elapsed<native) {assert(++guard<32);elapsed+=interp816_runOpcode(cpu);}
+            while(elapsed<native) {assert(++guard<3000);elapsed+=interp816_runOpcode(cpu);}
             if(elapsed!=native) fprintf(stderr,"RNG span clock entry=%x case=%u budget=%u native=%u original=%u\n",rng_spans[entry],n,budgets[b],native,elapsed);
             assert(elapsed==native);same(cpu,&expected,rng_spans[entry],budgets[b],n);++cases;
         }
@@ -260,6 +261,77 @@ int main(int argc,char **argv) {
         assert(!ScMathStep(cpu,ram,4096));assert(!memcmp(cpu,&before,sizeof before));
         assert(!memcmp(ram,initial_ram,sizeof ram));
     }
-    interp816_free(cpu);printf("PASS: %u original-ROM math loop comparisons, exact CPU/RAM/clocks, bounded budgets and safe fallback\n",cases);
+    unsigned spans=0,atomic=0,rejected=0;
+    const unsigned driver_budgets[]={0,1,2,3,4,5,6,7,8,26,63,109,127,4096};
+    if(!getenv("SC_DIV16_DRIVER_REFERENCE")) for(unsigned n=0;n<64;++n) {
+        memset(ram,0x69,sizeof ram);cpu->read=read_bus;interp816_reset(cpu);
+        cpu->k=cpu->db=3;cpu->pc=0xa3cf;cpu->dp=n&1?0x1e00:0x1e08;
+        cpu->sp=n&16?0x1e13:n&2?0x1f75:0x1fd;
+        cpu->e=cpu->d=false;cpu->mf=n&4;cpu->xf=n&8;cpu->i=true;
+        cpu->a=(uint16_t)random_word();cpu->x=(uint16_t)random_word();cpu->y=(uint16_t)random_word();
+        cpu->c=n&1;cpu->v=n&2;cpu->z=n&4;cpu->n=n&8;
+        for(unsigned at=0;at<36;at+=2) put(cpu->dp+at,n<36?edges[(n+at)%6]:random_word());
+        unsigned returned=n&32?0x9069:0x7004;put(cpu->sp+1,returned-4);
+        unsigned guard=0;
+        /* Each starting state is reached by the original ROM, rather than
+         * reconstructed from this implementation. Exercise every setup,
+         * intermediate divide and epilogue edge with independent budgets. */
+        while(cpu->pc!=returned) {
+            assert(++guard<240);Interp816 before=*cpu;memcpy(initial_ram,ram,sizeof ram);
+            unsigned original=interp816_runOpcode(cpu);Interp816 after=*cpu;
+            memcpy(intermediate_ram,ram,sizeof ram);
+            *cpu=before;memcpy(ram,initial_ram,sizeof ram);
+            assert(ScMathInstructionStep(cpu,ram)==original);
+            memcpy(expected_ram,intermediate_ram,sizeof ram);same(cpu,&after,before.pc,original,n);++atomic;
+            for(unsigned b=0;b<sizeof driver_budgets/sizeof *driver_budgets;++b) {
+                *cpu=before;memcpy(ram,initial_ram,sizeof ram);
+                unsigned fast=ScMathBatchStep(cpu,ram,driver_budgets[b]);assert(fast<=driver_budgets[b]);
+                Interp816 native=*cpu;memcpy(expected_ram,ram,sizeof ram);
+                *cpu=before;memcpy(ram,initial_ram,sizeof ram);unsigned elapsed=0;
+                while(elapsed<fast) elapsed+=interp816_runOpcode(cpu);
+                assert(elapsed==fast);same(cpu,&native,before.pc,driver_budgets[b],n);++spans;
+            }
+            /* Interrupts must leave even the indivisible path untouched. */
+            *cpu=before;cpu->nmiWanted=true;Interp816 suspended=*cpu;memcpy(ram,initial_ram,sizeof ram);
+            assert(!ScMathInstructionStep(cpu,ram));assert(!memcmp(cpu,&suspended,sizeof suspended));
+            assert(!memcmp(ram,initial_ram,sizeof ram));++rejected;
+            *cpu=after;memcpy(ram,intermediate_ram,sizeof ram);
+        }
+    }
+    unsigned rng_spans_checked=0,rng_edges_checked=0,rng_rejected=0;
+    if(!getenv("SC_RNG_DRIVER_REFERENCE")) for(unsigned kind=0;kind<2;++kind) for(unsigned n=0;n<64;++n) {
+        memset(ram,0x69,sizeof ram);cpu->read=read_bus;interp816_reset(cpu);
+        cpu->k=cpu->db=3;cpu->pc=kind?0x9035:0x907e;
+        cpu->dp=n%4==0?0x1e00:n%4==1?0x1e02:n%4==2?0xcd1:0x28;
+        cpu->sp=n&16?0x1fd:0x1ffd;cpu->e=cpu->d=false;cpu->mf=n&2;cpu->xf=n&4;cpu->i=true;
+        cpu->a=kind?(uint16_t)range_bounds[n%10]:(uint16_t)random_word();
+        cpu->x=(uint16_t)random_word();cpu->y=(uint16_t)random_word();
+        cpu->c=n&1;cpu->v=n&2;cpu->z=n&4;cpu->n=n&8;put(cpu->sp+1,0x6fff);
+        for(unsigned at=0xccf;at<0xcdf;at+=2) put(at,n<36?edges[n%6]:random_word());
+        unsigned guard=0;
+        while(cpu->pc!=0x7000) {
+            assert(++guard<3000);Interp816 before=*cpu;memcpy(initial_ram,ram,sizeof ram);
+            unsigned original=interp816_runOpcode(cpu);Interp816 after=*cpu;memcpy(intermediate_ram,ram,sizeof ram);
+            if(ScMathRngOwns(before.pc)) {
+                *cpu=before;memcpy(ram,initial_ram,sizeof ram);
+                unsigned edge=ScMathInstructionStep(cpu,ram);
+                assert(edge==original);memcpy(expected_ram,intermediate_ram,sizeof ram);
+                same(cpu,&after,before.pc,original,n);++rng_edges_checked;
+                for(unsigned b=0;b<sizeof driver_budgets/sizeof *driver_budgets;++b) {
+                    *cpu=before;memcpy(ram,initial_ram,sizeof ram);
+                    unsigned fast=ScMathBatchStep(cpu,ram,driver_budgets[b]);assert(fast<=driver_budgets[b]);
+                    Interp816 native=*cpu;memcpy(expected_ram,ram,sizeof ram);
+                    *cpu=before;memcpy(ram,initial_ram,sizeof ram);unsigned elapsed=0,steps=0;
+                    while(elapsed<fast) {assert(++steps<3000);elapsed+=interp816_runOpcode(cpu);}
+                    assert(elapsed==fast);same(cpu,&native,before.pc,driver_budgets[b],n);++rng_spans_checked;
+                }
+                *cpu=before;cpu->nmiWanted=true;Interp816 suspended=*cpu;memcpy(ram,initial_ram,sizeof ram);
+                assert(!ScMathInstructionStep(cpu,ram));assert(!memcmp(cpu,&suspended,sizeof suspended));
+                assert(!memcmp(ram,initial_ram,sizeof ram));++rng_rejected;
+            }
+            *cpu=after;memcpy(ram,intermediate_ram,sizeof ram);
+        }
+    }
+    interp816_free(cpu);printf("PASS: %u original-ROM math comparisons, %u connected division spans, %u independent division edges, %u immutable division fallbacks; %u RNG spans, %u independent RNG edges, %u immutable RNG fallbacks; exact CPU/RAM/clocks\n",cases,spans,atomic,rejected,rng_spans_checked,rng_edges_checked,rng_rejected);
     return 0;
 }

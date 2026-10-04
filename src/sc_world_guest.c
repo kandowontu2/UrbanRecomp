@@ -1,26 +1,38 @@
 #include "sc_world_guest.h"
 #include "sc_transport.h"
+#include "sc_infrastructure.h"
 #include "sc_land.h"
+#include "sc_land_summary.h"
 #include "sc_power_traversal.h"
 #include "sc_zoning.h"
 #include "sc_smoothing.h"
 #include "sc_service.h"
 #include "sc_density.h"
 #include "sc_tile_lookup.h"
+#include "sc_postpass.h"
+#include "sc_sweep.h"
 #include "snes/interp816.h"
+#include "sc_program.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "sc_world_guest_layout.h"
 
 static ScStencilBackend stencil_backend;
-static uint64_t stencil_cells,service_cells,service_gpu_cells;
+static const uint8_t *tile_properties;
+void ScWorldGuestBindRom(const uint8_t *rom,size_t size) {
+    tile_properties=rom && size>=0x188eb?rom+0x184eb:NULL;
+}
+static uint64_t stencil_cells,service_cells,service_gpu_cells,crime_gpu_cells,land_gpu_cells;
 void ScWorldGuestSetStencilBackend(const ScStencilBackend *b) {
     if(b) stencil_backend=*b;else memset(&stencil_backend,0,sizeof stencil_backend);
-    stencil_cells=service_cells=service_gpu_cells=0;
+    stencil_cells=service_cells=service_gpu_cells=crime_gpu_cells=land_gpu_cells=0;
 }
 uint64_t ScWorldGuestStencilCells(void) {return stencil_cells;}
 uint64_t ScWorldGuestServiceCells(void) {return service_cells;}
 uint64_t ScWorldGuestServiceGpuCells(void) {return service_gpu_cells;}
+uint64_t ScWorldGuestCrimeGpuCells(void) {return crime_gpu_cells;}
+uint64_t ScWorldGuestLandGpuCells(void) {return land_gpu_cells;}
 static bool kernel_interpreter_profile;
 static uint64_t kernel_interpreter_ops[65536];
 void ScWorldGuestInterpreterProfile(bool enabled) {
@@ -67,51 +79,6 @@ static unsigned stencil_add(unsigned *sum,unsigned value,unsigned dp,bool carry_
 /* Native tile pollution classification. This is the game's category curve,
  * including the negative stadium contribution. No ROM instructions execute
  * here; cycle accounting keeps the compatibility scheduler interruptible. */
-static unsigned tile_pollution(unsigned tile,unsigned *cost) {
-    unsigned cycles=9,value;
-    if(tile==0x7f) {value=60;cycles+=3;}
-    else {
-        cycles+=2+3+3;
-        if(tile==0x364) {value=65536-40;cycles+=3;}
-        else {
-            cycles+=2+3;
-            if(tile<0x60) {
-                cycles+=2+3+3;
-                if(tile>=0x50) {value=25;cycles+=3;}
-                else {
-                    cycles+=2+3+3;
-                    if(tile>=0x40) {value=10;cycles+=3;}
-                    else {value=0;cycles+=2+3+3;}
-                }
-            } else {
-                cycles+=3+3+3;
-                if(tile<0x1fd) {value=0;cycles+=3;}
-                else {
-                    cycles+=2+3+3;
-                    if(tile<0x245) {value=50;cycles+=3;}
-                    else {
-                        cycles+=2+3+3;
-                        if(tile<0x267) {value=0;cycles+=3+3;}
-                        else {
-                            cycles+=2+3;
-                            if(tile<0x277) {value=60;cycles+=3;}
-                            else {
-                                cycles+=2+3;
-                                if(tile<0x287) {value=0;cycles+=3+3;}
-                                else {
-                                    cycles+=2+3;
-                                    if(tile<0x2ba) {value=60;cycles+=3;}
-                                    else {value=0;cycles+=2+3;}
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    *cost=cycles+2+6;return value;
-}
 unsigned ScWorldGuestFastStep(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t *rom,size_t size) {
     if (!w || !w->active || c->k!=3 || c->db!=3 || c->xf || c->d || c->e ||
         c->nmiWanted || (c->irqWanted && !c->i)) return 0;
@@ -143,7 +110,7 @@ unsigned ScWorldGuestFastStep(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t *
                 }
             }
             put(r,(uint16_t)(c->sp-1),tile);put(r,(uint16_t)(c->sp-3),0x9dfd);
-            unsigned helper=0,score=tile_pollution(tile,&helper);
+            unsigned helper=0,score=ScLandTilePollution(tile,&helper);
             c->y=(uint16_t)score;
             unsigned old=word(r,c->dp+14),sum=old+score;
             put(r,c->dp+14,sum);c->v=((old^sum)&(score^sum)&32768)!=0;
@@ -294,11 +261,25 @@ static bool huge_step(ScWorld *w,Interp816 *c,uint8_t *r) {
             if(y>=ScWorldHeight(w)/2) put(r,c->dp+10,(y&255)<ScWorldHeight(w)/2?y&255:0);
         }
         break;
-    case 0x8297:w->scan_x=w->scan_y=0;coord_set(w,r,0,0);break;
+    case 0x8297: {
+        static int reference=-1;
+        if(reference<0) {const char *e=getenv("SC_SCAN_ORDER_REFERENCE");reference=e && *e=='1';}
+        w->scan_spread=w->huge && !reference;
+        w->scan_x=w->scan_y=0;coord_set(w,r,0,0);break;
+    }
     case 0x82ae:coord_set(w,r,w->scan_x,w->scan_y);break;
     case 0x9af7:coord_set(w,r,word(r,c->dp+0x10),word(r,c->dp+0x12));break;
     case 0x9b5c: {
-        unsigned x=word(r,c->dp+0x10)+1,y=word(r,c->dp+0x12);
+        unsigned x=word(r,c->dp+0x10),y=word(r,c->dp+0x12);
+        /* The native owner INC only updates the low count word. Complete its
+         * carry at this unique iterator boundary, which immediately redirects
+         * to the next cell. Empty cells must not repeatedly carry a zero count.
+         * Keeping this here gives connected C and compatibility execution the
+         * same rule, including a save taken between the INC and iterator. */
+        if(w->giant && tile_properties && !word(r,c->dp+8) &&
+           ScWorldContains(w,x,y) && (tile_properties[ScWorldCell(w,x,y)&1023]&1))
+            put(r,c->dp+10,word(r,c->dp+10)+1);
+        ++x;
         if(x==ScWorldWidth(w)) {x=0;++y;}
         put(r,c->dp+0x10,x);put(r,c->dp+0x12,y);
         coord_set(w,r,x,y);
@@ -365,8 +346,8 @@ static bool huge_step(ScWorld *w,Interp816 *c,uint8_t *r) {
     case 0xb37e:c->n=lift(c->y,w->coord[2][1],256)<0;c->pc+=2;return true;
     case 0xb39a:c->n=lift(c->x,w->coord[2][0],256)<0;c->pc+=2;return true;
     case 0x8343:
-        if(++w->scan_x<ScWorldWidth(w)) c->pc=0x82ac;
-        else {w->scan_x=0;if(++w->scan_y<ScWorldHeight(w)) c->pc=0x82ac;else c->pc=0x835d;}
+        c->pc=ScWorldAdvanceScan(w)?0x82ac:0x835d;
+        if(w->scan_spread && c->pc==0x82ac)put(r,c->dp,2*(w->scan_y*ScWorldWidth(w)+w->scan_x));
         coord_set(w,r,w->scan_x,w->scan_y);return true;
     case 0x8ff4: {
         int x=lift(r[0xb85],w->coord[2][0],256),y=lift(r[0xb86],w->coord[2][1],256);
@@ -395,6 +376,11 @@ static bool huge_step(ScWorld *w,Interp816 *c,uint8_t *r) {
     return false;
 }
 void ScWorldGuestStep(ScWorld *w,Interp816 *c,uint8_t *r) {
+    if(w && w->active && c->k==3 && c->pc==0x9c39 && !c->nmiWanted && !(c->irqWanted && !c->i) && stencil_backend.land_begin)
+        stencil_backend.land_begin(stencil_backend.context,w);
+    if(w && w->active && c->k==3 && c->pc==0x9eb0 && !c->nmiWanted && !(c->irqWanted && !c->i) &&
+       !word(r,c->dp+8) && !word(r,c->dp+10) && stencil_backend.crime_begin)
+        stencil_backend.crime_begin(stencil_backend.context,w,word(r,0xc71));
     if(w && w->active && c->k==3 && !c->nmiWanted && !(c->irqWanted && !c->i) &&
        (c->pc==0xa02f || c->pc==0xa0b5 || c->pc==0xa14d || c->pc==0xa1cc) && stencil_backend.begin)
         stencil_backend.begin(stencil_backend.context,w,c->pc==0xa02f?13:c->pc==0xa0b5?14:c->pc==0xa14d?10:11);
@@ -663,8 +649,7 @@ static unsigned big_dimension(uint32_t pc) {
     default: return 0;
     }
 }
-static unsigned dimension(const ScWorld *w,uint32_t pc) {
-    unsigned v=big_dimension(pc);
+static unsigned scale_dimension(const ScWorld *w,unsigned v) {
     if(!w->huge) return v;
     unsigned scale=ScWorldScale(w);
     switch(v) {
@@ -677,6 +662,7 @@ static unsigned dimension(const ScWorld *w,uint32_t pc) {
     default:return v;
     }
 }
+static unsigned dimension(const ScWorld *w,uint32_t pc) {return scale_dimension(w,big_dimension(pc));}
 static bool map_base(unsigned base) {
     switch (base) {
     case 0x001a: case 0x010c: case 0x010e: case 0x01fc: case 0x01fe:
@@ -772,6 +758,239 @@ void ScWorldGuestBegin(ScWorldGuest *g,ScWorld *w,const Interp816 *c,
     } else {
         unsigned field; int displacement;
         if (!ScWorldFieldResolve((uint16_t)base,&field,&displacement)) return;
+        if (c->k==2 && field==5) {
+            /* An overview pixel represents two cells along each axis. Packed
+             * power bytes need bit resampling, rather than a wider byte stride. */
+            for (unsigned i=0;i<g->bytes;++i) {
+                unsigned scale=ScWorldWidth(w)/120;
+                unsigned original=index+i,y=original/15*scale,x=original%15*8*scale;
+                unsigned bits=0;
+                if (y<ScWorldHeight(w)) for (unsigned bit=0;bit<8;++bit) {
+                    unsigned cell=y*ScWorldWidth(w)+x+bit*scale;
+                    if (w->fields[5][cell/8]&(128>>(cell&7))) bits|=128>>bit;
+                }
+                g->immediate[i]=(uint8_t)bits;
+            }
+            g->mapped=true; g->data=g->immediate; return;
+        }
+        const ScWorldField *layout=&ScWorldFields[field];
+        if(w->huge && (displacement==(int)(layout->width*layout->element_bytes) || displacement==-(int)(layout->width*layout->element_bytes))) displacement*=ScWorldScale(w);
+        int logical=(int)index+displacement;
+        if(w->giant && c->k==3 && field<17) {
+            unsigned anchor;
+            if(field==5) anchor=((unsigned)w->coord[2][1]*ScWorldWidth(w)+(unsigned)w->coord[2][0])/8;
+            else anchor=w->field_anchor[field<5 || field==13 || field==14?0:field==6 || field==15?1:2]*layout->element_bytes;
+            if((pc>=0x0388fa && pc<=0x038919) || (pc>=0x03b676 && pc<=0x03b692) || (pc>=0x039b7a && pc<=0x039b88)) anchor=w->field_scan;
+            /* Linear word scans use an unsigned index even before 64 KiB.
+             * A signed displacement from an unrelated spatial anchor loses
+             * the upper half of the 960x800 quarter-grid clear. */
+            if((pc>=0x038287 && pc<=0x038291) ||
+               (pc>=0x038924 && pc<=0x038946) || (pc>=0x039c22 && pc<=0x039c28))
+                anchor=w->colossal?w->field_scan:index;
+            if(w->colossal && (
+                (pc>=0x03a1bb && pc<=0x03a1c5) ||
+                (pc>=0x03a23a && pc<=0x03a244))) anchor=w->field_scan;
+            logical=(int)anchor+(int16_t)(index-(uint16_t)anchor)+displacement;
+        }
+        if (c->k==2) {
+            const ScWorldField *f=&ScWorldFields[field];
+            unsigned cell=index/f->element_bytes;
+            unsigned scale=ScWorldWidth(w)/120;
+            unsigned y=cell/f->stock_width*scale,x=cell%f->stock_width*scale;
+            if (y>=ScWorldFieldHeight(w,field)) y=ScWorldFieldHeight(w,field)-1;
+            logical=(y*ScWorldFieldWidth(w,field)+x)*f->element_bytes+displacement;
+        }
+        g->mapped=true;
+        if (logical>=0 && (unsigned)logical+g->bytes<=ScWorldFieldSizeWorld(w,field))
+            g->data=w->fields[field]+logical;
+    }
+}
+/* Ownership and operand decoding are preparation, not guest instructions.
+ * Resolve them once while retaining a guard against every live four-byte ROM
+ * edit. Width, bank, indexes, anchors and actual field binding stay live. */
+static bool preparation_reference(void) {
+    static int reference=-1;
+    if(reference<0) {const char *e=getenv("SC_WORLD_PREPARATION_REFERENCE");reference=e && *e=='1';}
+    return reference;
+}
+static bool preparation_site(const uint8_t *bits,unsigned pc) {
+    return pc>=0x8000 && (bits[(pc-0x8000)>>3]&(1u<<(pc&7)))!=0;
+}
+void ScWorldGuestStepPrepared(ScWorld *w,Interp816 *c,uint8_t *r) {
+    if(preparation_reference()) {ScWorldGuestStep(w,c,r);return;}
+    if(!w->active || c->k>=4 || !preparation_site(sc_world_step_sites,c->pc)) return;
+    /* Native simulation families repeatedly enter these coordinate helpers.
+     * Execute their C operation directly, avoiding unrelated geometry and
+     * bank dispatch. The original Step remains the independent oracle. */
+    if(c->k==3 && (c->pc==0x849e || c->pc==0x84c4)) {
+        int x=c->a&255,y=c->a>>8;
+        if(w->huge) {x=lift(x,w->coord[2][0],256);y=lift(y,w->coord[2][1],256);}
+        unsigned offset=2*(y*ScWorldWidth(w)+x);
+        bool valid=ScWorldContains(w,x,y);
+        w->map_anchor=valid?offset:UINT32_MAX;
+        put(r,0xb3f,x*2);put(r,0xb3d,y*32);c->x=(uint16_t)offset;c->mf=false;
+        if(c->pc==0x849e) {c->a=valid?ScWorldCell(w,x,y):0;c->pc=0x84c3;}
+        else {if(valid) ScWorldPutCell(w,x,y,c->y);c->a=c->y;c->pc=0x84ea;}
+        nz(c,c->a,false);c->c=offset>65535;return;
+    }
+    if(c->k==3 && (c->pc==0xa29a || c->pc==0xa2b9 || c->pc==0xa2d7)) {
+        unsigned div=c->pc==0xa29a?2:c->pc==0xa2b9?4:8;
+        unsigned x=c->a&255,y=c->a>>8;
+        if(w->huge) {x=lift(x,w->coord[2][0]/(int)div,256/div);y=lift(y,w->coord[2][1]/(int)div,256/div);}
+        unsigned offset=y*(ScWorldWidth(w)/div)+x;
+        w->field_anchor[div==2?0:div==4?1:2]=offset;
+        put(r,0xb3f,x);put(r,0xb3d,y);c->a=c->x=(uint16_t)offset;c->mf=true;
+        nz(c,offset,false);c->c=false;
+        c->pc=c->pc==0xa29a?0xa2b8:c->pc==0xa2b9?0xa2d6:0xa2f4;return;
+    }
+    ScWorldGuestStep(w,c,r);
+}
+void ScWorldGuestVehiclesPrepared(ScWorld *w,Interp816 *c,const uint8_t *r,uint8_t my) {
+    if(preparation_reference() || (w->active && c->k==0 && preparation_site(sc_world_vehicle_sites,c->pc)))
+        ScWorldGuestVehicles(w,c,r,my);
+}
+typedef struct {
+    uint32_t tag,signature;
+    uint16_t base,dimension;
+    int16_t displacement;
+    uint8_t opcode,bank,field,footprint;
+} ScWorldAccessPlan;
+static ScWorldAccessPlan access_plans[4096];
+static const uint8_t *access_rom;
+static size_t access_size;
+static bool access_footprint(uint32_t pc) {
+    return pc==0x0396b4 || pc==0x03970e || pc==0x03a8d3 ||
+        pc==0x03a8fd || pc==0x03a918 || pc==0x03aebb || pc==0x03aee3 || pc==0x03af0b;
+}
+static const ScWorldAccessPlan *access_plan(const uint8_t *rom,size_t size,size_t p) {
+    if(rom!=access_rom || size!=access_size) {
+        memset(access_plans,0,sizeof access_plans);access_rom=rom;access_size=size;
+    }
+    uint32_t signature;memcpy(&signature,rom+p,4);
+    ScWorldAccessPlan *plan=&access_plans[(p^(p>>12))&4095];
+    if(plan->tag==p+1 && plan->signature==signature) return plan;
+    memset(plan,0,sizeof *plan);plan->tag=p+1;plan->signature=signature;
+    plan->opcode=rom[p];plan->base=word(rom,p+1);plan->bank=rom[p+3];plan->field=254;
+    uint32_t pc=(p/32768)*65536+(p%32768)+0x8000;
+    unsigned op=plan->opcode;
+    if(op==0xa9 || op==0xc9 || op==0xe0 || op==0xc0) plan->dimension=big_dimension(pc);
+    plan->footprint=access_footprint(pc);
+    if(map_base(plan->base)) plan->field=255;
+    else {
+        unsigned field;int displacement;
+        if(ScWorldFieldResolve(plan->base,&field,&displacement)) {
+            plan->field=field;plan->displacement=displacement;
+        }
+    }
+    return plan;
+}
+void ScWorldGuestBeginPrepared(ScWorldGuest *g,ScWorld *w,const Interp816 *c,
+                       const uint8_t *rom,size_t size) {
+    if(preparation_reference() || c->k>=16) {ScWorldGuestBegin(g,w,c,rom,size);return;}
+    memset(g,0,sizeof *g);
+    if (!w->active || c->pc<0x8000) return;
+    /* Native city initialization clears a contiguous stock WRAM range.
+     * New host worlds are already zeroed; a loaded world must retain its
+     * restored spatial fields while the native scratch buffers reset. */
+    if(c->k==3 && c->pc==0xc877) return;
+    if (c->k==3 && c->pc>=0xcf80) return; /* original-size native save codecs */
+    size_t p=(size_t)(c->k&0x7f)*32768+c->pc-0x8000;
+    if (p+3>=size) return;
+    /* Most driver instructions cannot bind a world array. Classify the live
+     * opcode before cache lookup, retaining even an unmapped address exactly.
+     * Footprint table consumers and geometry immediates are bank-independent
+     * exceptions to ordinary data-bank admission. */
+    unsigned live_op=rom[p],form=live_op&31;
+    bool indexed_y=form==0x19,indexed_x=form==0x1d,long_address=(live_op&15)==15;
+    uint32_t live_pc=((uint32_t)c->k<<16)|c->pc;
+    if(!indexed_y && !indexed_x && !long_address) {
+        if(live_op==0xa9 || live_op==0xc9 || live_op==0xe0 || live_op==0xc0) {
+            if(!preparation_site(sc_world_step_sites,c->pc)) return;
+        } else if(live_op!=0xe9 || c->mf ||
+            (live_pc!=0x03a8c6 && live_pc!=0x03a8f0 && live_pc!=0x03a90b)) return;
+    }
+    if(long_address && rom[p+3]!=0x7f) {
+        g->address=((uint32_t)rom[p+3]<<16)+word(rom,p+1)+((live_op&16)?c->x:0);return;
+    }
+    if((indexed_x || indexed_y) && c->db!=0x7f &&
+       !(indexed_y && (live_op==0x79 || live_op==0xb9) && !c->mf && access_footprint(live_pc))) {
+        unsigned index=indexed_x?c->x:c->y;
+        g->address=((uint32_t)c->db<<16)|((word(rom,p+1)+index)&65535);return;
+    }
+    const ScWorldAccessPlan *plan=access_plan(rom,size,p);
+    unsigned op=plan->opcode,base=plan->base,index=0,bank=c->db;
+    uint32_t pc=((uint32_t)c->k<<16)|c->pc;
+    unsigned dim=plan->dimension;
+    if(dim && w->huge) dim=scale_dimension(w,dim);
+    if(op==0xe9 && !c->mf) {
+        if(pc==0x03a8c6) dim=4*ScWorldWidth(w)+4;
+        if(pc==0x03a8f0 || pc==0x03a90b) dim=2*ScWorldWidth(w)+2;
+    }
+    /* Native footprint tables encode row offsets with the stock 240-byte
+     * pitch. Translate only their verified consumers, before ADC/LDA; this
+     * preserves CPU flags and the repair table's -1 terminator. */
+    bool footprint=plan->footprint;
+    if(footprint && !c->mf && (op==0x79 || op==0xb9)) {
+        size_t at=(size_t)(c->db&0x7f)*32768+((base+c->y)&32767);
+        if(at+1<size) {
+            unsigned value=word(rom,(unsigned)at);
+            if(value!=65535) value=(value/240)*(2*ScWorldWidth(w))+value%240;
+            g->bytes=2;g->immediate[0]=(uint8_t)value;g->immediate[1]=(uint8_t)(value>>8);
+            g->data=g->immediate;g->mapped=true;
+            g->address=((uint32_t)c->db<<16)|((base+c->y)&65535);return;
+        }
+    }
+    if (dim) {
+        bool index_width=op==0xe0 || op==0xc0;
+        g->bytes=(index_width?c->xf:c->mf)?1:2;
+        g->immediate[0]=(uint8_t)dim; g->immediate[1]=(uint8_t)(dim>>8);
+        g->data=g->immediate; g->mapped=true; g->address=pc+1; return;
+    }
+    /* Byte-sized geometry operands are emulated before the opcode, not
+     * truncated to an 8-bit immediate. Most geometry is already 16-bit. */
+    bool indexed=false;
+    switch (op) {
+    case 0x1f: case 0x3f: case 0x5f: case 0x7f:
+    case 0x9f: case 0xbf: case 0xdf: case 0xff:
+        index=c->x; indexed=true; /* fall through */
+    case 0x0f: case 0x2f: case 0x4f: case 0x6f:
+    case 0x8f: case 0xaf: case 0xcf: case 0xef:
+        bank=plan->bank; g->address=((uint32_t)bank<<16)+base+index; break;
+    case 0x19: case 0x39: case 0x59: case 0x79:
+    case 0x99: case 0xb9: case 0xd9: case 0xf9:
+        index=c->y; indexed=true;
+        g->address=((uint32_t)bank<<16)|((base+index)&65535); break;
+    case 0x1d: case 0x3d: case 0x5d: case 0x7d:
+    case 0x9d: case 0xbd: case 0xdd: case 0xfd:
+        index=c->x; indexed=true;
+        g->address=((uint32_t)bank<<16)|((base+index)&65535); break;
+    default: return;
+    }
+    if (bank!=0x7f) return;
+    g->bytes=c->mf?1:2;
+    if (plan->field==255) {
+        if (c->k==3 && c->pc>=0xcf80) return; /* native map codecs, handled separately */
+        int offset=(int)base-0x200;
+        int row=offset>=0?(offset+120)/240:(offset-120)/240;
+        offset+=row*(2*(ScWorldWidth(w)-120)); /* double row pitch; retain the column displacement */
+        uint32_t anchor=c->k==3?w->map_anchor:c->k<3?w->bank_anchor[c->k]:UINT32_MAX;
+        int logical=(int)anchor;
+        if (indexed) logical+=(int16_t)(index-(uint16_t)anchor);
+        else logical=0;
+        logical+=offset;
+        if (c->k==2) {
+            unsigned cell=index/2;
+            logical=2*((cell/120)*(ScWorldWidth(w)/120)*ScWorldWidth(w)+(cell%120)*(ScWorldWidth(w)/120))+offset;
+            anchor=0;
+        }
+        g->mapped=true;
+        if (anchor!=UINT32_MAX && logical>=0 &&
+            (unsigned)logical+g->bytes<=(ScWorldCells(w)*2)) {
+            g->data=w->tiles+logical;g->tile_world=w;g->tile_offset=(unsigned)logical;
+        }
+    } else {
+        if(plan->field==254) return;
+        unsigned field=plan->field;int displacement=plan->displacement;
         if (c->k==2 && field==5) {
             /* An overview pixel represents two cells along each axis. Packed
              * power bytes need bit resampling, rather than a wider byte stride. */
@@ -1094,6 +1313,34 @@ static unsigned diffusion_cell(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_c
     c->pc=entry==0xa040?0xa04a:0xa0d0;
     return 24+2*((c->dp&255)!=0)+ScWorldGuestFastStep(w,c,r,NULL,0);
 }
+static unsigned crime_gpu_cell(ScWorld *w,Interp816 *c,uint8_t *r,
+                                unsigned max_cycles,const ScCrimeSample *packed) {
+    if(!packed || c->pc!=0x9eb0 || c->sp<0x1004 || c->sp>0x1fff ||
+       c->dp<0x20 || c->dp>0x1fc0 || (c->sp>=c->dp && c->sp-3<=c->dp+34)) return 0;
+    unsigned x=word(r,c->dp+8),y=word(r,c->dp+10),width=ScWorldWidth(w)/2;
+    if(x>=width || y>=ScWorldHeight(w)/2) return 0;
+    unsigned index=y*width+x,land=w->fields[0][index];
+    if(!land) return vacant_crime_cell(w,c,r,max_cycles);
+    unsigned coarse=(y/4)*(width/4)+x/4,coverage=word(w->fields[11],2*coarse);
+    ScCrimeSample sample;memcpy(&sample,packed+index,sizeof sample);
+    /* The pass is asynchronous. Validate the actual per-cell inputs even if
+     * an editor or another stage changes a source before publication. */
+    if(sample.source!=(land|((unsigned)w->fields[3][index]<<8)|(coverage<<16))) return 0;
+    unsigned dp=(c->dp&255)!=0,value=sample.value_scratch&255,old=word(r,c->dp+4),total=old+value;
+    unsigned cycles=(sample.clocks&65535)+dp*(sample.clocks>>16)+(total>65535?2+7+dp+3:3);
+    if(cycles>max_cycles) return 0;
+    if(w->huge) coord_set(w,r,x*2,y*2);
+    w->field_anchor[0]=index;w->field_anchor[2]=coarse;
+    put(r,0xb3f,x/4);put(r,0xb3d,y/4);
+    put(r,c->dp,word(r,c->dp)+1);put(r,c->dp+12,sample.value_scratch>>8);
+    put(r,c->sp-1,index);put(r,c->sp-3,0x9f0c);
+    w->fields[1][index]=(uint8_t)value;put(r,c->dp+4,total);
+    c->a=(uint16_t)total;c->x=(uint16_t)index;
+    c->v=((old^total)&(value^total)&32768)!=0;c->c=total>65535;
+    c->mf=false;nz(c,total,false);c->pc=0x9f47;c->cyclesUsed=3;
+    if(c->c) {unsigned high=word(r,c->dp+6)+1;put(r,c->dp+6,high);nz(c,high,false);}
+    ++crime_gpu_cells;return cycles;
+}
 static unsigned crime_cell(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycles) {
     if(c->pc!=0x9eb0 || max_cycles<400) return 0;
     unsigned x=word(r,c->dp+8),y=word(r,c->dp+10),width=ScWorldWidth(w)/2;
@@ -1197,7 +1444,44 @@ static unsigned land_value_finish(ScWorld *w,Interp816 *c,uint8_t *r,unsigned cy
     c->a=(uint16_t)sum;c->mf=false;nz(c,count,false);c->cyclesUsed=3;
     return cycles+7+dp+3;
 }
+static unsigned land_value_gpu_begin(ScWorld *w,Interp816 *c,uint8_t *r,unsigned budget) {
+    if(c->pc!=0x9cdf || !stencil_backend.land_data || c->dp<0x1000 || c->dp>0x1fc0 ||
+       c->sp<0x1006 || c->sp>0x1fff || (c->sp>=c->dp && c->sp-5<=c->dp+34)) return 0;
+    unsigned width=ScWorldWidth(w),x=word(r,c->dp+8),y=word(r,c->dp+10);
+    if(x>=width/2 || y>=ScWorldHeight(w)/2) return 0;
+    const ScLandSummary *data=stencil_backend.land_data(stencil_backend.context,w);if(!data) return 0;
+    ScLandSummary p;memcpy(&p,data+y*(width/2)+x,sizeof p);
+    unsigned offset=2*y*width+2*x;
+    unsigned top=word(w->tiles,2*offset)|(word(w->tiles,2*(offset+1))<<16);
+    unsigned bottom=word(w->tiles,2*(offset+width))|(word(w->tiles,2*(offset+width+1))<<16);
+    if(p.tiles[0]!=top || p.tiles[1]!=bottom) return 0;
+    unsigned dp=(c->dp&255)!=0,density=p.stats&65535;
+    unsigned cycles=3+3*(5+dp)+3+(3+dp)+2+3+(3+dp)+2+6+6;
+    cycles+=63+(p.clocks&65535)+dp*(p.clocks>>16);
+    cycles+=(4+dp)+3+(density<255?3:5)+(4+dp)+3;
+    cycles+=(3+dp)+2+3+(3+dp)+2+6+6+5+2+(3+dp)+5+3;
+    if(cycles>budget) return 0;
+    if(w->huge) coord_set(w,r,x*2,y*2);
+    if(density>255) density=255;
+    put(r,c->dp+34,density);put(r,c->dp+14,p.stats>>16);put(r,c->dp+16,(p.tail>>26)&7);
+    if(p.tail&(1u<<29)) {put(r,c->sp-3,(p.tail>>16)&1023);put(r,c->sp-5,0x9dfd);c->y=(uint16_t)p.tail;}
+    unsigned coarse=(y/2)*(width/4)+x/2,old=w->fields[15][coarse],sum=old+density;
+    w->map_anchor=2*offset;w->field_anchor[1]=coarse;
+    put(r,0xb3f,x/2);put(r,0xb3d,y/2);put(r,c->sp-1,0x9d22);
+    w->fields[15][coarse]=(uint8_t)sum;c->v=((old^sum)&(density^sum)&128)!=0;
+    c->a=(coarse&0xff00)|(sum&255);c->x=(uint16_t)coarse;c->c=sum>255;nz(c,sum,true);c->mf=false;
+    c->pc=0x9d30;c->cyclesUsed=3;++land_gpu_cells;return cycles;
+}
+static unsigned land_value_finish_cycles(const ScWorld *w,const Interp816 *c,const uint8_t *r);
 static unsigned land_value_cell(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycles) {
+    unsigned gpu=land_value_gpu_begin(w,c,r,max_cycles);
+    if(gpu) {
+        /* Keep the complete-cell caller fused when the original finish also
+         * fits. A short beam budget still resumes at the exact mid-cell PC. */
+        if(land_value_finish_cycles(w,c,r)<=max_cycles-gpu)
+            return land_value_finish(w,c,r,gpu);
+        return gpu;
+    }
     if(c->pc!=0x9cdf || max_cycles<1500) return 0;
     unsigned x=word(r,c->dp+8),y=word(r,c->dp+10),width=ScWorldWidth(w);
     if(x>=width/2 || y>=ScWorldHeight(w)/2) return 0;
@@ -1272,34 +1556,17 @@ static unsigned land_value_resume(ScWorld *w,Interp816 *c,uint8_t *r,unsigned ma
 /* Price the tile-statistics helper before committing a bounded land cell.
  * This lets a complete cell run in C when its actual branches fit the beam
  * budget, rather than rejecting every budget below the worst-case bound. */
-static unsigned tile_statistics_cycles(unsigned tile,unsigned dp) {
-    unsigned cycles=tile?27+2*dp:9;
-    if(tile<0x28) return cycles;
-    cycles=14+3+(tile<0x2bf?3:2);
-    if(tile>=0x2bf) {
-        cycles+=3+(tile>=0x354?3:2);
-        if(tile<0x354) {
-            cycles+=3+(tile==0x307?3:2);
-            if(tile!=0x307) {
-                cycles+=3+(tile==0x310?3:2);
-                if(tile!=0x310) cycles+=16+dp;
-            }
-        }
-    }
-    unsigned helper=0;tile_pollution(tile,&helper);
-    return cycles+4+6+helper+2+4+dp+4+dp+5+3+(tile<0x30?3:2)+(tile>=0x30?7+dp:0);
-}
 unsigned ScWorldGuestLandStageStep(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycles) {
     if(!w || !w->active || !c || !r || c->k!=3 || c->db!=3 || c->e || c->d || c->xf ||
        c->waiting || c->stopped || c->nmiWanted || (c->irqWanted && !c->i) ||
        c->dp<0x20 || c->dp>0x1fc0 || c->sp<0x100 || c->sp>0x1ffd) return 0;
     if(c->pc==0x9dca) {
-        unsigned cost=tile_statistics_cycles(c->a&1023,(c->dp&255)!=0);
+        unsigned cost=ScLandTileCycles(c->a&1023,(c->dp&255)!=0);
         if(cost>max_cycles) return 0;
         return ScWorldGuestFastStep(w,c,r,NULL,0);
     }
     if(c->pc!=0x9e0c) return 0;
-    unsigned cost,tile=c->a,score=tile_pollution(tile,&cost);
+    unsigned cost,tile=c->a,score=ScLandTilePollution(tile,&cost);
     if(cost>max_cycles) return 0;
     /* REP/LDY/CMP branches only change widths, carry and N/Z. The final
      * TYA sets N/Z from the score; the last category comparison owns carry. */
@@ -1316,6 +1583,7 @@ static unsigned land_value_begin(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max
     if(reference<0) {const char *e=getenv("SC_LAND_BEGIN_REFERENCE");reference=e && *e=='1';}
     if(reference || c->pc!=0x9cdf || c->dp<0x1000 || c->dp>0x1fc0 ||
        c->sp<0x1004 || c->sp>0x1fff || (c->sp>=c->dp && c->sp-3<=c->dp+34)) return 0;
+    unsigned gpu=land_value_gpu_begin(w,c,r,max_cycles);if(gpu) return gpu;
     unsigned width=ScWorldWidth(w),x=word(r,c->dp+8),y=word(r,c->dp+10),dp=(c->dp&255)!=0;
     if(x>=width/2 || y>=ScWorldHeight(w)/2) return 0;
     unsigned offset=2*y*width+2*x,cycles=3+3*(5+dp)+3+(3+dp)+2+3+(3+dp)+2+6+6;
@@ -1325,7 +1593,7 @@ static unsigned land_value_begin(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max
         unsigned tile=word(w->tiles,2*cells[n])&1023;
         density=tile && tile<0x28?density+15:
             tile>=0x2bf && tile<0x354 && tile!=0x307 && tile!=0x310?255:density;
-        cycles+=12+tile_statistics_cycles(tile,dp)+(n?5:0);
+        cycles+=12+ScLandTileCycles(tile,dp)+(n?5:0);
     }
     cycles+=(4+dp)+3+(density<255?3:5)+(4+dp)+3;
     cycles+=(3+dp)+2+3+(3+dp)+2+6+6+5+2+(3+dp)+5+3;
@@ -1497,6 +1765,15 @@ static unsigned service_cell(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cyc
     c->mf=true;nz(c,value,false);c->pc=entry==0xa164?0xa1a6:0xa225;c->cyclesUsed=3;
     return cycles+2+2+6+2+6+3;
 }
+/* An interrupt cannot observe scratch registers inside a bounded field span.
+ * Defer their publication only for the normal disjoint stack/direct-page
+ * layout. Unusual aliasing layouts retain ordered per-cell shadow writes. */
+static bool field_shadow_deferred(const Interp816 *c,unsigned last_scratch) {
+    static int reference=-1;
+    if(reference<0) {const char *e=getenv("SC_FIELD_SHADOW_REFERENCE");reference=e && *e=='1';}
+    return !reference && c->dp>=0x1000 && c->dp<=0x1fc0 && c->sp>=0x1008 &&
+        c->sp<=0x1ffd && !(c->sp>=c->dp && c->sp-2<=c->dp+last_scratch);
+}
 /* Whole independent word field, fused with exact byte-coordinate control.
  * GPU data is ready asynchronously; the same packed integer C calculation
  * continues until then. Publication never crosses the caller's deadline. */
@@ -1510,29 +1787,52 @@ static unsigned service_field_span(ScWorld *w,Interp816 *c,uint8_t *r,unsigned b
     unsigned x=word(r,c->dp),y=word(r,c->dp+2),dp=(c->dp&255)!=0,cycles=0;
     if(x>=width || y>=height) return 0;
     const uint32_t *packed=stencil_backend.data?stencil_backend.data(stencil_backend.context,w,source):NULL;
+    bool deferred=field_shadow_deferred(c,3),row=false;
+    unsigned last_x=x,last_y=y,last_p=0,cells=0;
     while(y<height) {
         unsigned index=y*width+x,p=packed?packed[index]:ScServicePack(w->fields[source],width,height,x,y);
         unsigned cell=((p>>16)&511)+4*dp,advance=13+2*dp;
         if(x+1==width) advance+=y+1<height?15+3*dp:11+2*dp;
         if(cell+advance>budget-cycles) break;
-        if(w->huge) coord_set(w,r,x*8,y*8);
-        w->field_anchor[2]=index;put(r,0xb3f,x);put(r,0xb3d,y);put(r,c->sp-1,entry==0xa164?0xa16b:0xa1ea);
-        unsigned value=p&65535;put(w->fields[16],2*index,value);c->x=(uint16_t)(2*index);c->y=(uint16_t)y;
-        c->v=(p>>31)!=0;c->mf=true;
-        ++x;r[c->dp]=(uint8_t)x;c->a=(uint16_t)((value&0xff00)|(x&255));
-        c->c=x>=width;nz(c,x-width,true);c->pc=(uint16_t)entry;c->cyclesUsed=3;
-        if(x==width) {
-            ++y;r[c->dp+2]=(uint8_t)y;c->a=(uint16_t)((value&0xff00)|(y&255));c->c=y>=height;nz(c,y-height,true);
-            if(y<height) {x=0;r[c->dp]=0;c->cyclesUsed=(uint8_t)(3+dp);}
-            else {c->pc=entry==0xa164?0xa1b6:0xa235;c->cyclesUsed=2;}
+        unsigned value=p&65535;put(w->fields[16],2*index,value);
+        if(deferred) {
+            last_x=x;last_y=y;last_p=p;row=++x==width;
+            if(row) {++y;if(y<height)x=0;}
+        } else {
+            if(w->huge) coord_set(w,r,x*8,y*8);
+            w->field_anchor[2]=index;put(r,0xb3f,x);put(r,0xb3d,y);put(r,c->sp-1,entry==0xa164?0xa16b:0xa1ea);
+            c->x=(uint16_t)(2*index);c->y=(uint16_t)y;
+            c->v=(p>>31)!=0;c->mf=true;
+            ++x;r[c->dp]=(uint8_t)x;c->a=(uint16_t)((value&0xff00)|(x&255));
+            c->c=x>=width;nz(c,x-width,true);c->pc=(uint16_t)entry;c->cyclesUsed=3;
+            if(x==width) {
+                ++y;r[c->dp+2]=(uint8_t)y;c->a=(uint16_t)((value&0xff00)|(y&255));c->c=y>=height;nz(c,y-height,true);
+                if(y<height) {x=0;r[c->dp]=0;c->cyclesUsed=(uint8_t)(3+dp);}
+                else {c->pc=entry==0xa164?0xa1b6:0xa235;c->cyclesUsed=2;}
+            }
         }
-        cycles+=cell+advance;++service_cells;if(packed) ++service_gpu_cells;
+        cycles+=cell+advance;++cells;
     }
+    if(deferred && cells) {
+        unsigned index=last_y*width+last_x,value=last_p&65535;
+        if(w->huge)coord_set(w,r,last_x*8,last_y*8);
+        w->field_anchor[2]=index;put(r,0xb3f,last_x);put(r,0xb3d,last_y);
+        put(r,c->sp-1,entry==0xa164?0xa16b:0xa1ea);
+        c->x=(uint16_t)(2*index);c->y=(uint16_t)last_y;c->v=(last_p>>31)!=0;c->mf=true;
+        r[c->dp]=(uint8_t)x;r[c->dp+2]=(uint8_t)y;
+        c->a=(uint16_t)((value&0xff00)|((row?y:x)&255));
+        c->c=row?y>=height:x>=width;nz(c,row?y-height:x-width,true);
+        c->pc=y==height?(entry==0xa164?0xa1b6:0xa235):(uint16_t)entry;
+        c->cyclesUsed=y==height?2:row?(uint8_t)(3+dp):3;
+    }
+    service_cells+=cells;if(packed)service_gpu_cells+=cells;
     return cycles;
 }
 static unsigned terrain_quality_cell(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycles) {
     if(c->pc!=0xa25c || !c->mf || max_cycles<140) return 0;
-    unsigned x=word(r,c->dp),y=word(r,c->dp+2),width=ScWorldWidth(w);
+    /* This grid is at most 240x200 even on the largest map. Its native
+     * coordinates are bytes; adjacent scratch bytes are never initialized. */
+    unsigned x=r[c->dp],y=r[c->dp+2],width=ScWorldWidth(w);
     if(x>=width/8 || y>=ScWorldHeight(w)/8) return 0;
     unsigned index=y*(width/8)+x,dp=(c->dp&255)!=0;
     if(w->huge) coord_set(w,r,x*8,y*8);
@@ -1548,6 +1848,58 @@ static unsigned terrain_quality_cell(ScWorld *w,Interp816 *c,uint8_t *r,unsigned
     c->mf=true;nz(c,value,false);c->pc=0xa288;c->cyclesUsed=3;
     return (3+dp)+4+3+(3+dp)+4+6+6+(3+dp)+(3+dp)+
         (3+dp)+3+(3+dp)+6+6+3+2+2+2*(7+dp)+3+2+(4+dp)+6+3;
+}
+/* Retire terrain quality and its byte-coordinate iterator in one C loop.
+ * The centering constants are stable for the pass; keep ordered publication,
+ * scratch/stack shadows and exact loop clocks at each beam deadline. */
+static unsigned terrain_quality_span(ScWorld *w,Interp816 *c,uint8_t *r,unsigned budget) {
+    static int reference=-1;
+    if(reference<0) {const char *e=getenv("SC_TERRAIN_QUALITY_SPAN_REFERENCE");reference=e && *e=='1';}
+    /* Keep scratch and stack disjoint from each other and the low-RAM globals
+     * so intermediate shadows cannot feed a subsequent cell's inputs. */
+    if(reference || c->pc!=0xa25c || !c->mf || c->dp<0x1000 || c->dp>0x1fc0 ||
+       c->sp<0x1008 || c->sp>0x1ffd || (c->sp>=c->dp && c->sp-2<=c->dp+7)) return 0;
+    unsigned dp=(c->dp&255)!=0;
+    unsigned cell=(3+dp)+4+3+(3+dp)+4+6+6+(3+dp)+(3+dp)+
+        (3+dp)+3+(3+dp)+6+6+3+2+2+2*(7+dp)+3+2+(4+dp)+6+3;
+    /* Short spans retain the cell-only path, including interrupt-edge resumes. */
+    if(budget<2*(cell+13+2*dp)) return 0;
+    unsigned width=ScWorldWidth(w),height=ScWorldHeight(w)/8,columns=width/8;
+    unsigned x=r[c->dp],y=r[c->dp+2],cycles=0;
+    if(x>=columns || y>=height) return 0;
+    int cx=w->huge?(w->center_valid?w->center_x/2:width/4):r[0xbab];
+    int cy=w->huge?(w->center_valid?w->center_y/2:ScWorldHeight(w)/4):r[0xbac];
+    unsigned scale=width/120,shift=0;
+    if(!scale || (scale&(scale-1))) return 0;
+    for(unsigned factor=scale;factor>1;factor>>=1)++shift;
+    unsigned last_x=x,last_y=y,last_offset=0,last_value=0;
+    bool row=false;
+    while(y<height) {
+        unsigned advance=13+2*dp;
+        if(x+1==columns) advance+=y+1<height?15+3*dp:11+2*dp;
+        if(cell+advance>budget-cycles) break;
+        unsigned dx=x*4>cx?x*4-cx:cx-x*4,dy=y*4>cy?y*4-cy:cy-y*4;
+        unsigned distance=(dx+dy)>>shift;if(distance>32) distance=32;
+        last_x=x;last_y=y;last_offset=distance*4;last_value=(64-last_offset)&65535;
+        put(w->fields[12],2*(y*columns+x),last_value);
+        row=++x==columns;
+        if(row) {++y;if(y<height)x=0;}
+        cycles+=cell+advance;
+    }
+    if(!cycles) return 0;
+    /* No interrupts, observers or dependent reads occur inside this bounded
+     * span. Publish only the final CPU/RAM shadows, retaining every field write. */
+    if(w->huge)coord_set(w,r,last_x*8,last_y*8);
+    put(r,c->dp+6,last_offset);put(r,0xb3f,last_x);put(r,0xb3d,last_y);
+    put(r,c->sp-1,0xa273);w->field_anchor[2]=last_y*columns+last_x;
+    c->x=(uint16_t)(2*w->field_anchor[2]);
+    c->v=((64^last_offset)&(64^last_value)&32768)!=0;
+    r[c->dp]=(uint8_t)x;r[c->dp+2]=(uint8_t)y;
+    c->a=(uint16_t)((last_value&0xff00)|(row?y:x));
+    c->c=row?y>=height:x>=columns;nz(c,(row?y-height:x-columns),true);
+    c->pc=y==height?0xa298:0xa25c;
+    c->cyclesUsed=y==height?2:row?(uint8_t)(3+dp):3;
+    return cycles;
 }
 /* Copy the completed diffusion field in bounded C spans. Each word retains
  * its original loop cost, so HDMA and interrupts still see the same boundary. */
@@ -1749,6 +2101,21 @@ static unsigned spatial_advance(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_
     c->pc=end;c->cyclesUsed=crime?3:2;
     return cycles+c->cyclesUsed;
 }
+static unsigned crime_field_span(ScWorld *w,Interp816 *c,uint8_t *r,unsigned budget) {
+    if(c->pc!=0x9eb0 || !stencil_backend.crime_data) return 0;
+    const ScCrimeSample *packed=stencil_backend.crime_data(stencil_backend.context,w,word(r,0xc71));
+    if(!packed) return 0;
+    unsigned cycles=0;
+    while(c->pc==0x9eb0) {
+        unsigned cost=crime_gpu_cell(w,c,r,budget-cycles,packed);
+        if(!cost) break;
+        cycles+=cost;
+        cost=spatial_advance(w,c,r,budget-cycles);
+        if(!cost) break;
+        cycles+=cost;
+    }
+    return cycles;
+}
 static unsigned land_value_call(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycles) {
     if(c->pc!=0x9c3b || max_cycles<32 || c->sp<0x1006 || c->sp>0x1fff ||
        c->dp<0x1000 || c->dp>0x1fc0 || (c->sp>=c->dp && c->sp-5<=c->dp+34)) return 0;
@@ -1756,7 +2123,8 @@ static unsigned land_value_call(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_
     if(word(r,c->dp+8)>=ScWorldWidth(w)/2 || word(r,c->dp+10)>=ScWorldHeight(w)/2) return 0;
     Interp816 next=*c;next.sp-=2;next.pc=0x9cdf;
     unsigned cost=max_cycles>=15?empty_terrain_cell(w,&next,r,max_cycles-15):0;
-    if(!cost && max_cycles>=1515) cost=land_value_cell(w,&next,r,max_cycles-15);
+    if(!cost && (max_cycles>=1515 || stencil_backend.land_data))
+        cost=land_value_cell(w,&next,r,max_cycles-15);
     if(!cost) cost=land_value_begin(w,&next,r,max_cycles-6);
     if(!cost) return 0;
     put(r,c->sp-1,0x9c3d);*c=next;
@@ -1814,6 +2182,88 @@ static unsigned zone_score(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycle
     c->x=(uint16_t)index;c->a=c->y=(uint16_t)(score-3000);c->mf=false;
     c->c=score>=3000;c->v=false;nz(c,c->a,false);c->pc=0x9a0d;c->cyclesUsed=2;
     return cycles+2+3+2+2;
+}
+/* Traffic selects ordinary road artwork without entering the CPU dispatcher
+ * for each flag/load/branch. Keep the mapped field and tile byte write order,
+ * scratch/stack shadows and original call cost. Short deadlines use C edges. */
+typedef struct InfrastructureRoad {
+    unsigned x,y,field,traffic,art,cost;
+    int64_t tile;
+} InfrastructureRoad;
+static bool infrastructure_road_plan(const ScWorld *w,const Interp816 *c,const uint8_t *r,
+                                    unsigned budget,InfrastructureRoad *p) {
+    /* These ranges exclude aliases with the native scratch words and stack.
+     * Unusual direct-page frames remain supported by the instruction path. */
+    if(c->dp<0x1000 || c->dp>0x1efe || c->sp<0x1f02 || c->sp>0x1ffd) return false;
+    unsigned x=r[0xb85]>>1,y=r[0xb86]>>1;
+    if(w->huge) {x=lift(x,w->coord[2][0]/2,128);y=lift(y,w->coord[2][1]/2,128);}
+    unsigned field=y*(ScWorldWidth(w)/2)+x;
+    int64_t tile=(int64_t)w->map_anchor+(int16_t)(word(r,c->dp)-(uint16_t)w->map_anchor)-2;
+    if(field>=ScWorldFieldSizeWorld(w,4) || w->map_anchor==UINT32_MAX ||
+       tile<0 || tile+2>ScWorldCells(w)*2) return false;
+    unsigned traffic=w->fields[4][field],art=traffic<100?0x30:traffic<200?0x40:0x50;
+    unsigned cost=30+3+5+2+(traffic<100?3:2+3+2+(traffic<200?3:2+3))+
+                  5+3+4+((c->dp&255)!=0)+5+3+5+6+6;
+    if(cost>budget) return false;
+    *p=(InfrastructureRoad){x,y,field,traffic,art,cost,tile};return true;
+}
+static void infrastructure_road_publish(ScWorld *w,Interp816 *c,uint8_t *r,const InfrastructureRoad *p) {
+    w->field_anchor[0]=p->field;put(r,0xb3f,p->x);put(r,0xb3d,p->y);
+    put(r,c->sp-1,0xa510);put(r,0xb41,p->art);
+    c->x=(uint16_t)word(r,c->dp);c->y=(uint16_t)p->art;
+    c->a=(uint16_t)((word(r,0xb87)&0xff0f)|p->art);c->mf=false;
+    c->c=p->traffic>=200;nz(c,c->a,false);
+    for(unsigned byte=0;byte<2;++byte) {
+        uint8_t value=(uint8_t)(c->a>>(byte*8));
+        if(w->tiles[p->tile+byte]!=value) {
+            w->tiles[p->tile+byte]=value;ScWorldTilesTouch(w,(unsigned)p->tile+byte,1);
+        }
+    }
+    c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;c->cyclesUsed=6;
+}
+static unsigned infrastructure_road(ScWorld *w,Interp816 *c,uint8_t *r,unsigned budget) {
+    InfrastructureRoad p;if(!infrastructure_road_plan(w,c,r,budget,&p))return 0;
+    infrastructure_road_publish(w,c,r,&p);return p.cost;
+}
+/* Fully funded ordinary roads skip both the decay RNG and bridge handler.
+ * Price their complete upkeep/artwork call before the first counter write. */
+static unsigned infrastructure_funded_road(ScWorld *w,Interp816 *c,uint8_t *r,unsigned budget) {
+    unsigned tile=word(r,0xb89),prefix=3+8+5+3+2+5+3+3+5+3+3+3+5+3+2;
+    if(tile>=0x80 || (tile&15)<2 || word(r,0xbc5)<30 || budget<prefix)return 0;
+    InfrastructureRoad p;if(!infrastructure_road_plan(w,c,r,budget-prefix,&p))return 0;
+    put(r,0xe15,word(r,0xe15)+1);c->xf=false;
+    infrastructure_road_publish(w,c,r,&p);return prefix+p.cost;
+}
+/* Bridge/road distance probe. Keep the original byte arithmetic, stack
+ * shadows and final PLD flags, but calculate the complete call in C when
+ * it fits before the next beam event. Short deadlines retain native edges. */
+unsigned ScWorldGuestInfrastructureStep(ScWorld *w,Interp816 *c,uint8_t *r,unsigned budget) {
+    static int reference=-1;
+    if(reference<0) {const char *e=getenv("SC_INFRASTRUCTURE_REFERENCE");reference=e && *e=='1';}
+    if(reference || !w || !w->active || !c || !r || c->k!=3 || c->db!=3 ||
+       (c->pc!=0xa70c && c->pc!=0xa503 && c->pc!=0xa493) || c->e || c->d || c->xf || c->waiting || c->stopped ||
+       c->nmiWanted || (c->irqWanted && !c->i) || c->dp<0x102 || c->dp>0x1ffe ||
+       c->sp<0x104 || c->sp>0x1ffd ||
+       (c->sp+2>=c->dp-2 && c->sp-3<=c->dp))return 0;
+    if(c->pc==0xa503)return infrastructure_road(w,c,r,budget);
+    if(c->pc==0xa493)return infrastructure_funded_road(w,c,r,budget);
+    unsigned dx=(uint8_t)(r[0xa65]-r[0xb85]),dy=(uint8_t)(r[0xa63]-r[0xb86]);
+    bool xborrow=r[0xa65]<r[0xb85],yborrow=r[0xa63]<r[0xb86];
+    if(xborrow)dx=(uint8_t)(-dx);if(yborrow)dy=(uint8_t)(-dy);
+    unsigned unaligned=((c->dp-2)&255)!=0;
+    /* REP/PHD/PHA/local-frame/PLA/SEP; two absolute differences; scratch
+     * store and addition; REP/AND/PLD/RTS. Taken BCS costs one extra cycle. */
+    unsigned cost=28+10+(xborrow?6:3)+3+unaligned+10+(yborrow?6:3)+
+                  2+3+unaligned+3+3+5+6;
+    if(cost>budget)return 0;
+    unsigned sp=c->sp,dp=c->dp;
+    put(r,sp-1,dp);put(r,sp-3,c->a);r[dp-2]=(uint8_t)dx;
+    unsigned sum=dx+dy;
+    c->a=(uint16_t)(sum&255);c->mf=false;
+    c->c=sum>255;c->v=(~(dx^dy)&(dy^sum)&128)!=0;
+    c->dp=(uint16_t)dp;c->n=(dp&32768)!=0;c->z=dp==0;
+    c->pc=(uint16_t)(word(r,sp+1)+1);c->sp=(uint16_t)(sp+2);c->cyclesUsed=6;
+    return cost;
 }
 static unsigned zone_replacement_impl(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycles) {
     static int reference=-1;
@@ -2014,6 +2464,9 @@ static unsigned sweep_cell(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t *rom
         r[0xb85]=0;c->pc=0x82ac;c->cyclesUsed=4;return cycles+2+3+4;
     }
     c->pc=0x835d;c->cyclesUsed=3;return cycles+3;
+}
+unsigned ScWorldGuestSweepStageStep(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t *rom,unsigned max_cycles) {
+    return w && w->active?sweep_cell(w,c,r,rom,max_cycles):0;
 }
 unsigned ScWorldGuestHousingStep(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycles) {
     static int reference=-1;
@@ -2338,6 +2791,12 @@ static unsigned field_words(ScWorld *w,Interp816 *c,unsigned max_cycles) {
     if(x==end) c->pc=entry==0x9c22?0x9c2d:0x894b;
     return cycles;
 }
+unsigned ScWorldGuestFieldStageStep(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycles) {
+    if(!w || !w->active) return 0;
+    if(c->pc==0x8924) return field_words(w,c,max_cycles);
+    if(c->pc==0x88fa || c->pc==0x9b7a || c->pc==0xb676) return field_sweep(w,c,r,max_cycles);
+    return 0;
+}
 /* Common transport neighbour reads, including the original temporary byte
  * indexes and packed-coordinate seams. Boundary paths retain their existing
  * guest hooks. Restore PHP/PLP flags and stack shadows exactly. */
@@ -2382,6 +2841,8 @@ static unsigned diffusion_field_span(ScWorld *w,Interp816 *c,uint8_t *r,unsigned
     if(x>=width || y>=height) return 0;
     const uint32_t *packed=stencil_backend.data(stencil_backend.context,w,source);
     if(!packed) return 0;
+    bool deferred=field_shadow_deferred(c,6),row=false;
+    unsigned last_x=x,last_y=y,last_p=0,cells=0;
     while(y<height) {
         unsigned index=y*width+x,p=packed[index],sum=p&2047;
         unsigned cell=24+2*dp+((p>>11)&511)+dp*((p>>20)&31);
@@ -2390,23 +2851,41 @@ static unsigned diffusion_field_span(ScWorld *w,Interp816 *c,uint8_t *r,unsigned
         unsigned advance=20+2*dp;
         if(x+1==width) advance+=y+1<height?20+3*dp:15+2*dp;
         if(cell+advance>budget-cycles) break;
-        if(w->huge) coord_set(w,r,x*2,y*2);
-        w->field_anchor[0]=index;put(r,0xb3f,x);put(r,0xb3d,y);
-        put(r,c->sp-1,entry==0xa040?0xa049:0xa0cf);
-        put(r,c->dp+4,sum);c->x=(uint16_t)index;
         unsigned value=sum/4;w->fields[source==13?14:13][index]=(uint8_t)(value>250?250:value);
-        c->v=((p>>25)&1)!=0;c->y=(uint16_t)y;
-        /* The loop's INC is binary and preserves V. Its CMP/branches own
-         * final carry/N/Z, rather than the clipped stencil's flags. */
-        ++x;put(r,c->dp,x);c->a=(uint16_t)x;c->c=x>=width;nz(c,(uint16_t)(x-width),false);
-        c->mf=false;c->pc=(uint16_t)entry;c->cyclesUsed=3;
-        if(x==width) {
-            ++y;put(r,c->dp+2,y);c->a=(uint16_t)y;c->c=y>=height;nz(c,(uint16_t)(y-height),false);
-            if(y<height) {x=0;put(r,c->dp,0);c->cyclesUsed=(uint8_t)(4+dp);}
-            else {c->pc=entry==0xa040?0xa0b3:0xa139;c->cyclesUsed=2;}
+        if(deferred) {
+            last_x=x;last_y=y;last_p=p;row=++x==width;
+            if(row) {++y;if(y<height)x=0;}
+        } else {
+            if(w->huge) coord_set(w,r,x*2,y*2);
+            w->field_anchor[0]=index;put(r,0xb3f,x);put(r,0xb3d,y);
+            put(r,c->sp-1,entry==0xa040?0xa049:0xa0cf);
+            put(r,c->dp+4,sum);c->x=(uint16_t)index;
+
+            c->v=((p>>25)&1)!=0;c->y=(uint16_t)y;
+            /* The loop's INC is binary and preserves V. Its CMP/branches own
+             * final carry/N/Z, rather than the clipped stencil's flags. */
+            ++x;put(r,c->dp,x);c->a=(uint16_t)x;c->c=x>=width;nz(c,(uint16_t)(x-width),false);
+            c->mf=false;c->pc=(uint16_t)entry;c->cyclesUsed=3;
+            if(x==width) {
+                ++y;put(r,c->dp+2,y);c->a=(uint16_t)y;c->c=y>=height;nz(c,(uint16_t)(y-height),false);
+                if(y<height) {x=0;put(r,c->dp,0);c->cyclesUsed=(uint8_t)(4+dp);}
+                else {c->pc=entry==0xa040?0xa0b3:0xa139;c->cyclesUsed=2;}
+            }
         }
-        cycles+=cell+advance;++stencil_cells;
+        cycles+=cell+advance;++cells;
     }
+    if(deferred && cells) {
+        unsigned index=last_y*width+last_x;
+        if(w->huge)coord_set(w,r,last_x*2,last_y*2);
+        w->field_anchor[0]=index;put(r,0xb3f,last_x);put(r,0xb3d,last_y);
+        put(r,c->sp-1,entry==0xa040?0xa049:0xa0cf);put(r,c->dp+4,last_p&2047);
+        c->x=(uint16_t)index;c->y=(uint16_t)last_y;c->v=((last_p>>25)&1)!=0;
+        put(r,c->dp,x);put(r,c->dp+2,y);c->a=(uint16_t)(row?y:x);
+        c->c=row?y>=height:x>=width;nz(c,(uint16_t)(row?y-height:x-width),false);
+        c->mf=false;c->pc=y==height?(entry==0xa040?0xa0b3:0xa139):(uint16_t)entry;
+        c->cyclesUsed=y==height?2:row?(uint8_t)(4+dp):3;
+    }
+    stencil_cells+=cells;
     return cycles;
 }
 unsigned ScWorldGuestSmoothingStageStep(ScWorld *w,Interp816 *c,uint8_t *r,unsigned max_cycles) {
@@ -2483,6 +2962,12 @@ unsigned ScWorldGuestHouseArtStep(ScWorld *w,Interp816 *c,uint8_t *r,
     }
 }
 static unsigned native_kernel(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t *rom,unsigned max_cycles) {
+    if(ScSweepOwns(c->pc)) {
+        unsigned cost=ScSweepStep(w,c,r,rom,max_cycles);if(cost) return cost;
+    }
+    if(ScPostpassOwns(c->pc)) {
+        unsigned cost=ScPostpassStep(w,c,r,max_cycles);if(cost) return cost;
+    }
     if(ScZoningOwns(c->pc)) {
         unsigned cost=ScZoningControlStep(w,c,r,rom,max_cycles);
         if(cost) return cost;
@@ -2518,6 +3003,10 @@ static unsigned native_kernel(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t *
     if(ScLandOwns(c->pc) && c->pc!=0x9cdf && c->pc!=0x9d30 && c->pc!=0x9dc9)
         return ScLandStep(w,c,r,max_cycles);
     if(c->pc!=0xb370 && ScTransportOwns(c->pc)) return ScTransportStep(w,c,r,rom,max_cycles);
+    if(ScInfrastructureOwns(c->pc)) {
+        unsigned cost=ScWorldGuestInfrastructureStep(w,c,r,max_cycles);
+        return cost?cost:ScInfrastructureStep(w,c,r,rom,max_cycles);
+    }
     switch(c->pc) {
     case 0xb370:return ScWorldGuestTransportNeighborStep(w,c,r,max_cycles);
     case 0x8287:return coverage_clear(w,c,max_cycles);
@@ -2572,6 +3061,7 @@ static unsigned native_kernel(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t *
     case 0xa111:case 0xa113:case 0xa115:case 0xa116:case 0xa117:
     case 0xa11a:case 0xa11c:case 0xa11f:case 0xa121:return diffusion_finish(w,c,r,max_cycles);
     case 0x9eb0: {
+        unsigned gpu=crime_field_span(w,c,r,max_cycles);if(gpu) return gpu;
         unsigned cost=crime_cell(w,c,r,max_cycles);
         return cost?cost:vacant_crime_cell(w,c,r,max_cycles);
     }
@@ -2584,7 +3074,10 @@ static unsigned native_kernel(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t *
         unsigned cost=service_field_span(w,c,r,max_cycles);
         return cost?cost:service_cell(w,c,r,max_cycles);
     }
-    case 0xa25c:return terrain_quality_cell(w,c,r,max_cycles);
+    case 0xa25c: {
+        unsigned cost=terrain_quality_span(w,c,r,max_cycles);
+        return cost?cost:terrain_quality_cell(w,c,r,max_cycles);
+    }
     case 0xa1bb:case 0xa23a:return service_copy(w,c,max_cycles);
     case 0xb03d: {
         unsigned cost=power_search(w,c,r,rom,max_cycles);
@@ -2601,15 +3094,28 @@ static unsigned native_kernel(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t *
 }
 unsigned ScWorldGuestKernelStep(ScWorld *w,Interp816 *c,uint8_t *r,
     const uint8_t *rom,size_t size,unsigned max_cycles) {
-    static int layout=-1;static unsigned layout_samples,diffusion_layout_samples;
+    static int layout=-1;static unsigned layout_samples,diffusion_layout_samples,field_layout_samples,crime_layout_samples;
     if(layout<0) {const char *e=getenv("SC_KERNEL_LAYOUT");layout=e && *e=='1';}
+    if(layout && c->k==3 && (c->pc==0x9eb0 || c->pc==0x9f47) && crime_layout_samples++<16)
+        fprintf(stderr,"[crime layout] pc=%x dp=%x sp=%x db=%x mf=%d xf=%d wait=%d stop=%d budget=%u xy=%u,%u p=%x\n",
+            c->pc,c->dp,c->sp,c->db,c->mf,c->xf,c->waiting,c->stopped,max_cycles,word(r,c->dp+8),word(r,c->dp+10),interp816_getFlags(c));
     if(layout && c->k==3 && (c->pc==0x9c3b || c->pc==0x9cdf || c->pc==0x9d30) && layout_samples++<24)
         fprintf(stderr,"[kernel layout] pc=%x dp=%x sp=%x db=%x mf=%d xf=%d wait=%d stop=%d budget=%u xy=%u,%u p=%x\n",c->pc,c->dp,c->sp,c->db,c->mf,c->xf,c->waiting,c->stopped,max_cycles,word(r,c->dp+8),word(r,c->dp+10),interp816_getFlags(c));
     if(layout && c->k==3 && (c->pc==0xa040 || c->pc==0xa09f) && diffusion_layout_samples++<12)
         fprintf(stderr,"[diffusion layout] pc=%x dp=%x sp=%x db=%x mf=%d xf=%d active=%d rom=%zu budget=%u xy=%u,%u p=%x\n",
             c->pc,c->dp,c->sp,c->db,c->mf,c->xf,w->active,size,max_cycles,word(r,c->dp),word(r,c->dp+2),interp816_getFlags(c));
-    if(!w || !w->active || !rom || size!=0x80000 || c->k!=3 || c->db!=3 ||
+    if(layout && c->k==3 && c->pc==0xb676 && field_layout_samples++<12)
+        fprintf(stderr,"[field layout] pc=%x dp=%x sp=%x db=%x mf=%d xf=%d active=%d budget=%u index=%u/%u flags=%x\n",
+            c->pc,c->dp,c->sp,c->db,c->mf,c->xf,w->active,max_cycles,c->x,w->field_scan,interp816_getFlags(c));
+    if(!w || !rom || size!=0x80000 || c->k!=3 || c->db!=3 ||
         c->e || c->d || c->xf || c->nmiWanted || (c->irqWanted && !c->i) || !max_cycles) return 0;
+    if(ScPostpassOwns(c->pc)) {
+        unsigned cost=ScPostpassStep(w,c,r,max_cycles);if(cost) return cost;
+    }
+    if(ScSweepOwns(c->pc)) {
+        unsigned cost=ScSweepStep(w,c,r,rom,max_cycles);if(cost) return cost;
+    }
+    if(!w->active) return 0;
     if(max_cycles<32) {
         if(c->pc>=0x980e && c->pc<=0x9847) {
             unsigned house=ScWorldGuestHouseArtStep(w,c,r,rom,max_cycles);
@@ -2631,6 +3137,7 @@ unsigned ScWorldGuestKernelStep(ScWorld *w,Interp816 *c,uint8_t *r,
         if(ScDensityOwns(c->pc)) return ScDensityStep(w,c,r,rom,max_cycles);
         if(ScPowerTraversalOwns(c->pc)) return ScPowerTraversalStep(w,c,r,rom,max_cycles);
         if(ScLandOwns(c->pc)) return ScLandStep(w,c,r,max_cycles);
+        if(ScInfrastructureOwns(c->pc)) return ScInfrastructureStep(w,c,r,rom,max_cycles);
         if(ScTransportOwns(c->pc)) return ScTransportStep(w,c,r,rom,max_cycles);
         if((c->pc>=0xa040 && c->pc<0xa04a) || (c->pc>=0xa0c6 && c->pc<0xa0d0))
             return diffusion_begin(w,c,r,max_cycles);
@@ -2657,7 +3164,7 @@ unsigned ScWorldGuestKernelStep(ScWorld *w,Interp816 *c,uint8_t *r,
     c->mem=&b;c->read=kernel_read;c->write=kernel_write;c->read_word=NULL;c->write_word=NULL;
     unsigned cycles=0;
     while(c->pc!=end && cycles+12<max_cycles) {
-        ScWorldGuestStep(w,c,r);
+        ScWorldGuestStepPrepared(w,c,r);
         if(c->pc==end) break;
         /* A compatibility span can reach a resumable C helper after its
          * initial instruction. Keep those helpers native inside this loop,
@@ -2675,9 +3182,11 @@ unsigned ScWorldGuestKernelStep(ScWorld *w,Interp816 *c,uint8_t *r,
             unsigned fast=ScWorldGuestFastStep(w,c,r,rom,size);
             if(fast) {cycles+=fast;continue;}
         }
-        ScWorldGuestBegin(&b.guest,w,c,rom,size);
-        if(kernel_interpreter_profile && c->k==3) ++kernel_interpreter_ops[c->pc];
-        cycles+=interp816_runOpcode(c);
+        ScWorldGuestBeginPrepared(&b.guest,w,c,rom,size);
+        unsigned program_pc=c->pc,program_bank=c->k;
+        unsigned program=ScProgramStep(c);
+        if(!program && kernel_interpreter_profile && program_bank==3) ++kernel_interpreter_ops[program_pc];
+        cycles+=program?program:interp816_runOpcode(c);
     }
     c->mem=saved_mem;c->read=saved_read;c->write=saved_write;
     c->read_word=saved_read_word;c->write_word=saved_write_word;
@@ -2710,13 +3219,17 @@ unsigned ScWorldGuestInstructionStep(ScWorld *w,Interp816 *c,uint8_t *r,
        (c->irqWanted && !c->i)) return 0;
     if(c->k==1 && ScTileLookupOwns(c->pc))
         return ScTileLookupInstructionStep(w,c,r,rom,size);
-    if(c->k!=3 || !w->active) return 0;
+    if(c->k!=3) return 0;
+    if(ScPostpassOwns(c->pc)) return ScPostpassInstructionStep(w,c,r);
+    if(ScSweepOwns(c->pc)) return ScSweepInstructionStep(w,c,r,rom);
+    if(!w->active) return 0;
     if(ScZoningOwns(c->pc)) return ScZoningInstructionStep(w,c,r,rom);
     if(ScServiceOwns(c->pc)) return ScServiceInstructionStep(w,c,r,rom);
     if(ScSmoothingOwns(c->pc)) return ScSmoothingInstructionStep(w,c,r,rom);
     if(ScPowerTraversalOwns(c->pc)) return ScPowerTraversalInstructionStep(w,c,r,rom);
     if(ScDensityOwns(c->pc)) return ScDensityInstructionStep(w,c,r,rom);
     if(ScLandOwns(c->pc)) return ScLandInstructionStep(w,c,r);
+    if(ScInfrastructureOwns(c->pc)) return ScInfrastructureInstructionStep(w,c,r,rom);
     if(ScTransportOwns(c->pc)) return ScTransportInstructionStep(w,c,r,rom);
     return 0;
 }

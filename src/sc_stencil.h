@@ -1,5 +1,7 @@
 #pragma once
 #include "sc_world.h"
+#include "sc_crime.h"
+#include "sc_land_summary.h"
 /* Whole-field GPU results include the original sum, aligned stencil clock,
  * unaligned direct-page surcharge and final ADC overflow. No floating point. */
 static inline uint32_t ScStencilPack(const uint8_t *s,unsigned width,unsigned height,unsigned x,unsigned y) {
@@ -21,6 +23,10 @@ typedef struct ScStencilBackend {
     void *context;
     void (*begin)(void *context,const ScWorld *world,unsigned source);
     const uint32_t *(*data)(void *context,const ScWorld *world,unsigned source);
+    void (*crime_begin)(void *context,const ScWorld *world,unsigned bias);
+    const ScCrimeSample *(*crime_data)(void *context,const ScWorld *world,unsigned bias);
+    void (*land_begin)(void *context,const ScWorld *world);
+    const ScLandSummary *(*land_data)(void *context,const ScWorld *world);
 } ScStencilBackend;
 
 /* Police/fire use wrapped 16-bit neighbours and rounding carry from LSR.

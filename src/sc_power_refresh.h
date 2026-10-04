@@ -6,6 +6,11 @@
 typedef struct {
     ScRefreshClock clock;
     uint8_t bitmap[SC_WORLD_MAX_CELLS/8];
+    /* The native scratch word selects either an ordered network walk or
+     * plant seeds alone. Cache both exact results for one electrical graph. */
+    uint8_t policy_bitmap[2][SC_WORLD_MAX_CELLS/8];
+    bool policy_valid[2];
+    uint64_t network_solves,policy_reuses;
     uint8_t topology_tiles[SC_WORLD_MAX_TILE_BYTES];
     uint64_t topology_revisions[SC_WORLD_TILE_CHUNKS];
     uint64_t publication_revisions[SC_WORLD_TILE_CHUNKS];

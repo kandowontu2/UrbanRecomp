@@ -1,9 +1,33 @@
 #include "sc_development.h"
 #include "sc_world_guest.h"
 #include "sc_zoning.h"
+#include "sc_math.h"
 #include <string.h>
 #include <stdlib.h>
 #include "snes/interp816.h"
+
+static uint64_t (*profile_clock)(void);
+static uint64_t profile_frequency,profile_calls[65536],profile_ticks[65536],profile_max[65536];
+void ScDevelopmentSetProfileClock(uint64_t (*clock)(void),uint64_t frequency) {
+    profile_clock=frequency?clock:NULL;profile_frequency=frequency;
+    memset(profile_calls,0,sizeof profile_calls);memset(profile_ticks,0,sizeof profile_ticks);
+    memset(profile_max,0,sizeof profile_max);
+}
+void ScDevelopmentReportProfile(FILE *out) {
+    if(!profile_clock || !out) return;
+    uint16_t sites[24]={0};
+    for(unsigned pc=0;pc<65536;++pc) {
+        if(!profile_calls[pc]) continue;
+        for(unsigned n=0;n<24;++n) if(profile_ticks[pc]>profile_ticks[sites[n]]) {
+            memmove(sites+n+1,sites+n,(23-n)*sizeof *sites);sites[n]=(uint16_t)pc;break;
+        }
+    }
+    for(unsigned n=0;n<24 && profile_calls[sites[n]];++n) {
+        unsigned pc=sites[n];fprintf(out,"[development profile] pc=%04x calls=%llu total-ms=%.3f max-us=%.3f\n",
+            pc,(unsigned long long)profile_calls[pc],profile_ticks[pc]*1000.0/profile_frequency,
+            profile_max[pc]*1000000.0/profile_frequency);
+    }
+}
 
 static unsigned word(const uint8_t *r, unsigned p) {
     return r[p] | ((unsigned)r[p+1]<<8);
@@ -271,7 +295,7 @@ static unsigned house_candidate(ScWorld *w,Interp816 *c,uint8_t *r,const uint8_t
     unsigned cycles=36;
     c->mf=false;put(r,c->dp+6,c->a);cycles+=3+4+dp;
     put(r,c->sp-1,0x9860);c->sp-=2;c->pc=0x849e;
-    ScWorldGuestStep(w,c,r);c->sp+=2;cycles+=12;
+    ScWorldGuestStepPrepared(w,c,r);c->sp+=2;cycles+=12;
     c->a&=1023;nz(c,c->a);cycles+=3;
     bool valid=c->a==0;
     cycles+=valid?3:2;
@@ -363,7 +387,7 @@ static unsigned free_house_decline(ScWorld *w,Interp816 *c,uint8_t *r,const uint
     unsigned cycles=52+((c->dp&255)!=0)+density_delta(w,c,r);
     c->a=(uint16_t)(((uint8_t)(r[0xb86]-1)<<8)|(uint8_t)(r[0xb85]-1));c->mf=true;
     put(r,c->sp-1,0x9705);c->sp-=2;c->pc=0x849e;
-    ScWorldGuestStep(w,c,r);c->sp+=2;put(r,c->dp+8,c->x);
+    ScWorldGuestStepPrepared(w,c,r);c->sp+=2;put(r,c->dp+8,c->x);
     c->y=0;c->z=true;c->n=false;c->pc=0x970b;
     cycles+=30+4+((c->dp&255)!=0)+3;
     return cycles+house_remove(w,c,r,rom,size);
@@ -373,27 +397,46 @@ unsigned ScDevelopmentNativeBatch(ScDevelopment *s,ScWorld *w,Interp816 *c,uint8
     if(!s->repeating || c->dp<0x20 || c->dp>0x1fc0 || c->sp<0x010c || c->sp>0x1fff)
         return 0;
     unsigned cycles=0;
+    static int driver_reference=-1;
+    if(driver_reference<0) {const char *e=getenv("SC_DEVELOPMENT_DRIVER_REFERENCE");driver_reference=e && *e=='1';}
     /* Accelerated attempts consume no guest beam/calendar time. Keep their
-     * ordered RNG and capacity operations in C until a map mutation needs
-     * the remaining compatibility code. The final PLD/RTS stays with the
+     * ordered RNG, capacity, housing and mutation operations in C. Unknown
+     * continuations return to the caller. The final PLD/RTS stays with the
      * scheduler and receives its ordinary timing. */
     if(c->k!=3 || c->db!=3 || c->xf || c->e || c->d || c->waiting || c->stopped ||
        c->nmiWanted || (c->irqWanted && !c->i) ||
        (c->sp>=c->dp-6 && c->sp-7<=c->dp+10)) return 0;
+    static int control_enabled=-1;
+    if(control_enabled<0) {const char *e=getenv("SC_ZONE_CONTROL_REFERENCE");control_enabled=!e || *e!='1';}
     for(unsigned segments=0;segments<500 && s->repeating;++segments) {
-        unsigned cost=free_house_capacity(w,c,ram);
-        if(!cost) cost=ScDevelopmentNativeStep(c,ram);
-        if(!cost) cost=attempt_transport(c,ram);
-        if(!cost) cost=zone_decision(w,c,ram,rom,rom_size);
-        if(!cost) cost=decline_empty(c,ram);
-        if(!cost) cost=house_builder_frame(c,ram);
-        if(!cost) cost=house_candidate(w,c,ram,rom,rom_size);
-        if(!cost) cost=density_delta(w,c,ram);
-        if(!cost) cost=house_remove(w,c,ram,rom,rom_size);
-        if(!cost) cost=free_house_decline(w,c,ram,rom,rom_size);
-        static int control_enabled=-1;
-        if(control_enabled<0) {const char *e=getenv("SC_ZONE_CONTROL_REFERENCE");control_enabled=!e || *e!='1';}
-        if(!cost && control_enabled) cost=ScZoningControlStep(w,c,ram,rom,4096);
+        unsigned profile_pc=c->pc;
+        uint64_t profile_start=profile_clock?profile_clock():0;
+        /* Select the owning operation once. Rejected operations have no
+         * writes, so probing every unrelated helper adds no behavior. */
+        unsigned cost=0;
+        switch(c->pc) {
+        case 0x9388:
+            cost=free_house_capacity(w,c,ram);
+            if(!cost)cost=ScDevelopmentNativeStep(c,ram);break;
+        case 0x842f:case 0x8456:case 0x847a:case 0x907e:
+        case 0x923d:case 0x92dc:case 0x927b:case 0x9327:case 0x93e5:
+            cost=ScDevelopmentNativeStep(c,ram);break;
+        case 0x926f:case 0x931b:case 0x93d1:
+            cost=ScDevelopmentNativeStep(c,ram);
+            if(!cost)cost=attempt_transport(c,ram);break;
+        case 0x9283:case 0x932f:case 0x93ed:
+            cost=zone_decision(w,c,ram,rom,rom_size);break;
+        case 0x9659:
+            cost=decline_empty(c,ram);
+            if(!cost)cost=free_house_decline(w,c,ram,rom,rom_size);break;
+        case 0x97c9:cost=house_builder_frame(c,ram);break;
+        case 0x97db:cost=house_candidate(w,c,ram,rom,rom_size);break;
+        case 0x961d:cost=density_delta(w,c,ram);break;
+        case 0x970b:cost=house_remove(w,c,ram,rom,rom_size);break;
+        default:break;
+        }
+        if(!cost && control_enabled && ScZoningOwns(c->pc))
+            cost=ScZoningControlStep(w,c,ram,rom,4096);
         if(!cost && control_enabled && c->pc==0x9468) cost=ScZoningQualityStep(w,c,ram,4096);
         if(!cost && control_enabled && c->pc>=0x98b8 && c->pc<=0x99bf)
             cost=ScWorldGuestZoneArtStep(w,c,ram,rom,4096);
@@ -414,6 +457,21 @@ unsigned ScDevelopmentNativeBatch(ScDevelopment *s,ScWorld *w,Interp816 *c,uint8
             if(target==0x93db || target==0x9447) {
                 c->sp+=2;c->pc=target;c->cyclesUsed=6;cost=6;
             } else if(c->pc==0x93db) {c->pc=0x9447;c->cyclesUsed=3;cost=3;}
+        }
+        /* These shared helpers have no beam/calendar observers during an
+         * extra attempt. Keep their original CPU/RAM/world publications and
+         * RNG order in this driver instead of returning through main. */
+        if(!cost && !driver_reference) {
+            if(ScMathRngOwns(c->pc) || ScMathDivideOwns(c->pc))
+                cost=ScMathBatchStep(c,ram,4096);
+            if(!cost && c->pc==0x9a3e)cost=ScWorldGuestHousingStep(w,c,ram,512);
+            if(!cost && c->pc==0x987f)cost=ScWorldGuestHouseSiteStep(w,c,ram,rom,rom_size,512);
+            if(!cost && ScZoningOwns(c->pc))cost=ScZoningAcceleratedStep(w,c,ram,rom,4096);
+        }
+        if(profile_clock) {
+            uint64_t elapsed=profile_clock()-profile_start;
+            ++profile_calls[profile_pc];profile_ticks[profile_pc]+=elapsed;
+            if(elapsed>profile_max[profile_pc])profile_max[profile_pc]=elapsed;
         }
         if(!cost) break;
         cycles+=cost;

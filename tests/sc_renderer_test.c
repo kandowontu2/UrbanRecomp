@@ -84,6 +84,15 @@ int main(void) {
     memcpy(before,p,sizeof(*p));
     for (int y=1;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(!memcmp(before,p,sizeof(*p)));
+    uint32_t *menu_pixels=malloc(512*224*sizeof *menu_pixels);assert(menu_pixels);
+    memcpy(menu_pixels,r.pixels,512*224*sizeof *menu_pixels);
+    r.map_zoom=.25;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(!r.zoom_frame && !memcmp(menu_pixels,r.pixels,512*224*sizeof *menu_pixels));
+    r.map_zoom=2;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(!r.zoom_frame && !memcmp(menu_pixels,r.pixels,512*224*sizeof *menu_pixels));
+    r.map_zoom=1;free(menu_pixels);
     /* $14 advances before the title finishes fading. Keep its scenery until
      * the hardware goes dark; use the current scanline's brightness. */
     memset(p,0,sizeof(*p)); p->inidisp=15; p->bgmode=1;
@@ -334,6 +343,20 @@ int main(void) {
     assert(ScRendererCityPoint(&r,ram,gx,gy,&wx,&wy) && wx==58 && wy==52);
     assert(!ScRendererCityPoint(&r,ram,30,100,&wx,&wy)); /* toolbar */
     assert(!ScRendererCityPoint(&r,ram,300,22,&wx,&wy)); /* header */
+    /* Terrain zoom changes world hit testing, never the HUD rectangles.
+     * Forward projection and inverse selection must agree at tile centers. */
+    r.zoom_frame=r.zoom_hud=true;
+    for(int z=0;z<3;++z) {
+        r.map_zoom=z==0?.25:z==1?.5:2;
+        double zx=200,zy=100;
+        ScRendererProjectCity(&r,&zx,&zy);
+        assert(ScRendererCityPoint(&r,ram,(int)zx,(int)zy,&wx,&wy));
+        assert(wx==(r.scroll_x+r.scroll_adjust_x+200)/8);
+        assert(wy==(r.scroll_y+r.scroll_adjust_y+100)/8);
+        assert(!ScRendererCityPoint(&r,ram,30,100,&wx,&wy));
+        assert(!ScRendererCityPoint(&r,ram,300,22,&wx,&wy));
+    }
+    r.zoom_frame=r.zoom_hud=false;r.map_zoom=1;
     for (int width=448;width<=684;width+=236) for (int centered=0;centered<2;++centered)
     for (int dpi=1;dpi<=3;++dpi) {
         r.view=(ScViewport){width,300,centered?(width-256)/2:0,centered?38:0,1,0};
@@ -627,6 +650,41 @@ int main(void) {
     for(int y=0;y<224;++y) ScRendererLine(&r,p,ram,y,native);
     assert(r.pixels[87*448+128]==0xff00ff00 && r.pixels[87*448+328]==0xff00ff00);
     free(large);r.world=NULL;
+    /* Zoomed HUD leaves an eight-pixel land gutter before the toolbox.
+     * Poison it between frames: both immediate and deferred composition
+     * must replace stale pixels, while keeping the native toolbox fixed. */
+    memset(p,0,sizeof *p);memset(ram,0,0x20000);
+    for(int i=0;i<32;++i)p->brightnessMult[i]=(i<<3)|(i>>2);
+    p->inidisp=15;p->bgmode=1;p->screenEnabled[0]=3;
+    p->bgXsc[0]=0x40;p->bgXsc[1]=0x50;p->cgram[1]=31<<5;
+    for(int y=0;y<8;++y)p->vram[0x100+y]=0xff;
+    word(rom,0x156a9,0x10);word(rom,0x14f2d,0x300);
+    ram[0x3e]=1;word(ram,0x1d7,65535);
+    word(ram,0x1bd,40);word(ram,0x1bf,40);
+    for(int x=0;x<256;++x)native[x]=0xff0000ff;
+    for(int centered=0;centered<2;++centered)for(int deferred=0;deferred<2;++deferred)
+    for(int z=0;z<3;++z) {
+        ScViewport gutter_view={448,224,centered?96:0,0,1,0};
+        assert(ScRendererResize(&r,gutter_view));ScRendererResetHistory(&r);
+        r.map_zoom=z==0?.25:z==1?.5:2;r.defer_terrain=deferred!=0;
+        for(int x=0;x<8;++x)r.pixels[100*448+gutter_view.core_x+x]=0xffff00ff;
+        memcpy(before,p,sizeof *p);
+        for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+        assert(r.zoom_frame && r.zoom_hud && (r.repaired_edges[100]&1));
+        for(int x=0;x<8;++x)
+            assert(ScRendererPixel(&r,gutter_view.core_x+x,100)==0xff00ff00);
+        assert(ScRendererPixel(&r,gutter_view.core_x+32,100)==0xff0000ff);
+        assert(!memcmp(before,p,sizeof *p));
+        /* Opaque native UI in the edge band still owns those pixels. */
+        p->screenEnabled[0]=7;p->bgXsc[2]=0x60;
+        for(int cell=0;cell<1024;++cell)p->vram[0x6000+cell]=1;
+        for(int y=0;y<8;++y)p->vram[8+y]=0xff;
+        for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+        assert(!(r.repaired_edges[100]&1));
+        for(int x=0;x<8;++x)
+            assert(ScRendererPixel(&r,gutter_view.core_x+x,100)==0xff0000ff);
+        p->screenEnabled[0]=3;memset(p->vram+8,0,8*sizeof *p->vram);
+    }
     ScRendererDestroy(&r); free(p); free(before); free(ram); free(rom);
     puts("PASS: tile flips, overlays, map bounds, native pixels, tall/wide surfaces and PPU immutability");
     return 0;

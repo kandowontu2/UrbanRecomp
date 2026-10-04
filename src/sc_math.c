@@ -70,11 +70,31 @@ static unsigned multiply16_resume(Interp816 *c,uint8_t *r,unsigned budget) {
 /* The divide loop often begins near a beam deadline. Resumable C stages
  * retain its intermediate carry, remainder and flags instead of falling back
  * to the interpreter for the remainder of that iteration. */
-static unsigned divide16(Interp816 *c,uint8_t *r,unsigned budget) {
+static bool divide_driver_enabled(void);
+static unsigned divide16(Interp816 *c,uint8_t *r,unsigned budget,bool single) {
     if(c->pc<=0xa415 && (c->y>16 || (!c->y && c->pc!=0xa415))) return 0;
     unsigned cycles=0,dp=(c->dp&255)!=0;
     for(;;) {
         unsigned entry=c->pc,cost,value,old;
+        /* Fuse an uninterrupted restoring-divide iteration into arithmetic
+         * on two words. Residual continuations below retain every shorter
+         * deadline; the calendar and interrupt cost is still the original. */
+        if(!single && entry==0xa406 && c->y && divide_driver_enabled()) {
+            unsigned dividend=word(r,c->dp+2),divisor=word(r,c->dp+4);
+            unsigned remainder=((word(r,c->dp+6)<<1)|(dividend>>15))&65535;
+            bool subtract=remainder>=divisor;
+            cost=22+4*dp+(subtract?10+2*dp:3)+2+(c->y==1?2:3);
+            if(cost<=budget-cycles) {
+                put(r,c->dp+2,(dividend<<1)|c->c);c->a=(uint16_t)remainder;
+                if(subtract) {
+                    c->a=(uint16_t)(remainder-divisor);
+                    c->v=((remainder^divisor)&(remainder^c->a)&32768)!=0;
+                }
+                put(r,c->dp+6,c->a);c->c=subtract;--c->y;nz(c,c->y);
+                c->pc=c->y?0xa406:0xa417;c->cyclesUsed=c->y?3:2;cycles+=cost;
+                continue;
+            }
+        }
         switch(entry) {
         case 0xa406:case 0xa408:case 0xa417:cost=7+dp;break;
         case 0xa40a:case 0xa40c:case 0xa410:case 0xa412:
@@ -114,23 +134,97 @@ static unsigned divide16(Interp816 *c,uint8_t *r,unsigned budget) {
         case 0xa420:c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;break;
         }
         c->cyclesUsed=(uint8_t)cost;cycles+=cost;
+        if(single) return cycles;
         if(entry==0xa420) return cycles; /* The caller gets its own hooks. */
     }
 }
-unsigned ScMathBatchStep(Interp816 *c,uint8_t *r,unsigned budget) {
-    unsigned entry=c?c->pc:0,cycles=ScMathStep(c,r,budget);
-    if(!cycles || entry<0x9035 || entry>0x90a6) return cycles;
-    while(cycles<budget && c->pc>=0x9035 && c->pc<=0x90a6 && entry!=0x90a6) {
-        entry=c->pc;unsigned cost=ScMathStep(c,r,budget-cycles);
-        if(!cost) break;cycles+=cost;
-    }
-    return cycles;
+static bool divide_driver_enabled(void) {
+    static int reference=-1;
+    if(reference<0) {const char *e=getenv("SC_DIV16_DRIVER_REFERENCE");reference=e && *e=='1';}
+    return !reference;
 }
-unsigned ScMathStep(Interp816 *c,uint8_t *r,unsigned budget) {
-    if(!c || !r || c->k!=3 || c->db!=3 || c->e || c->d ||
-        c->waiting || c->stopped || c->nmiWanted || (c->irqWanted && !c->i) ||
-        c->dp<0x20 || c->dp>0x1fe0) return 0;
-    if(c->pc==0xa3cf) return divide16_setup(c,r,budget);
+bool ScMathDivideOwns(unsigned pc) {return pc>=0xa3cf && pc<=0xa420;}
+static bool math_context(const Interp816 *c,const uint8_t *r) {
+    return c && r && c->k==3 && c->db==3 && !c->e && !c->d &&
+        !c->waiting && !c->stopped && !c->nmiWanted && !(c->irqWanted && !c->i) &&
+        c->dp>=0x20 && c->dp<=0x1fe0;
+}
+/* The complete setup above is still useful when it fits. A beam/IRQ deadline
+ * otherwise leaves its continuation here, with ordered stack shadows and
+ * operand reads. No opcode fetch or interpreter dispatch is needed. */
+static unsigned divide16_driver(Interp816 *c,uint8_t *r,unsigned budget,bool single) {
+    if(!divide_driver_enabled() || !math_context(c,r) || !c->read) return 0;
+    static int setup_reference=-1,body_reference=-1;
+    if(setup_reference<0) {const char *e=getenv("SC_DIV16_SETUP_REFERENCE");setup_reference=e && *e=='1';}
+    if(body_reference<0) {const char *e=getenv("SC_DIV16_REFERENCE");body_reference=e && *e=='1';}
+    if(c->pc>=0xa406) {
+        if(body_reference || c->mf || c->xf) return 0;
+        return divide16(c,r,budget,single);
+    }
+    if(setup_reference || (c->pc!=0xa3cf && (c->mf || c->xf))) return 0;
+    if(c->pc==0xa3cf) {
+        if(c->dp<0x28 || c->sp<0x108 || c->sp>0x1ffd) return 0;
+        unsigned at=c->dp-8,ret=word(r,c->sp+1);
+        if((c->sp+2>=at && c->sp-3<=at+7) || ret<0x7000 || ret>0xfff9) return 0;
+        for(unsigned i=1;i<=3;++i)
+            if(c->dp+c->read(c->mem,0x030000+ret+i)>0x1ffe) return 0;
+        if(!single) {unsigned cost=divide16_setup(c,r,budget);if(cost) return cost;}
+    }
+    unsigned cycles=0;
+    for(;;) {
+        unsigned entry=c->pc,cost,value,old;
+        switch(entry) {
+        case 0xa3cf:case 0xa3d8:case 0xa3d4:case 0xa3de:
+        case 0xa3e6:case 0xa3f1:case 0xa3fc:case 0xa403:cost=3;break;
+        case 0xa3d1:case 0xa3e2:cost=5;break;
+        case 0xa3d7:case 0xa3da:case 0xa3db:cost=4;break;
+        case 0xa3d2:case 0xa3d3:case 0xa3dc:case 0xa3dd:
+        case 0xa3e1:case 0xa3e9:case 0xa3f4:cost=2;break;
+        case 0xa3e3:case 0xa3ee:case 0xa3f9:cost=6;break;
+        case 0xa3ea:case 0xa3f5:cost=5+((c->dp&255)!=0);break;
+        case 0xa3ec:case 0xa3f7:case 0xa3ff:case 0xa401:cost=4+((c->dp&255)!=0);break;
+        default:return cycles;
+        }
+        if(cost>budget-cycles) return cycles;
+        if((entry==0xa3d1 || entry==0xa3e2) && (c->sp<0x100 || c->sp>0x1ffd)) return cycles;
+        if((entry==0xa3d7 || entry==0xa3da || entry==0xa3db) && (c->sp<0x102 || c->sp>0x1fff)) return cycles;
+        if((entry==0xa3e3 || entry==0xa3ee || entry==0xa3f9) && (c->y<0x7000 || c->y>0xfff9)) return cycles;
+        if((entry==0xa3ea || entry==0xa3f5) && c->dp+8+c->x>0x1ffe) return cycles;
+        if(entry==0xa3e1 && (c->a<0x20 || c->a>0x1fe0)) return cycles;
+        switch(entry) {
+        case 0xa3cf:c->mf=c->xf=false;c->pc=0xa3d1;break;
+        case 0xa3d1:case 0xa3e2:c->a=(uint16_t)word(r,c->sp+1);c->sp+=2;nz(c,c->a);++c->pc;break;
+        case 0xa3d2:c->y=c->a;nz(c,c->y);++c->pc;break;
+        case 0xa3d3:c->c=false;++c->pc;break;
+        case 0xa3d4:
+            old=c->a;value=old+3+c->c;c->a=(uint16_t)value;c->c=value>65535;
+            c->v=((~(old^3))&(old^value)&32768)!=0;nz(c,c->a);c->pc+=3;break;
+        case 0xa3d7:case 0xa3da:case 0xa3db:
+            put(r,c->sp-1,entry==0xa3da?c->dp:c->a);c->sp-=2;++c->pc;break;
+        case 0xa3d8:c->mf=false;c->pc+=2;break;
+        case 0xa3dc:c->a=c->dp;nz(c,c->a);++c->pc;break;
+        case 0xa3dd:c->c=true;++c->pc;break;
+        case 0xa3de:
+            old=c->a;value=old+0xfff7+c->c;c->a=(uint16_t)value;c->c=value>65535;
+            c->v=((old^8)&(old^value)&32768)!=0;nz(c,c->a);c->pc+=3;break;
+        case 0xa3e1:c->dp=c->a;nz(c,c->dp);++c->pc;break;
+        case 0xa3e3:case 0xa3ee:case 0xa3f9:
+            value=0x030000+c->y+(entry==0xa3e3?1:entry==0xa3ee?2:3);
+            c->a=(uint16_t)(c->read(c->mem,value)|(unsigned)c->read(c->mem,value+1)<<8);
+            nz(c,c->a);c->pc+=3;break;
+        case 0xa3e6:case 0xa3f1:case 0xa3fc:c->a&=255;nz(c,c->a);c->pc+=3;break;
+        case 0xa3e9:case 0xa3f4:c->x=c->a;nz(c,c->x);++c->pc;break;
+        case 0xa3ea:case 0xa3f5:c->a=(uint16_t)word(r,c->dp+8+c->x);nz(c,c->a);c->pc+=2;break;
+        case 0xa3ec:case 0xa3f7:case 0xa3ff:case 0xa401:
+            put(r,c->dp+(entry==0xa3ec?2:entry==0xa3f7?4:entry==0xa401?6:0),entry==0xa401?0:c->a);
+            c->pc+=2;break;
+        case 0xa403:c->y=16;nz(c,16);c->pc=0xa406;break;
+        }
+        c->cyclesUsed=(uint8_t)cost;cycles+=cost;
+        if(single || entry==0xa403) return cycles;
+    }
+}
+static unsigned rng_stages(Interp816 *c,uint8_t *r,unsigned budget) {
     if(c->pc==0x9035 || c->pc==0x904d || c->pc==0x905b ||
        c->pc==0x907e || c->pc==0x9092 || c->pc==0x90a0 || c->pc==0x90a6) {
         static int reference=-1;
@@ -187,6 +281,146 @@ unsigned ScMathStep(Interp816 *c,uint8_t *r,unsigned budget) {
         if(cycles && !c->x) c->pc=c->pc==0x904d?0x905b:0x90a0;
         return cycles;
     }
+    return 0;
+}
+static bool rng_driver_enabled(void) {
+    static int reference=-1;
+    if(reference<0) {const char *e=getenv("SC_RNG_DRIVER_REFERENCE");reference=e && *e=='1';}
+    return !reference;
+}
+bool ScMathRngOwns(unsigned pc) {return pc>=0x9035 && pc<=0x90a6;}
+/* The two additive generators share their state array, but have different
+ * scratch frames and epilogues. Retain every shorter deadline in C, including
+ * the range helper's continuations between its two division calls. Division
+ * has a different map clock scale, so each JSR yields to the scheduler. */
+static unsigned rng_driver(Interp816 *c,uint8_t *r,unsigned budget,bool single) {
+    static int reference=-1;
+    if(reference<0) {const char *e=getenv("SC_RNG_REFERENCE");reference=e && *e=='1';}
+    if(reference || !rng_driver_enabled() || !math_context(c,r) || c->sp<0x108 || c->sp>0x1fff) return 0;
+    unsigned cycles=0;
+    for(;;) {
+        unsigned entry=c->pc,cost,at=0,value,old;
+        if(!ScMathRngOwns(entry) || c->dp<0x20 || c->dp>0x1fe0) return cycles;
+        bool neutral=entry==0x9035 || entry==0x9036 || entry==0x9041 ||
+            entry==0x907c || entry==0x907d || entry==0x907e || entry==0x907f ||
+            entry==0x908a || entry==0x90a5 || entry==0x90a6;
+        if(!neutral && c->mf) return cycles;
+        bool early=(entry>=0x9038 && entry<=0x9040) || (entry>=0x9081 && entry<=0x9089);
+        if(!neutral && !early && c->xf) return cycles;
+        if((entry==0x904d || entry==0x9092) && (!c->x || c->x>12 || (c->x&1))) return cycles;
+        if(!single) {
+            unsigned fused=rng_stages(c,r,budget-cycles);
+            if(fused) {
+                cycles+=fused;
+                if(entry==0x90a6 || c->pc==0xa3cf) return cycles;
+                continue;
+            }
+        }
+        unsigned dp=(c->dp&255)!=0;
+        switch(entry) {
+        case 0x9035:case 0x907e:cost=3;break;
+        case 0x9036:case 0x9041:case 0x907f:case 0x908a:cost=3;break;
+        case 0x9038:case 0x9081:cost=4;break;
+        case 0x9039:case 0x9082:case 0x9043:case 0x9044:case 0x908c:cost=4;break;
+        case 0x903a:case 0x903b:case 0x903f:case 0x9045:case 0x9057:case 0x9058:
+        case 0x9083:case 0x9084:case 0x9088:case 0x909c:case 0x909d:cost=2;break;
+        case 0x903c:case 0x904a:case 0x905e:case 0x906c:case 0x9085:case 0x908f:cost=3;break;
+        case 0x9040:case 0x9089:case 0x9079:case 0x907a:case 0x907b:
+        case 0x90a3:case 0x90a4:cost=5;break;
+        case 0x9046:case 0x9048:case 0x9053:case 0x9055:case 0x9061:
+        case 0x906f:case 0x9077:case 0x908d:case 0x9098:case 0x909a:cost=4+dp;break;
+        case 0x904d:case 0x9092:cost=5;at=0xccd+c->x;break;
+        case 0x9050:case 0x9095:cost=7;at=0xccf+c->x;break;
+        case 0x905b:case 0x9069:case 0x90a0:cost=5;break;
+        case 0x9059:case 0x909e:cost=c->z?2:3;break;
+        case 0x9063:case 0x9071:case 0x907d:case 0x90a6:cost=6;break;
+        case 0x907c:case 0x90a5:cost=4;break;
+        default:return cycles;
+        }
+        if(cost>budget-cycles || (at && at>0x1ffe)) return cycles;
+        if((entry==0x9038 || entry==0x9039 || entry==0x9043 || entry==0x9044 ||
+            entry==0x9081 || entry==0x9082 || entry==0x908c || entry==0x9063 || entry==0x9071) &&
+            (c->sp<0x102 || c->sp>0x1fff)) return cycles;
+        if((entry==0x9040 || entry==0x9089 || entry==0x9079 || entry==0x907a ||
+            entry==0x907b || entry==0x90a3 || entry==0x90a4 || entry==0x907d || entry==0x90a6) &&
+            c->sp>0x1ffd) return cycles;
+        if((entry==0x907c || entry==0x90a5) && c->sp>0x1ffe) return cycles;
+        if((entry==0x903f || entry==0x9088) && (c->a<0x20 || c->a>0x1fe0)) return cycles;
+        switch(entry) {
+        case 0x9035:case 0x907e:r[c->sp--]=interp816_getFlags(c);++c->pc;break;
+        case 0x9036:case 0x907f:
+            interp816_setFlags(c,interp816_getFlags(c)&~0x20);c->pc+=2;break;
+        case 0x9041:case 0x908a:
+            interp816_setFlags(c,interp816_getFlags(c)&~0x30);c->pc+=2;break;
+        case 0x9038:case 0x9081:put(r,c->sp-1,c->dp);c->sp-=2;++c->pc;break;
+        case 0x9039:case 0x9082:case 0x9043:case 0x9044:case 0x908c:
+            put(r,c->sp-1,(entry==0x9043 || entry==0x908c)?c->x:entry==0x9044?c->y:c->a);
+            c->sp-=2;++c->pc;break;
+        case 0x903a:case 0x9083:c->a=c->dp;nz(c,c->a);++c->pc;break;
+        case 0x903b:case 0x9084:c->c=true;++c->pc;break;
+        case 0x903c:case 0x9085:
+            old=c->a;value=entry==0x903c?6:2;
+            {int difference=(int)old-(int)value-!c->c;
+             c->a=(uint16_t)difference;c->c=difference>=0;
+             c->v=((old^value)&(old^c->a)&32768)!=0;}
+            nz(c,c->a);c->pc+=3;break;
+        case 0x903f:case 0x9088:c->dp=c->a;nz(c,c->dp);++c->pc;break;
+        case 0x9040:case 0x9089:c->a=(uint16_t)word(r,c->sp+1);c->sp+=2;nz(c,c->a);++c->pc;break;
+        case 0x9045:++c->a;nz(c,c->a);++c->pc;break;
+        case 0x9046:put(r,c->dp+2,c->a);c->pc+=2;break;
+        case 0x9048:case 0x908d:put(r,c->dp,0);c->pc+=2;break;
+        case 0x904a:case 0x908f:c->x=12;nz(c,c->x);c->pc+=3;break;
+        case 0x904d:case 0x9092:c->a=(uint16_t)word(r,at);nz(c,c->a);c->pc+=3;break;
+        case 0x9050:case 0x9095:put(r,at,c->a);c->pc+=3;break;
+        case 0x9053:case 0x9098:
+            old=c->a;value=word(r,c->dp);
+            {unsigned sum=old+value+c->c;c->a=(uint16_t)sum;c->c=sum>65535;
+             c->v=((~(old^value))&(old^sum)&32768)!=0;}
+            nz(c,c->a);c->pc+=2;break;
+        case 0x9055:case 0x9061:case 0x906f:case 0x909a:put(r,c->dp,c->a);c->pc+=2;break;
+        case 0x9057:case 0x9058:case 0x909c:case 0x909d:--c->x;nz(c,c->x);++c->pc;break;
+        case 0x9059:case 0x909e:c->pc=c->z?(uint16_t)(entry+2):entry==0x9059?0x904d:0x9092;break;
+        case 0x905b:case 0x90a0:put(r,0xccf,c->a);c->pc+=3;break;
+        case 0x905e:c->a=0x7fff;nz(c,c->a);c->pc+=3;break;
+        case 0x9063:case 0x9071:put(r,c->sp-1,entry+2);c->sp-=2;c->pc=0xa3cf;break;
+        case 0x9069:c->a=(uint16_t)word(r,0xccf);nz(c,c->a);c->pc+=3;break;
+        case 0x906c:c->a&=0x7fff;nz(c,c->a);c->pc+=3;break;
+        case 0x9077:c->a=(uint16_t)word(r,c->dp);nz(c,c->a);c->pc+=2;break;
+        case 0x9079:c->y=(uint16_t)word(r,c->sp+1);c->sp+=2;nz(c,c->y);++c->pc;break;
+        case 0x907a:case 0x90a3:c->x=(uint16_t)word(r,c->sp+1);c->sp+=2;nz(c,c->x);++c->pc;break;
+        case 0x907b:case 0x90a4:c->dp=(uint16_t)word(r,c->sp+1);c->sp+=2;nz(c,c->dp);++c->pc;break;
+        case 0x907c:case 0x90a5:interp816_setFlags(c,r[++c->sp]);++c->pc;break;
+        case 0x907d:case 0x90a6:c->pc=(uint16_t)(word(r,c->sp+1)+1);c->sp+=2;break;
+        }
+        c->cyclesUsed=(uint8_t)cost;cycles+=cost;
+        if(single || c->pc==0xa3cf || entry==0x907d || entry==0x90a6) return cycles;
+    }
+}
+unsigned ScMathInstructionStep(Interp816 *c,uint8_t *r) {
+    if(!c) return 0;
+    if(ScMathRngOwns(c->pc)) return rng_driver(c,r,UINT32_MAX,true);
+    if(ScMathDivideOwns(c->pc)) return divide16_driver(c,r,UINT32_MAX,true);
+    return 0;
+}
+unsigned ScMathBatchStep(Interp816 *c,uint8_t *r,unsigned budget) {
+    unsigned entry=c?c->pc:0,cycles=ScMathStep(c,r,budget);
+    if(cycles && entry>=0xa3cf && entry<0xa406 && c->pc==0xa406 && divide_driver_enabled())
+        cycles+=ScMathStep(c,r,budget-cycles);
+    if(!cycles || entry<0x9035 || entry>0x90a6) return cycles;
+    while(cycles<budget && c->pc>=0x9035 && c->pc<=0x90a6 && entry!=0x90a6) {
+        entry=c->pc;unsigned cost=ScMathStep(c,r,budget-cycles);
+        if(!cost) break;cycles+=cost;
+    }
+    return cycles;
+}
+unsigned ScMathStep(Interp816 *c,uint8_t *r,unsigned budget) {
+    if(!math_context(c,r)) return 0;
+    if(ScMathDivideOwns(c->pc) && divide_driver_enabled()) return divide16_driver(c,r,budget,false);
+    if(c->pc==0xa3cf) return divide16_setup(c,r,budget);
+    if(ScMathRngOwns(c->pc)) {
+        if(rng_driver_enabled()) return rng_driver(c,r,budget,false);
+        return rng_stages(c,r,budget);
+    }
     if(c->mf || c->xf) return 0;
     static int multiply_reference=-1;
     if(multiply_reference<0) {const char *e=getenv("SC_MUL16_REFERENCE");multiply_reference=e && *e=='1';}
@@ -195,7 +429,7 @@ unsigned ScMathStep(Interp816 *c,uint8_t *r,unsigned budget) {
     if(c->pc>=0xa406 && c->pc<=0xa420) {
         static int reference=-1;
         if(reference<0) {const char *e=getenv("SC_DIV16_REFERENCE");reference=e && *e=='1';}
-        if(!reference) return divide16(c,r,budget);
+        if(!reference) return divide16(c,r,budget,false);
         if(c->pc!=0xa406) return 0; /* Previous complete-iteration C path below. */
     }
     unsigned entry=c->pc,at=c->dp,dp=(at&255)!=0,cycles=0;

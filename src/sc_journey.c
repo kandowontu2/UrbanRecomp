@@ -118,6 +118,28 @@ void ScJourneyMenuFont(uint16_t *vram) {
         memcpy(vram+(dst+16)*16,vram+(src+16)*16,32);
     }
 }
+void ScTestCityMenuFont(uint16_t *vram,uint16_t *oam,uint8_t *high,bool visible) {
+    static bool drawn;
+    if(!visible && !drawn)return;
+    static const char label[]="TEST CITY 3 ";
+    for(unsigned k=0;k<6;++k) {
+        unsigned slot=108+k,index=2*slot,t=0x1e0+2*k,shift=2*(slot&3);
+        if(visible) {
+            for(unsigned half=0;half<2;++half) {
+                unsigned c=label[2*k+half],dst=t+half;
+                if(c==' ') {memset(vram+dst*16,0,32);memset(vram+(dst+16)*16,0,32);}
+                else {
+                    unsigned src=c>='0' && c<='9'?0x190+c-'0':c<='P'?c-'A':32+c-'Q';
+                    memcpy(vram+dst*16,vram+src*16,32);memcpy(vram+(dst+16)*16,vram+(src+16)*16,32);
+                }
+            }
+            oam[index]=(196<<8)|(74+16*k);
+            oam[index+1]=(uint16_t)(t|((menu_rom[0x23d3]&0xfe)<<8));
+            high[slot/4]=(high[slot/4]&~(3u<<shift))|(2u<<shift);
+        } else oam[index]=(uint16_t)(240<<8);
+    }
+    drawn=visible;
+}
 void ScJourneyMenuFrame(uint16_t *vram,unsigned base) {
     /* Extend the original frame by two tile rows so Select Scenario fits
      * below Journey even when Resume adds a fifth choice. Idempotent after

@@ -94,7 +94,7 @@ static unsigned execute(ScWorld *w,Interp816 *c,uint8_t *r,
                 int coordinate=(int16_t)word(r,0x1d3);
                 cost=coordinate<0 || (unsigned)coordinate>=ScWorldWidth(w)?3:2;
                 if(cost>budget-cycles) return cycles;
-                ScWorldGuestStep(w,c,r);goto native_c77d;
+                ScWorldGuestStepPrepared(w,c,r);goto native_c77d;
             }
             cost=2+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
@@ -138,7 +138,7 @@ static unsigned execute(ScWorld *w,Interp816 *c,uint8_t *r,
                 int coordinate=(int16_t)word(r,0x1d5);
                 cost=coordinate<0 || (unsigned)coordinate>=ScWorldHeight(w)?3:2;
                 if(cost>budget-cycles) return cycles;
-                ScWorldGuestStep(w,c,r);goto native_c786;
+                ScWorldGuestStepPrepared(w,c,r);goto native_c786;
             }
             cost=2+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
@@ -371,7 +371,7 @@ static unsigned execute(ScWorld *w,Interp816 *c,uint8_t *r,
             if(c->xf || c->mf || c->mf!=false || c->sp<0x100 || c->sp>0x1ffd || !w->active && c->x>0xfdfe) return cycles;
             cost=5+(c->mf?0:1);
             if(cost>budget-cycles) return cycles;
-            if(w->active) {ScWorldGuestStep(w,c,r);addr=w->bank_anchor[1];value=addr==UINT32_MAX?0:word(w->tiles,addr);} else value=word(r,0x10200+c->x);
+            if(w->active) {ScWorldGuestStepPrepared(w,c,r);addr=w->bank_anchor[1];value=addr==UINT32_MAX?0:word(w->tiles,addr);} else value=word(r,0x10200+c->x);
             load(c,value);
             c->pc=0xc7b8;
             c->cyclesUsed=(uint8_t)cost;cycles+=cost;

@@ -71,6 +71,8 @@ bool ScPowerRefreshRestore(ScPowerRefresh *s,uint8_t *ram,ScWorld *world,
     uint8_t *tiles=large?world->tiles:ram+0x10200;
     s->ready=true;s->large=large;s->huge=large && world->huge;s->clock_cells=cells;
     s->traversal_allowed=traversal_allowed(ram);
+    memcpy(s->policy_bitmap[s->traversal_allowed],s->bitmap,cells/8);
+    s->policy_valid[s->traversal_allowed]=true;++s->network_solves;
     memcpy(s->topology_tiles,tiles,2*cells);
     game_speed(s,ram[0x193]);ScRefreshClockObserve(&s->clock,frame);
     publish(s,tiles,0,cells,large?world:NULL);
@@ -122,11 +124,25 @@ bool ScPowerRefreshStep(ScPowerRefresh *s,uint8_t *ram,ScWorld *world,
     }
     bool solved=false,new_bitmap=false;
     if (multiplier>1 && due && !same) {
-        bool equivalent=s->ready && regional && s->different_chunks==0 &&
-            s->traversal_allowed==traversal_allowed(ram);
+        bool graph_same=s->ready && regional && s->different_chunks==0;
+        bool allowed=traversal_allowed(ram);
+        bool equivalent=graph_same && s->traversal_allowed==allowed;
         if(!equivalent) {
-            if (!ScConstructionPowerBitmap(ram,world,rom,size,s->bitmap,sizeof s->bitmap)) return false;
-            new_bitmap=true;s->traversal_allowed=traversal_allowed(ram);
+            static int policy_reference=-1;
+            if(policy_reference<0) {const char *e=getenv("SC_POWER_POLICY_CACHE_REFERENCE");policy_reference=e && *e=='1';}
+            if(!graph_same)memset(s->policy_valid,0,sizeof s->policy_valid);
+            if(!policy_reference && graph_same && s->policy_valid[allowed]) {
+                /* Reuse the same ordered result, including its capacity
+                 * cutoff. Never substitute an unordered flood fill. */
+                memcpy(s->bitmap,s->policy_bitmap[allowed],cells/8);
+                ++s->policy_reuses;
+            } else {
+                if (!ScConstructionPowerBitmap(ram,world,rom,size,s->bitmap,sizeof s->bitmap)) return false;
+                ++s->network_solves;
+                memcpy(s->policy_bitmap[allowed],s->bitmap,cells/8);
+                s->policy_valid[allowed]=true;
+            }
+            new_bitmap=true;s->traversal_allowed=allowed;
         }
         s->ready=true; s->large=large; s->huge=large && world->huge;
         if(equivalent) {
