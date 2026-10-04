@@ -12,6 +12,8 @@ bool ScJourneyMenuRead(uint32_t address,unsigned screen,uint8_t *value);
 unsigned ScJourneyMenuY(bool saved,unsigned selection);
 void ScMapSizeMenuSet(bool active);
 bool ScMapSizeMenuActive(void);
+void ScDevelopmentMenuSet(bool active);
+bool ScDevelopmentMenuActive(void);
 /* Native adviser text is 24 columns, read through the original typewriter. */
 bool ScJourneyMessageRead(unsigned notice,uint32_t address,uint8_t *value);
 /* Original 16-pixel font, emitted into unused native OAM slots on Load City. */

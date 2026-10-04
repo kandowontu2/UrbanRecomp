@@ -3027,6 +3027,37 @@ int main(int argc,char **argv) {
     if(getenv("SC_WORLD_COVERAGE_PACK_TEST")) {coverage_pack_equivalence();interp816_free(cpu);free(data);return 0;}
     if(getenv("SC_WORLD_COVERAGE_CLEAR_TEST")) {coverage_clear_equivalence();interp816_free(cpu);free(data);return 0;}
     if(getenv("SC_WORLD_COUNTER_TEST")) {spatial_counter_regression();interp816_free(cpu);free(data);return 0;}
+    if(argc==3 && !strcmp(argv[2],"--mega")) {
+        ScWorldReset(&world);world.active=world.huge=world.giant=world.colossal=world.mega=true;
+        world.development_speed=20;
+        assert(ScWorldWidth(&world)==3840 && ScWorldHeight(&world)==3200);
+        memset(ram,0,sizeof ram);memset(visits,0,sizeof visits);
+        routine(0x8228,0,0);routine(0x8297,0,0);
+        for(unsigned i=0;i<ScWorldCells(&world);++i) assert(visits[i]==1);
+        assert(world.scan_y==3200);
+        world.coord[2][0]=3839;world.coord[2][1]=3199;
+        ScWorldPutCell(&world,3839,3199,0x8123);ScWorldPutCell(&world,255,127,0x123);
+        routine(0x849e,255|(127<<8),0);assert(cpu->a==0x8123);
+        routine(0x84c4,255|(127<<8),0x8001);assert(ScWorldCell(&world,3839,3199)==0x8001);
+        assert(ScWorldCell(&world,255,127)==0x123);
+        unsigned power=ScWorldCells(&world)/8;
+        world.fields[5][power-1]=1;routine(0xb152,0,0);
+        assert(ScWorldCell(&world,3839,3199)&0x8000);
+        for(unsigned f=0;f<SC_WORLD_FIELDS;++f)assert(ScWorldFieldSizeWorld(&world,f)<=SC_WORLD_FIELD_BYTES);
+        unsigned end=ScWorldFieldSizeWorld(&world,7);
+        world.fields[7][end-2]=10;routine(0x891f,0,0);
+        assert(world.fields[7][end-2]==9 && world.field_scan==end);
+        assert(ScWorldEncode(&world,data,size) && ScWorldDecode(&copy,data,size));
+        assert(!memcmp(&world,&copy,sizeof world));
+        native_cities=malloc(ScWorldCitiesSize());assert(native_cities);ScWorldCitiesInit(native_cities);
+        assert(ScWorldCitySave(native_cities,native_sram,0,&world));
+        world.development_speed=50;assert(ScWorldCitySave(native_cities,native_sram,1,&world));
+        assert(ScWorldCityLoad(&copy,native_cities,ScWorldCitiesSize(),native_sram,0) && ScWorldDevelopmentSpeed(&copy)==20 && copy.mega);
+        assert(ScWorldCityLoad(&copy,native_cities,ScWorldCitiesSize(),native_sram,1) && ScWorldDevelopmentSpeed(&copy)==50 && copy.mega);
+        native_sram[0x4100]^=1;assert(!ScWorldCityLoad(&copy,native_cities,ScWorldCitiesSize(),native_sram,1));
+        free(native_cities);interp816_free(cpu);free(data);
+        puts("PASS: all 12,288,000 cells visited once, far-corner power/tile addressing, full field scans, independent city speeds and save roundtrips");return 0;
+    }
     if(argc==3 && !strcmp(argv[2],"--colossal")) goto colossal;
     if(getenv("SC_WORLD_POWER_VISIT_TEST")) {power_visit_equivalence();interp816_free(cpu);free(data);return 0;}
     if(getenv("SC_WORLD_HOUSE_SITE_TEST")) {house_site_equivalence();interp816_free(cpu);free(data);return 0;}

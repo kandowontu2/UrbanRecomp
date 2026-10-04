@@ -1,6 +1,24 @@
 # Enhanced fork changelog
 
-## Unreleased — free keyboard pan and city entry
+## Unreleased — city setup, larger maps and camera controls
+
+- Add a native-font DEVELOPMENT SPEED page after map-size selection: 1x, 3x,
+  5x, 10x, 20x and 50x. Store each city's default with its map metadata and
+  restore it on load. F12 DEVELOPMENT SPEED defaults to OFF, which uses that
+  city's speed; explicit overrides include 3x and 20x and do not change its
+  saved default. Older cities use 1x. Journey retains the chosen speed through
+  both border expansions.
+- Add 3840x3200 terrain, construction, simulation fields, camera/minimap bounds
+  and saves. Migrate earlier world records and existing saved Test City 3 data.
+  Widen generation's scatter counter and move the larger temporary power bitmap
+  off the Windows stack.
+- Hold Shift+Tab for four times Tab's frame limit and work budget (up to 24
+  guest frames per displayed frame). Actual acceleration depends on workload;
+  ordinary Tab keeps its six-frame adaptive pacing.
+- Show the original-size navigation minimap while middle/right-button drag
+  panning. Project the viewport marker from the free camera and selected zoom,
+  preserving native tool captions and avoiding changes to guest OAM.
+
 
 - Route physical X + arrow keys through the free host camera. Reach the full
   map after mouse panning, retain zoom and stop on stationary holds. Consume

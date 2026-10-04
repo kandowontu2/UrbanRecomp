@@ -80,13 +80,29 @@ static void menu_test(void) {
     c->k=c->db=0;c->pc=0x8ea9;c->sp=0x1ffd;c->e=c->mf=c->xf=false;
     put(0x1ffe,0x6fff);unsigned steps=0;
     while(c->pc!=0x7000) {assert(++steps<20000);interp816_runOpcode(c);}
-    assert(word(ram,0x253)==25*4);
-    for(unsigned row=0;row<6;++row) for(unsigned i=0;i<(row==5?5:4);++i)
-      assert(ram[0x2001+4*(row*4+i)]==96+20*row);
-    uint8_t wrap;assert(ScJourneyMenuRead(0x03d34c,3,&wrap) && wrap==6);
-    assert(ScJourneyMenuRead(0x03d359,3,&wrap) && wrap==5);
-    assert(ScJourneyMenuY(false,5)==196);
-    interp816_free(c);ScMapSizeMenuSet(false);assert(!ScMapSizeMenuActive());
+    assert(word(ram,0x253)==30*4);
+    unsigned sprite=0;
+    for(unsigned row=0;row<7;++row) for(unsigned i=0;i<(row>=5?5:4);++i,++sprite)
+      assert(ram[0x2001+4*sprite]==ScJourneyMenuY(false,row));
+    uint8_t wrap;assert(ScJourneyMenuRead(0x03d34c,3,&wrap) && wrap==7);
+    assert(ScJourneyMenuRead(0x03d359,3,&wrap) && wrap==6);
+    assert(ScJourneyMenuY(false,6)==199);
+    interp816_free(c);ScDevelopmentMenuSet(true);
+    assert(!ScMapSizeMenuActive() && ScDevelopmentMenuActive());
+    assert(ScJourneyMenuRead(0x03d34c,3,&wrap) && wrap==7);
+    assert(ScJourneyMenuRead(0x03d359,3,&wrap) && wrap==6);
+    memset(ram,0,sizeof ram);put(0x261,15);put(0x25d,136);put(0x25f,116);
+    c=interp816_init(NULL,read_bus,write_bus);assert(c);interp816_reset(c);
+    c->k=c->db=0;c->pc=0x8ea9;c->sp=0x1ffd;c->dp=0;c->e=c->mf=c->xf=false;
+    put(0x1ffe,0x6fff);steps=0;
+    while(c->pc!=0x7000) {assert(++steps<20000);interp816_runOpcode(c);}
+    /* DEVELOPMENT SPEED takes nine original-font sprites, then six options. */
+    assert(word(ram,0x253)==18*4);
+    sprite=9;
+    for(unsigned row=1;row<=6;++row) for(unsigned j=0;j<(row<=3?1:2);++j,++sprite)
+        assert(ram[0x2001+4*sprite]==ScJourneyMenuY(false,row));
+    assert(ScJourneyMenuY(false,6)==199);
+    interp816_free(c);ScMapSizeMenuSet(false);assert(!ScDevelopmentMenuActive());
 
 }
 static void saved_city_menu_test(void) {
@@ -127,28 +143,32 @@ static void saved(void) {
     }
     free(p);
 }
-static void legacy_giant_save(void) {
-    ScWorldReset(&world);world.active=world.huge=world.giant=true;
-    world.scan_x=959;world.scan_y=799;world.center_x=900;world.center_y=750;world.center_valid=true;
-    ScWorldPutCell(&world,959,799,0xc123);
-    size_t old_size=80+1536000;
+static void legacy_large_save(unsigned version) {
+    ScWorldReset(&world);world.active=world.huge=world.giant=true;world.colossal=version==5;
+    unsigned width=ScWorldWidth(&world),height=ScWorldHeight(&world);
+    unsigned tile_bytes=width*height*2,scale=version==5?64:16;
+    world.scan_x=width-1;world.scan_y=height-1;world.center_x=width-60;world.center_y=height-50;world.center_valid=true;
+    ScWorldPutCell(&world,width-1,height-1,0xc123);
+    size_t old_size=80+tile_bytes;
     for(unsigned f=0;f<SC_WORLD_FIELDS;++f) {
-        unsigned n=f<17?ScWorldFieldSize(f)*16:131070;
+        unsigned n=f<17?ScWorldFieldSize(f)*scale:131070;
         world.fields[f][n-1]=(uint8_t)(197+f);old_size+=n;
     }
     uint8_t *full=malloc(ScWorldEncodedSize()),*old=calloc(1,old_size);
     assert(full && old && ScWorldEncode(&world,full,ScWorldEncodedSize()));
-    memcpy(old,full,80);old[7]=4;
+    assert(old_size==ScWorldEncodedVersionSize(version));
+    memcpy(old,full,80);old[7]=version;
     for(unsigned i=0;i<4;++i) old[20+i]=(uint8_t)(old_size>>(8*i));
-    memcpy(old+80,world.tiles,1536000);size_t offset=80+1536000;
+    memcpy(old+80,world.tiles,tile_bytes);size_t offset=80+tile_bytes;
     for(unsigned f=0;f<SC_WORLD_FIELDS;++f) {
-        unsigned n=f<17?ScWorldFieldSize(f)*16:131070;
+        unsigned n=f<17?ScWorldFieldSize(f)*scale:131070;
         memcpy(old+offset,world.fields[f],n);offset+=n;
     }
     assert(ScWorldDecode(&decoded,old,old_size) && !memcmp(&world,&decoded,sizeof world));
+    assert(ScWorldDevelopmentSpeed(&decoded)==1);
     size_t cities_size=24+2*(16+old_size);
     uint8_t *cities=calloc(1,cities_size),*upgraded=malloc(ScWorldCitiesSize());assert(cities && upgraded);
-    memcpy(cities,"SCWCITY",7);cities[7]=4;
+    memcpy(cities,"SCWCITY",7);cities[7]=version;
     const size_t metadata[]={old_size,cities_size,2};
     for(unsigned k=0;k<3;++k) for(unsigned i=0;i<4;++i) cities[8+4*k+i]=metadata[k]>>(8*i);
     uint8_t *slot=cities+24+16+old_size;
@@ -182,17 +202,17 @@ static void preserved(unsigned ow,unsigned oh,unsigned dx,unsigned dy,bool host)
 }
 int main(int argc,char **argv) {
     assert(argc==2);FILE *f=fopen(argv[1],"rb");assert(f);
-    assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);menu_test();saved_city_menu_test();legacy_giant_save();
+    assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);menu_test();saved_city_menu_test();legacy_large_save(4);legacy_large_save(5);
     memset(ram,0,sizeof ram);ScWorldReset(&world);
     for(unsigned i=0;i<sizeof ram;++i) ram[i]=(uint8_t)(i*13+9);
     put(0x1bd,20);put(0x1bf,15);put(0x205,37);put(0x207,32);
     ram[0xba9]=60;ram[0xbaa]=50;
     memcpy(original,ram,sizeof ram);
     assert(!ScJourneyExpand(&world,ram,SC_POPULATION_MAX)); /* ordinary city */
-    world.journey=true;assert(!ScJourneyExpand(&world,ram,99999));saved();
+    world.journey=true;world.development_speed=20;assert(!ScJourneyExpand(&world,ram,99999));saved();
     ScJourneyObservePopulation(&world,100000); /* crossing is latched before a safe boundary */
     assert(ScJourneyExpand(&world,ram,99980)==1 && world.active && !world.huge);
-    preserved(120,100,64,48,false);assert(word(ram,0x205)==101 && word(ram,0x207)==80);
+    assert(ScWorldDevelopmentSpeed(&world)==20);preserved(120,100,64,48,false);assert(word(ram,0x205)==101 && word(ram,0x207)==80);
     world.journey_announcing=true;saved();
     assert(!ScJourneyExpand(&world,ram,1000000)); /* finish Big celebration first */
     assert(world.journey_target==2);
@@ -211,6 +231,18 @@ int main(int argc,char **argv) {
     assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
     assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));
     assert(ScWorldCell(&world,470,381)&0x8000);
+    /* Real building and infrastructure handlers beyond every older map bound. */
+    ScWorldReset(&world);world.active=world.huge=world.giant=world.colossal=world.mega=true;
+    memset(ram,0,sizeof ram);put(0xb9d,60000);
+    const unsigned tools[]={14,3,1,2,4};
+    const unsigned xs[]={3800,3803,3820,3822,3830},ys[]={3160,3161,3170,3172,3180};
+    for(unsigned i=0;i<sizeof tools/sizeof *tools;++i) {
+        assert(ScConstructionPlanWorld(&plan,&world,tools[i],xs[i],ys[i],xs[i]+(i==1?7:0),ys[i]));
+        assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
+        assert(ScWorldCell(&world,xs[i],ys[i])&1023);
+    }
+    assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));
+    assert(ScWorldCell(&world,3810,3161)&0x8000);
     for(unsigned notice=1;notice<=2;++notice) {
         uint8_t v;unsigned n=0;while(ScJourneyMessageRead(notice,0x0ffd00+n,&v) && v!=255) {
             assert(v>=32 && v<=126);assert(++n<=24*13);

@@ -25,8 +25,12 @@ static void free_camera_test(void) {
     assert(r->scroll_x==-56 && r->scroll_y==-302); /* 64 screen pixels beyond top */
     ScRendererResetCamera(r);assert(!r->camera_x && !r->camera_y);
     assert(r->scroll_x==2400 && r->scroll_y==2400 && r->map_zoom==.25);
+    world->mega=true;
+    ScRendererPan(r,100000,100000);
+    assert(r->scroll_x==27968 && r->scroll_y==24026);
+    assert(r->map_zoom==.25 && r->native_scroll_x==2400 && r->native_scroll_y==2400);
     free(r);free(world);
-    puts("PASS: fractional host camera, no idle drift, preserved zoom/native camera and full 1920x1600 bounds");
+    puts("PASS: fractional host camera, no idle drift, preserved zoom/native camera and full 1920x1600/3840x3200 bounds");
 }
 int main(void) {
     free_camera_test();

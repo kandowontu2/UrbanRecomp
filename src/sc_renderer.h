@@ -55,7 +55,7 @@ typedef struct ScRenderer {
     uint16_t wood_rows[32];
     bool title_live;
     bool city_frame;
-    bool split_hud, pan_frame;
+    bool split_hud, pan_frame, mouse_panning, mouse_minimap_frame;
     bool city_input, pointer_active, pointer_hud, pointer_hidden;
     bool clipboard_cursor;
     bool clipboard_font_valid;
@@ -77,7 +77,7 @@ typedef struct ScRenderer {
     uint8_t changed_cells[SC_WORLD_MAX_CELLS]; /* committed cells bypass stale native tile staging */
     uint64_t map_revisions[SC_WORLD_TILE_CHUNKS];
     unsigned map_bytes;
-    bool map_valid, map_hold, map_dark, held_large, held_huge, held_giant, held_colossal;
+    bool map_valid, map_hold, map_dark, held_large, held_huge, held_giant, held_colossal, held_mega;
     int map_age, held_x, held_y;
     uint8_t repaired_edges[224]; /* per row: bit 0 left 8 px, bit 1 right */
     bool sylt;                   /* the ninth scenario card is on */

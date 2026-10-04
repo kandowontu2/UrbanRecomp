@@ -8,10 +8,10 @@ enum {
     SC_WORLD_WIDTH = 240, SC_WORLD_HEIGHT = 200,
     SC_WORLD_CELLS = SC_WORLD_WIDTH * SC_WORLD_HEIGHT,
     SC_WORLD_TILE_BYTES = SC_WORLD_CELLS * 2,
-    SC_WORLD_MAX_WIDTH = 1920, SC_WORLD_MAX_HEIGHT = 1600,
+    SC_WORLD_MAX_WIDTH = 3840, SC_WORLD_MAX_HEIGHT = 3200,
     SC_WORLD_MAX_CELLS = SC_WORLD_MAX_WIDTH * SC_WORLD_MAX_HEIGHT,
     SC_WORLD_MAX_TILE_BYTES = SC_WORLD_MAX_CELLS * 2,
-    SC_WORLD_FIELDS = 19, SC_WORLD_FIELD_BYTES = 768000,
+    SC_WORLD_FIELDS = 19, SC_WORLD_FIELD_BYTES = 3072000,
     SC_WORLD_TILE_CHUNK_BYTES = 512,
     SC_WORLD_TILE_CHUNKS = SC_WORLD_MAX_TILE_BYTES / SC_WORLD_TILE_CHUNK_BYTES
 };
@@ -24,7 +24,9 @@ typedef struct ScWorld {
     bool huge;
     bool giant;
     bool colossal;
+    bool mega; /* 3840x3200; retains colossal full-index guest hooks */
     bool test_city; /* hidden City 3; saved with the world, including save states */
+    uint8_t development_speed; /* city default; zero in legacy states means 1x */
     bool scan_spread; /* resumable, bijective city scan across distant districts */
     uint16_t scan_x, scan_y;
     uint16_t center_x,center_y;
@@ -40,8 +42,15 @@ typedef struct ScWorld {
     uint8_t fields[SC_WORLD_FIELDS][SC_WORLD_FIELD_BYTES];
 } ScWorld;
 
+static inline bool ScWorldDevelopmentSpeedValid(unsigned speed) {
+    return speed==1 || speed==3 || speed==5 || speed==10 || speed==20 || speed==50;
+}
+static inline unsigned ScWorldDevelopmentSpeed(const ScWorld *w) {
+    return w && ScWorldDevelopmentSpeedValid(w->development_speed)?w->development_speed:1;
+}
+
 extern const ScWorldField ScWorldFields[SC_WORLD_FIELDS];
-static inline unsigned ScWorldScale(const ScWorld *w) { return w && w->colossal?8:w && w->giant?4:w && w->huge?2:1; }
+static inline unsigned ScWorldScale(const ScWorld *w) { return w && w->mega?16:w && w->colossal?8:w && w->giant?4:w && w->huge?2:1; }
 static inline unsigned ScWorldWidth(const ScWorld *w) { return 240*ScWorldScale(w); }
 static inline unsigned ScWorldHeight(const ScWorld *w) { return 200*ScWorldScale(w); }
 static inline unsigned ScWorldCells(const ScWorld *w) { return ScWorldWidth(w)*ScWorldHeight(w); }
@@ -53,6 +62,7 @@ bool ScWorldAdvanceScan(ScWorld *world);
 void ScWorldGenerate(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateHuge(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateGiant(ScWorld *world, ScMapGenPrng *prng);
+void ScWorldGenerateMega(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateColossal(ScWorld *world, ScMapGenPrng *prng);
 bool ScWorldBounds(int x, int y);
 uint16_t ScWorldCell(const ScWorld *world, int x, int y);
@@ -75,6 +85,7 @@ unsigned ScWorldFieldSizeWorld(const ScWorld *w,unsigned field);
  * here. Neighbour bases (e.g. $b16c = $b16e-2) retain their row/column meaning. */
 bool ScWorldFieldResolve(uint16_t base, unsigned *field, int *displacement);
 size_t ScWorldEncodedSize(void);
+size_t ScWorldEncodedVersionSize(unsigned version);
 bool ScWorldEncode(const ScWorld *world, uint8_t *data, size_t size);
 bool ScWorldDecode(ScWorld *world, const uint8_t *data, size_t size);
 size_t ScWorldCitiesSize(void);

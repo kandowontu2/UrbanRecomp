@@ -276,13 +276,14 @@ bool ScConstructionPowerBitmap(const uint8_t *ram,const ScWorld *w,const uint8_t
   free(stack);return true;
 }
 bool ScConstructionRefreshPower(uint8_t *ram,ScWorld *w,const uint8_t *rom,size_t size) {
-  uint8_t power[SC_WORLD_MAX_CELLS/8];
-  if (!ScConstructionPowerBitmap(ram,w,rom,size,power,sizeof power)) return false;
+  unsigned bytes=w && w->active?ScWorldCells(w)/8:1500;
+  uint8_t *power=malloc(bytes);if(!power)return false;
+  if (!ScConstructionPowerBitmap(ram,w,rom,size,power,bytes)) {free(power);return false;}
   bool large=w && w->active;
   ScWorldPublishPower(large?w:NULL,large?w->tiles:ram+0x10200,power,0,large?ScWorldCells(w):12000);
   if (w && w->active) memcpy(w->fields[5],power,ScWorldCells(w)/8);
   else memcpy(ram+0x1a598,power,1500);
-  return true;
+  free(power);return true;
 }
 
 /* Generated districts need live density, land value and service fields before

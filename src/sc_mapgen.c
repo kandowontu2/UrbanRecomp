@@ -40,8 +40,8 @@
 
 /* Geometry belongs to each generation, so a large map cannot leak its
  * stride into a subsequent stock generation or the standalone helpers. */
-static unsigned map_width(const ScMapGenState *st) { return st->width==1920 && st->height==1600 ? 1920 : st->width==960 && st->height==800 ? 960 : st->width==480 && st->height==400 ? 480 : st->width==240 && st->height==200 ? 240 : 120; }
-static unsigned map_height(const ScMapGenState *st) { return st->width==1920 && st->height==1600 ? 1600 : st->width==960 && st->height==800 ? 800 : st->width==480 && st->height==400 ? 400 : st->width==240 && st->height==200 ? 200 : 100; }
+static unsigned map_width(const ScMapGenState *st) { return st->width==3840 && st->height==3200 ? 3840 : st->width==1920 && st->height==1600 ? 1920 : st->width==960 && st->height==800 ? 960 : st->width==480 && st->height==400 ? 480 : st->width==240 && st->height==200 ? 240 : 120; }
+static unsigned map_height(const ScMapGenState *st) { return st->width==3840 && st->height==3200 ? 3200 : st->width==1920 && st->height==1600 ? 1600 : st->width==960 && st->height==800 ? 800 : st->width==480 && st->height==400 ? 400 : st->width==240 && st->height==200 ? 200 : 100; }
 static int map_bounds(const ScMapGenState *st, int x, int y) {
     return x>=0 && y>=0 && (unsigned)x<map_width(st) && (unsigned)y<map_height(st);
 }
@@ -293,7 +293,7 @@ void sc_mapgen_feature_centre(ScMapGenPrng *p, ScMapGenState *st) {
  * so the stream position depends on the count drawn first. Getting that order
  * wrong desynchronises everything after it. */
 void sc_mapgen_feature_scatter(ScMapGenPrng *p, ScMapGenState *st) {
-    uint16_t count = (uint16_t)((sc_mapgen_rand_below(p, 0x0064) + 0x0032u) * (map_width(st)*map_height(st)/SC_MAPGEN_CELLS));
+    unsigned count = (sc_mapgen_rand_below(p, 0x0064) + 0x0032u) * (map_width(st)*map_height(st)/SC_MAPGEN_CELLS);
     st->count = count;
     while (count) {
         st->px = sc_mapgen_rand_below(p, map_width(st)-1);   /* $044b, 0..119 */
@@ -523,6 +523,7 @@ void sc_mapgen_generate(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,0); 
 void sc_mapgen_generate_large(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,1); }
 void sc_mapgen_generate_huge(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,2); }
 void sc_mapgen_generate_giant(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,3); }
+void sc_mapgen_generate_mega(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,5); }
 void sc_mapgen_generate_colossal(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,4); }
 
 /* ── What is decompiled, and what the comparison says ──────────────────

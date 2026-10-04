@@ -130,8 +130,8 @@ fail:free(prototype);free(plan);return false;
 }
 size_t ScTestCityRecordSize(void) {return 24+0x8000+ScWorldEncodedSize()+SC_POPULATION_BYTES;}
 bool ScTestCityRecordValid(const uint8_t *p,size_t n) {
-    return p && n==ScTestCityRecordSize() && !memcmp(p,"SCTEST3",7) && p[7]==1 &&
-        get32(p,8)==n && get32(p,12)==ScWorldEncodedSize() && get32(p,16)==SC_POPULATION_BYTES &&
+    return p && n>=24+0x8000+48+SC_POPULATION_BYTES && n<=ScTestCityRecordSize() && !memcmp(p,"SCTEST3",7) && p[7]==1 &&
+        get32(p,8)==n && get32(p,12)==ScWorldEncodedVersionSize(p[24+0x8000+7]) && n==24+0x8000+get32(p,12)+SC_POPULATION_BYTES && get32(p,16)==SC_POPULATION_BYTES &&
         !get32(p,20) && p[24+5]==1;
 }
 const uint8_t *ScTestCityNativeSave(const uint8_t *p,size_t n) {return ScTestCityRecordValid(p,n)?p+24:NULL;}
@@ -143,6 +143,6 @@ bool ScTestCityEncode(uint8_t *p,size_t n,const uint8_t *sram,const ScWorld *w,c
     ScPopulationEncode(pop,p+24+0x8000+ScWorldEncodedSize());return true;
 }
 bool ScTestCityDecode(const uint8_t *p,size_t n,ScWorld *w,ScPopulation *pop) {
-    return ScTestCityRecordValid(p,n) && ScWorldDecode(w,p+24+0x8000,ScWorldEncodedSize()) && w->active && w->colossal && w->test_city &&
-        ScPopulationDecode(pop,p+24+0x8000+ScWorldEncodedSize(),SC_POPULATION_BYTES);
+    return ScTestCityRecordValid(p,n) && ScWorldDecode(w,p+24+0x8000,get32(p,12)) && w->active && w->colossal && w->test_city &&
+        ScPopulationDecode(pop,p+24+0x8000+get32(p,12),SC_POPULATION_BYTES);
 }

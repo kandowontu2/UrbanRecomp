@@ -17,7 +17,7 @@ static uint8_t snapshot_ram[0x20000], expected_ram[0x20000], initial_ram[0x20000
 static ScWorld initial_world;
 static uint16_t product, quotient, dividend;
 static uint8_t multiplicand;
-static bool large,huge,giant,colossal;
+static bool large,huge,giant,colossal,mega;
 static bool growth_fixture, powered_fixture=true;
 static uint64_t grown_population;
 static ScWorld world,snapshot_world,expected_world;
@@ -53,9 +53,9 @@ static void put(unsigned p,unsigned v) { ram[p]=(uint8_t)v; ram[p+1]=(uint8_t)(v
 static unsigned word(unsigned p) { return ram[p]|((unsigned)ram[p+1]<<8); }
 static ScDevelopment run(uint16_t entry,unsigned tile,int speed,bool hook) {
     memset(ram,0,sizeof ram);
-    memset(&guest,0,sizeof guest); ScWorldReset(&world); world.active=large;world.huge=huge;world.giant=giant;world.colossal=colossal;
+    memset(&guest,0,sizeof guest); ScWorldReset(&world); world.active=large;world.huge=huge;world.giant=giant;world.colossal=colossal;world.mega=mega;
     /* Powered zone, centered away from map bounds. */
-    unsigned zx=colossal?1800:giant?900:huge?300:large?200:60,zy=colossal?1500:giant?750:huge?280:large?180:50;
+    unsigned zx=mega?3800:colossal?1800:giant?900:huge?300:large?200:60,zy=mega?3100:colossal?1500:giant?750:huge?280:large?180:50;
     unsigned cell=(zy*(large?ScWorldWidth(&world):120)+zx)*2;
     world.map_anchor=cell;
     world.coord[2][0]=zx;world.coord[2][1]=zy;
@@ -361,9 +361,9 @@ static void distributed_batches(void) {
     const unsigned entries[]={0x937a,0x92ce,0x922f},tiles[]={0x84,0x13b,0x1f8};
     growth_fixture=true;
     unsigned cases=0;
-    for(unsigned map=0;map<5;++map) for(unsigned kind=0;kind<3;++kind)
+    for(unsigned map=0;map<6;++map) for(unsigned kind=0;kind<3;++kind)
     for(unsigned powered=0;powered<2;++powered) {
-        large=map>0;huge=map>=2;giant=map>=3;colossal=map==4;powered_fixture=powered;
+        large=map>0;huge=map>=2;giant=map>=3;colossal=map>=4;mega=map==5;powered_fixture=powered;
         run(entries[kind],tiles[kind],1,true);
         memcpy(expected_ram,ram,sizeof ram);expected_world=world;
         memcpy(ram,initial_ram,sizeof ram);world=initial_world;
@@ -402,13 +402,13 @@ static void distributed_batches(void) {
     }
     /* Exact requested weighting when work fits the time allowance; startup
      * synchronization is one pass, then fractional credits govern the rate. */
-    for(unsigned i=0;i<5;++i) {
-        const unsigned speeds[]={1,2,5,10,50};
+    const unsigned batch_speeds[]={1,2,3,5,10,20,50};
+    for(unsigned i=0;i<sizeof batch_speeds/sizeof *batch_speeds;++i) {
         memcpy(ram,initial_ram,sizeof ram);world=initial_world;
         ScDevelopmentBatches *b=ScDevelopmentBatchesCreate();assert(b);
         for(unsigned frame=0;frame<=800;++frame)
-            ScDevelopmentBatchesRun(b,&world,ram,rom,sizeof rom,frame,speeds[i],1000,NULL,0,0,NULL);
-        assert(ScDevelopmentBatchesAttempts(b)==speeds[i]+1);
+            ScDevelopmentBatchesRun(b,&world,ram,rom,sizeof rom,frame,batch_speeds[i],1000,NULL,0,0,NULL);
+        assert(ScDevelopmentBatchesAttempts(b)==batch_speeds[i]+1);
         unsigned before=(unsigned)ScDevelopmentBatchesAttempts(b);ram[0x193]=3;
         assert(!ScDevelopmentBatchesRun(b,&world,ram,rom,sizeof rom,900,50,1000,NULL,0,0,NULL));
         assert(ScDevelopmentBatchesAttempts(b)==before);
@@ -444,14 +444,18 @@ int main(int argc,char **argv) {
     FILE *f=fopen(argv[1],"rb"); assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom); fclose(f);
     if(getenv("SC_BATCH_TEST_ONLY")) {distributed_batches();return 0;}
-    native_helpers();native_house_candidates();native_house_mutations();native_batches();if(getenv("SC_NATIVE_HELPER_TEST")) return 0;
+    if(!getenv("SC_SPEED_TEST_ONLY")) {
+        native_helpers();native_house_candidates();native_house_mutations();native_batches();
+        if(getenv("SC_NATIVE_HELPER_TEST")) return 0;
+    }
     const uint16_t entries[]={0x937a,0x92ce,0x922f};
     const unsigned tiles[]={0x99,0x144,0x201};
-    const int speeds[]={1,2,5,10,50};
+    const int speeds[]={1,2,3,5,10,20,50};
+    const int speed_count=sizeof speeds/sizeof *speeds;
     for (int z=0;z<3;++z) {
         run(entries[z],tiles[z],1,false); memcpy(baseline,ram,sizeof ram);
         run(entries[z],tiles[z],1,true); assert(!memcmp(baseline,ram,sizeof ram));
-        for (int i=1;i<5;++i) {
+        for (int i=1;i<speed_count;++i) {
             ScDevelopment s=run(entries[z],tiles[z],speeds[i],true);
             printf("zone=%04x speed=%d attempts=%llu extras=%llu\n",entries[z],speeds[i],
                    (unsigned long long)s.attempts,(unsigned long long)s.extra_attempts);
@@ -460,14 +464,14 @@ int main(int argc,char **argv) {
         }
     }
     large=true;
-    for (int z=0;z<3;++z) for(int i=0;i<5;++i) {
+    for (int z=0;z<3;++z) for(int i=0;i<speed_count;++i) {
         ScDevelopment s=run(entries[z],tiles[z],speeds[i],true);
         if (speeds[i]>1) assert(s.attempts==(unsigned)speeds[i] && s.extra_attempts==(unsigned)speeds[i]-1);
     }
     growth_fixture=true;
     const unsigned empty[]={0x84,0x13b,0x1fc};
-    for(int size=0;size<5;++size) for (int z=0;z<3;++z) {
-        large=size>0;huge=size>=2;giant=size>=3;colossal=size==4;powered_fixture=true;
+    for(int size=0;size<6;++size) for (int z=0;z<3;++z) {
+        large=size>0;huge=size>=2;giant=size>=3;colossal=size>=4;mega=size==5;powered_fixture=true;
         run(entries[z],empty[z],1,true);uint64_t normal=grown_population;
         run(entries[z],empty[z],50,true);assert(grown_population>normal);
         powered_fixture=false;

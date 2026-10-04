@@ -175,7 +175,7 @@ static void find_lights(ScRenderer *r,const Ppu *p) {
 static unsigned cell_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
                            int x,int y,bool overlay) {
     bool large=r->map_hold?r->held_large:r->world && r->world->active;
-    unsigned width=large?(r->map_hold?(r->held_colossal?1920:r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120,height=large?(r->map_hold?(r->held_colossal?1600:r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
+    unsigned width=large?(r->map_hold?(r->held_mega?3840:r->held_colossal?1920:r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120,height=large?(r->map_hold?(r->held_mega?3200:r->held_colossal?1600:r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
     if (!r->rom || x<0 || y<0 || (unsigned)x>=width*8 || (unsigned)y>=height*8) return 0;
     unsigned offset_cell=((y/8)*width+x/8)*2;
     const uint8_t *map=large?r->world->tiles:ram+MAP;
@@ -298,7 +298,7 @@ static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
         ScObjCopyBuffer(r->held_ppu,p);
         r->held_x=r->scroll_x+r->scroll_adjust_x;
         r->held_y=r->scroll_y+r->scroll_adjust_y;
-        r->held_large=large; r->held_huge=large && r->world->huge;r->held_giant=large && r->world->giant;r->held_colossal=large && r->world->colossal;
+        r->held_large=large; r->held_huge=large && r->world->huge;r->held_giant=large && r->world->giant;r->held_colossal=large && r->world->colossal;r->held_mega=large && r->world->mega;
     }
     r->map_bytes=bytes;r->map_valid=true;
 }
@@ -718,8 +718,8 @@ static uint32_t terrain_planes(const ScRenderer *r,const Ppu *p,const uint8_t *r
                               int x,int y,bool roof,unsigned *word) {
     *word=0;
     bool large=r->map_hold?r->held_large:r->world && r->world->active;
-    unsigned width=large?(r->map_hold?(r->held_colossal?1920:r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120;
-    unsigned height=large?(r->map_hold?(r->held_colossal?1600:r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
+    unsigned width=large?(r->map_hold?(r->held_mega?3840:r->held_colossal?1920:r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120;
+    unsigned height=large?(r->map_hold?(r->held_mega?3200:r->held_colossal?1600:r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
     if(x<0 || y<0 || (unsigned)x>=width*8 || (unsigned)y>=height*8) return 0;
     const uint8_t *map=r->map_hold?r->held_map:large?r->world->tiles:ram+MAP;
     unsigned cell=u16(map,2*((y/8)*width+x/8))&1023;
@@ -988,8 +988,8 @@ static void terrain_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y,int 
     if(repair) row->math|=SC_ROW_NATIVE_REPAIR|(staging?SC_ROW_STAGING_CHECK:0)|
         (hud?SC_ROW_CITY_HUD:0)|(hud && y<46?SC_ROW_HUD_TOP:0);
     bool large=r->map_hold?r->held_large:r->world && r->world->active;
-    unsigned width=large?(r->map_hold?(r->held_colossal?1920:r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120;
-    unsigned height=large?(r->map_hold?(r->held_colossal?1600:r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
+    unsigned width=large?(r->map_hold?(r->held_mega?3840:r->held_colossal?1920:r->held_giant?960:r->held_huge?480:240):ScWorldWidth(r->world)):120;
+    unsigned height=large?(r->map_hold?(r->held_mega?3200:r->held_colossal?1600:r->held_giant?800:r->held_huge?400:200):ScWorldHeight(r->world)):100;
     const uint8_t *map=r->map_hold?r->held_map:large?r->world->tiles:ram+MAP;
     static int capture_reference=-1;
     if(capture_reference<0) {const char *e=getenv("SC_TERRAIN_CAPTURE_REFERENCE");capture_reference=e && *e=='1';}
@@ -1920,8 +1920,8 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
             }
         }
     }
-    if (!r->pan_frame) return;
-    if(!r->zoom_frame) for (int slot=39;slot<=52;++slot) {
+    if (!r->pan_frame && !r->mouse_minimap_frame) return;
+    if(!r->zoom_frame && r->pan_frame) for (int slot=39;slot<=52;++slot) {
         int ox=sprite_x(p,slot); if (ox>=256) ox-=512;
         int row=y-(p->oam[slot*2]>>8);
         if (row<0 || row>=64) continue;
@@ -1932,7 +1932,19 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
         }
     }
     /* Earlier OAM slots win. The mini frame and arrows are opaque UI sprites. */
-    for (int slot=52;slot>=40;--slot) {
+    if(r->mouse_minimap_frame && !r->pan_frame) {
+        /* Ordinary tool captions reuse the native pan OAM slots. Draw the
+         * same nine 16px frame tiles directly, keeping OAM and guest mode intact. */
+        for(unsigned sy=0;sy<3;++sy) for(unsigned sx=0;sx<3;++sx) {
+            int row=y-46-(int)sy*16;
+            for(int x=0;x<16;++x) {
+                unsigned ci=sprite_word_pixel(p,0x3166+sx*2+sy*32,16,x,row);
+                int target=core+190+shift+(int)sx*16+x;
+                if(ci && target>=0 && target<r->view.width)
+                    out[target]=composite_color(p,ci,ci<192?6:4,0,5,190+sx*16+x);
+            }
+        }
+    } else for (int slot=52;slot>=40;--slot) {
         int dx=0,dy=0;
         if (slot<=48) dx=shift; else arrow_shift(r,slot,&dx,&dy);
         int oy=p->oam[slot*2]>>8;
@@ -1991,6 +2003,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         r->pan_frame=city_live(r,p,ram) && !r->advisor_frame && !u16(ram,0x379) &&
             (p->screenEnabled[0]&16) && (p->oam[81]&255)==0x66 && (p->oam[80]>>8)==46 &&
             sprite_x(p,40)<256; /* high X bit parks the hidden minimap */
+        r->mouse_minimap_frame=hud && r->mouse_panning;
         r->city_input=city_live(r,p,ram) && !r->advisor_frame && !u16(ram,0x379) &&
             !u16(ram,0xd7) && !ram[0x391] && !ram[0xe3]; /* gift picker */
         /* Input/modal gates do not change the terrain's selected zoom.
@@ -2054,7 +2067,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
     fresh_city_row(r,p,ram,line);
     MEASURE_END(r,SC_RENDER_REPAIR,measured);
     measured=MEASURE_BEGIN(r);
-    if (r->split_hud || r->pan_frame) city_hud_row(r,p,ram,line);
+    if (r->split_hud || r->pan_frame || r->mouse_minimap_frame) city_hud_row(r,p,ram,line);
     if (city_live(r,p,ram) && !r->advisor_frame && u16(ram,0x1d7) &&
         (p->screenEnabled[0]&3)==3 && !u16(ram,0x379))
         ScRendererPopulationRow(r,p,r->view,r->split_hud,line,

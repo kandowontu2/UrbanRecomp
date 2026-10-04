@@ -35,6 +35,7 @@ unsigned ScJourneyExpand(ScWorld *w,uint8_t *r,uint64_t population) {
         for(unsigned y=0;y<oh;++y)
             memcpy(next->fields[f]+((y+dy/divy)*nw+dx/divx)*bytes,src+y*ow*bytes,ow*bytes);
     }
+    next->development_speed=w->development_speed;
     next->journey=true;next->journey_notice=(uint8_t)stage;
     next->journey_target=w->journey_target;
     next->center_valid=true;
@@ -59,10 +60,10 @@ unsigned ScJourneyExpand(ScWorld *w,uint8_t *r,uint64_t population) {
 }
 
 enum {MENU_ADDRESS=0xfb4c,MENU_POINTER=0xa182,MENU_SPRITES=32,
-      SIZE_MENU_TOP=96,SIZE_MENU_SPACING=20};
+      SETUP_TITLE_Y=90,SETUP_OPTION_Y=114,SETUP_SPACING=17};
 static uint8_t menu[140],pairs[MENU_SPRITES][2];
 static unsigned menu_size,sprite_count;
-static bool size_menu;
+static bool size_menu,speed_menu;
 static const uint8_t *menu_rom;
 static size_t menu_rom_size;
 static void build_menu(void);
@@ -70,21 +71,24 @@ static unsigned tile(unsigned slot) {
     const unsigned bands[]={0x1e0,0x1c0,0x140,0x160};
     return bands[slot/8]+2*(slot%8);
 }
-unsigned ScJourneyMenuY(bool saved,unsigned selection) {return size_menu?SIZE_MENU_TOP+SIZE_MENU_SPACING*selection:(saved?100:88)+24*selection;}
+unsigned ScJourneyMenuY(bool saved,unsigned selection) {return (speed_menu || size_menu)?(selection?SETUP_OPTION_Y+SETUP_SPACING*(selection-1):SETUP_TITLE_Y):(saved?100:88)+24*selection;}
 void ScJourneyMenuInit(const uint8_t *rom,size_t size) {
-    menu_rom=rom;menu_rom_size=size;size_menu=false;build_menu();
+    menu_rom=rom;menu_rom_size=size;size_menu=speed_menu=false;build_menu();
 }
-void ScMapSizeMenuSet(bool active) {size_menu=active;build_menu();}
+void ScMapSizeMenuSet(bool active) {size_menu=active;speed_menu=false;build_menu();}
 bool ScMapSizeMenuActive(void) {return size_menu;}
+void ScDevelopmentMenuSet(bool active) {speed_menu=active;size_menu=false;build_menu();}
+bool ScDevelopmentMenuActive(void) {return speed_menu;}
 static void build_menu(void) {
     menu_size=sprite_count=0;if(!menu_rom || menu_rom_size!=0x80000) return;
     const char *normal[]={"PRACTICE","START NEW CITY","START NEW JOURNEY","SELECT SCENARIO"};
-    const char *sizes[]={"MAP SIZE","120X100","240X200","480X400","960X800","1920X1600"};
-    const char **lines=size_menu?sizes:normal;
+    const char *sizes[]={"MAP SIZE","120X100","240X200","480X400","960X800","1920X1600","3840X3200"};
+    const char *speeds[]={"DEVELOPMENT SPEED","1X","3X","5X","10X","20X","50X"};
+    const char **lines=speed_menu?speeds:size_menu?sizes:normal;
     unsigned attr=menu_rom[0x23d3]&0xfe,flags_at=0,flags=0;
-    for(unsigned row=0;row<(size_menu?6:4);++row) {
+    for(unsigned row=0;row<(speed_menu?7:size_menu?7:4);++row) {
         /* Center the 136-pixel longest line inside the 192-pixel panel. */
-        const char *s=lines[row];unsigned x=size_menu?74:60;
+        const char *s=lines[row];unsigned x=speed_menu?(row?90:60):size_menu?74:60;
         while(*s) {
             if(*s==' ') {x+=8;++s;continue;}
             const char *end=s;while(*end && *end!=' ') ++end;
@@ -95,7 +99,7 @@ static void build_menu(void) {
                 if(k%8==0) {flags_at=menu_size;menu_size+=2;flags=0;}
                 flags|=(2+(xb+136>=256))<<(2*(k%8));
                 menu[flags_at]=(uint8_t)flags;menu[flags_at+1]=(uint8_t)(flags>>8);
-                menu[menu_size++]=(uint8_t)xb;menu[menu_size++]=(uint8_t)((size_menu?SIZE_MENU_TOP+SIZE_MENU_SPACING*row:112+24*row)-116);
+                menu[menu_size++]=(uint8_t)xb;menu[menu_size++]=(uint8_t)(((speed_menu || size_menu)?(row?SETUP_OPTION_Y+SETUP_SPACING*(row-1):SETUP_TITLE_Y):112+24*row)-116);
                 menu[menu_size++]=(uint8_t)t;menu[menu_size++]=(uint8_t)(attr|(t>>8));
                 x+=16;
             }
@@ -175,8 +179,8 @@ bool ScJourneyMenuRead(uint32_t a,unsigned screen,uint8_t *v) {
     if(a==MENU_POINTER || a==MENU_POINTER+1) {*v=(uint8_t)(MENU_ADDRESS>>(8*(a-MENU_POINTER)));return true;}
     if(a>=MENU_ADDRESS && a<MENU_ADDRESS+menu_size) {*v=menu[a-MENU_ADDRESS];return true;}
     if(screen!=2 && screen!=3 && screen!=18) return false;
-    if(a==0x03d34c) {*v=size_menu?6:5;return true;} /* native Down wrap */
-    if(a==0x03d359) {*v=size_menu?5:4;return true;} /* native Up wrap */
+    if(a==0x03d34c) {*v=(speed_menu || size_menu)?7:5;return true;} /* native Down wrap */
+    if(a==0x03d359) {*v=(speed_menu || size_menu)?6:4;return true;} /* native Up wrap */
     return false;
 }
 bool ScJourneyMessageRead(unsigned notice,uint32_t a,uint8_t *v) {

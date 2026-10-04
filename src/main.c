@@ -134,7 +134,7 @@ static bool s_wait_lane_enabled;
 static bool s_measure_custom_frame;
 static double s_custom_frame_ms;
 static double s_perf_custom_ms,s_perf_native_ms;
-static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge, 3 960x800, 4 1920x1600 */
+static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge, 3 960x800, 4 1920x1600, 5 3840x3200 */
 static bool s_journey_arming;
 static unsigned s_journey_menu_selection;
 static unsigned s_loading_slot;
@@ -151,7 +151,9 @@ static unsigned s_save_dialog_phase;
 static uint16_t s_save_dialog_page,s_save_dialog_x,s_save_dialog_y;
 static unsigned s_escape_back_frames;
 static uint16_t s_escape_back_input;
-static bool s_size_selecting, s_practice_size_pending;
+static bool s_size_selecting, s_speed_selecting, s_practice_size_pending;
+static unsigned s_new_city_speed=1,s_speed_selection=1;
+static const unsigned kCityDevelopmentSpeeds[]={1,3,5,10,20,50};
 static unsigned s_size_game_choice;
 static void save_large_map_setting(void);
 static int s_scroll_multiplier=1;
@@ -2532,10 +2534,11 @@ static void sc_maybe_trigger_scenario_event(void) {
 static bool s_fast_ticks = true;
 
 /* RCI development cadence multiplier; city time is unchanged. */
-static int s_development_speed = 1;
+static int s_development_override; /* 0 = use the saved city default */
+#define s_development_speed (s_development_override?s_development_override:(int)ScWorldDevelopmentSpeed(&s_world))
 static ScMouseDialog s_mouse_dialog;
-static const int kDevelopmentSpeeds[] = {1, 2, 5, 10, 50};
-static const char *const kDevelopmentSpeedNames[] = {"NORMAL", "X2", "X5", "X10", "X50"};
+static const int kDevelopmentSpeeds[] = {0, 1, 2, 3, 5, 10, 20, 50};
+static const char *const kDevelopmentSpeedNames[] = {"OFF", "X1", "X2", "X3", "X5", "X10", "X20", "X50"};
 static ScDevelopment s_development;
 static ScDevelopmentBatches *s_development_batches;
 static bool s_development_batch_reference;
@@ -2618,7 +2621,7 @@ static void world_saved_city(bool save) {
   unsigned slot=!save && s_city_loading?s_loading_slot:(g_ram[addr]|(g_ram[addr+1]<<8))==1?0:1;
   if (!save) {
     if (ScWorldCityLoad(&s_world,data,size,g_snes->cart->ram,slot)) {
-      fprintf(stderr,"world: loaded city slot %u (%s)\n",slot+1,s_world.active?(s_world.colossal?"1920x1600":s_world.giant?"960x800":s_world.huge?"480x400":"240x200"):"120x100");
+      fprintf(stderr,"world: loaded city slot %u (%s)\n",slot+1,s_world.active?(s_world.mega?"3840x3200":s_world.colossal?"1920x1600":s_world.giant?"960x800":s_world.huge?"480x400":"240x200"):"120x100");
       if (s_world.active) {
         bool hud=(g_ram[0x1d7]|g_ram[0x1d8])!=0;
         ram_set_w(0x1c5,ScWorldWidth(&s_world)-(hud?25:30));
@@ -4280,7 +4283,7 @@ static bool run_one_frame(void) {
         pr.s1 = (uint16_t)(g_ram[0x5b] | (g_ram[0x5c] << 8));
         pr.t  = (uint16_t)(g_ram[0x5d] | (g_ram[0x5e] << 8));
         if (s_large_maps && !s_journey_arming && s_rom_fnv==SC_ROM_FNV_US) {
-          if(s_large_maps==4) ScWorldGenerateColossal(&s_world,&pr); else if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr); else if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr); else ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
+          if(s_large_maps==5) ScWorldGenerateMega(&s_world,&pr); else if(s_large_maps==4) ScWorldGenerateColossal(&s_world,&pr); else if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr); else if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr); else ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
         } else {
           ScWorldReset(&s_world); sc_mapgen_generate(&pr, &gs);
           s_world.journey=s_journey_arming;
@@ -4389,13 +4392,19 @@ static bool run_one_frame(void) {
       }
       if(s_test_menu_pending && cpu->k==3 && cpu->pc==0xd337)cpu->pc=0xd33c;
       if(s_test_menu_pending && cpu->k==3 && cpu->pc==0xd369)s_test_menu_pending=false;
-      if(cpu->k==3 && cpu->pc==0xd306) {s_size_selecting=false;s_practice_size_pending=false;ScMapSizeMenuSet(false);}
-      if(s_size_selecting && cpu->k==3 && cpu->pc==0xd337) cpu->pc=0xd33b;
-      if(s_size_selecting && cpu->k==3 && cpu->pc==0xd333 && (g_ram[0xc9]&0x80)) {
-        s_size_selecting=false;ScMapSizeMenuSet(false);ram_set_w(0x3e,s_size_game_choice);
+      if(cpu->k==3 && cpu->pc==0xd306) {s_size_selecting=s_speed_selecting=false;s_practice_size_pending=false;ScMapSizeMenuSet(false);}
+      if((s_size_selecting || s_speed_selecting) && cpu->k==3 && cpu->pc==0xd337) cpu->pc=0xd33b;
+      if((s_size_selecting || s_speed_selecting) && cpu->k==3 && cpu->pc==0xd333 && (g_ram[0xc9]&0x80)) {
+        if(s_speed_selecting && s_size_game_choice!=3) {
+          s_speed_selecting=false;s_size_selecting=true;ScMapSizeMenuSet(true);
+          ram_set_w(0x3e,s_large_maps+1);
+        } else {
+          s_size_selecting=s_speed_selecting=false;ScMapSizeMenuSet(false);
+          ram_set_w(0x3e,s_size_game_choice);
+        }
         cpu->pc=0xd370;
       }
-      if(ScMapSizeMenuActive() && cpu->k==2 && cpu->pc==0xbcbd) cpu->pc=0xbcd0;
+      if((ScMapSizeMenuActive() || ScDevelopmentMenuActive()) && cpu->k==2 && cpu->pc==0xbcbd) cpu->pc=0xbcd0;
       /* Expand the decompressed panel BEFORE its first DMA. A VRAM-only
        * edit is overwritten by that pending upload during the entry fade. */
       if(cpu->k==2 && cpu->pc==0xbb89)
@@ -4406,32 +4415,45 @@ static bool run_one_frame(void) {
         ScJourneyMenuFrame(g_ppu->vram,PPU_bgTilemapAdr(g_ppu,2));
       }
       if(cpu->k==2 && cpu->pc==0xbcfe) {
-        unsigned selection=ScMapSizeMenuActive() && !s_size_selecting?s_large_maps+1:
+        unsigned selection=ScDevelopmentMenuActive() && !s_speed_selecting?s_speed_selection:
+            ScMapSizeMenuActive() && !s_size_selecting?s_large_maps+1:
             ram_w(0x14)==2 || ram_w(0x14)==3 || ram_w(0x14)==18?ram_w(0x3e):s_journey_menu_selection;
-        if(!ScMapSizeMenuActive()) ram_set_w(0x25d,42);
-        cpu->a=(cpu->a&0xff00)|ScJourneyMenuY(!ScMapSizeMenuActive() && ram_w(0x44)!=0,selection);
+        ram_set_w(0x25d,ScDevelopmentMenuActive()?58:42);
+        cpu->a=(cpu->a&0xff00)|ScJourneyMenuY(!ScMapSizeMenuActive() && !ScDevelopmentMenuActive() && ram_w(0x44)!=0,selection);
         if(ScMapSizeMenuActive() && getenv("SC_SIZE_MENU_DIAG"))
           fprintf(stderr,"[map-size pointer] frame %llu choice %u y %u selecting %d action %u\n",
             (unsigned long long)s_frames,selection,cpu->a&255,s_size_selecting,ram_w(0x3e));
       }
-      /* Open the size page before e574 starts the native exit fade. */
-      if(cpu->k==3 && cpu->pc==0xd366 && !s_size_selecting &&
-          (ram_w(0x3e)==1 || ram_w(0x3e)==2)) {
-        s_size_game_choice=ram_w(0x3e);s_size_selecting=true;ScMapSizeMenuSet(true);
-        ram_set_w(0x3e,s_large_maps+1);cpu->pc=0xd370;
+      /* Native list input is reused for both setup pages. Intercept before
+       * the original exit fade so the speed page stays in the same frame. */
+      if(cpu->k==3 && cpu->pc==0xd366) {
+        unsigned selected=ram_w(0x3e);
+        if(getenv("SC_SETTINGS_DIAG"))fprintf(stderr,"[city setup] choice %u size %d speed %d\n",selected,s_size_selecting,s_speed_selecting);
+        if(s_size_selecting) {
+          s_large_maps=selected>=1 && selected<=6?selected-1:0;
+          save_large_map_setting();s_size_selecting=false;s_speed_selecting=true;
+          ScDevelopmentMenuSet(true);ram_set_w(0x3e,s_speed_selection);cpu->pc=0xd370;
+        } else if(!s_speed_selecting && selected>=1 && selected<=3) {
+          s_size_game_choice=selected;
+          if(selected==3) { /* Journey always begins at the original size. */
+            s_speed_selecting=true;ScDevelopmentMenuSet(true);ram_set_w(0x3e,s_speed_selection);
+          } else {
+            s_size_selecting=true;ScMapSizeMenuSet(true);ram_set_w(0x3e,s_large_maps+1);
+          }
+          cpu->pc=0xd370;
+        }
       }
       if(cpu->k==3 && cpu->pc==0xd369) {
         unsigned selected=ram_w(0x3e);
-        if(s_size_selecting) {
-          s_large_maps=selected>=1 && selected<=5?selected-1:0;
-          save_large_map_setting();s_size_selecting=false;
-          selected=s_size_game_choice;ram_set_w(0x3e,selected);
+        if(s_speed_selecting) {
+          s_speed_selection=selected>=1 && selected<=6?selected:1;
+          s_new_city_speed=kCityDevelopmentSpeeds[s_speed_selection-1];
+          s_speed_selecting=false;selected=s_size_game_choice;ram_set_w(0x3e,selected);
           s_practice_size_pending=selected==1;
+          if(getenv("SC_SETTINGS_DIAG"))fprintf(stderr,"[city speed] selected %ux for new city\n",s_new_city_speed);
         }
-        if(!s_size_selecting) {
-          s_journey_menu_selection=selected;s_journey_arming=selected==3;
-          if(selected>=3) ram_set_w(0x3e,selected==3?2:3);
-        }
+        s_journey_menu_selection=selected;s_journey_arming=selected==3;
+        if(selected>=3) ram_set_w(0x3e,selected==3?2:3);
       }
       /* Keep the native Metropolis achievement/history, but let Journey's
        * border celebration supply its visit instead of opening two dialogs. */
@@ -4787,17 +4809,19 @@ static bool run_one_frame(void) {
       if(cpu->pc==0xc63c && s_world.test_city)ram_set_w(0x38,0);
       if(cpu->pc==0xc633 && s_practice_size_pending) {
         ScMapGenPrng pr={ram_w(0x59),ram_w(0x5b),ram_w(0x5d)};
-        if(s_large_maps==4) ScWorldGenerateColossal(&s_world,&pr); else if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr);
+        if(s_large_maps==5) ScWorldGenerateMega(&s_world,&pr); else if(s_large_maps==4) ScWorldGenerateColossal(&s_world,&pr); else if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr);
         else if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr);
         else if(s_large_maps==1) ScWorldGenerate(&s_world,&pr);
         if(s_world.active) {
           ScWorldMirror(&s_world,g_ram);
           ram_set_w(0x1c5,ScWorldWidth(&s_world)-25);ram_set_w(0x1c9,ScWorldHeight(&s_world)-22);
         }
+        s_world.development_speed=(uint8_t)s_new_city_speed;
         s_practice_size_pending=false;
       }
       if (cpu->pc == 0xce61) ScPopulationImport(&s_population, g_ram);
       if (cpu->pc == 0xc73c) {
+        s_world.development_speed=(uint8_t)s_new_city_speed;
         ScPopulationImport(&s_population, g_ram);
         if(s_journey_arming) {s_world.journey=true;s_journey_arming=false;}
       }
@@ -7479,7 +7503,7 @@ static bool load_state(const char *path) {
   ScDevelopmentReset(&s_development);
   reset_refresh_clocks();
   s_journey_arming=false;
-  s_city_loading=s_size_selecting=s_practice_size_pending=false;
+  s_city_loading=s_size_selecting=s_speed_selecting=s_practice_size_pending=false;
   s_test_city_present_pending=s_test_city_fade_started=s_test_city_black_seen=false;
   ScMapSizeMenuSet(false);
   ScWorldReset(&s_world); memset(&s_world_guest,0,sizeof s_world_guest);
@@ -7832,9 +7856,9 @@ static ScMouseUiResult mouse_ui_point(uint8_t *ram,int x,int y,bool select,bool 
     if(select)ram_set_w(0x421,2);
     return (ScMouseUiResult){true,true};
   }
-  if(s_size_selecting && ram_w(0x14)==3) {
+  if((s_size_selecting || s_speed_selecting) && (ram_w(0x14)==3 || ram_w(0x14)==18)) {
     ScMouseUiResult result={true,false};
-    for(unsigned i=0;i<5;++i) if(x>=48 && x<232 && y>=(int)ScJourneyMenuY(false,i+1) && y<(int)ScJourneyMenuY(false,i+1)+16) {
+    for(unsigned i=0;i<6u;++i) if(x>=48 && x<232 && y>=(int)ScJourneyMenuY(false,i+1) && y<(int)ScJourneyMenuY(false,i+1)+16) {
       result.hit=true;if(select) ram_set_w(0x3e,i+1);
     }
     return result;
@@ -7968,7 +7992,7 @@ static void save_large_map_setting(void) {
     settings.large_maps=s_large_maps;
     if (!ScSettingsSave(&settings,kScSettingsPath)) fprintf(stderr,"settings: could not save larger-map preference\n");
   }
-  fprintf(stderr,"new city map size: %s\n",s_large_maps==4?"1920x1600":s_large_maps==3?"960x800":s_large_maps==2?"480x400":s_large_maps?"240x200":"120x100");
+  fprintf(stderr,"new city map size: %s\n",s_large_maps==5?"3840x3200":s_large_maps==4?"1920x1600":s_large_maps==3?"960x800":s_large_maps==2?"480x400":s_large_maps?"240x200":"120x100");
 }
 static void menu_action_fit_screen(void) {s_fit_screen_requested=true;}
 
@@ -8334,8 +8358,8 @@ static SettingDesc s_settings[] = {
   { "FIT TO SCREEN",         kSettingAction, NULL, 0, menu_action_fit_screen, NULL, 0 },
   { "GPU TERRAIN",           kSettingBool, &s_gpu_terrain_enabled, 0, NULL, NULL, 0 },
   { "MOUSE CURSOR",          kSettingBool, &s_mouse_enabled,       0,    NULL, NULL, 0 },
-  { "DEVELOPMENT SPEED",     kSettingCycle, &s_development_speed, 0, NULL,
-    kDevelopmentSpeeds, 5, kDevelopmentSpeedNames },
+  { "DEVELOPMENT SPEED",     kSettingCycle, &s_development_override, 0, NULL,
+    kDevelopmentSpeeds, 8, kDevelopmentSpeedNames },
   { "FAST TICKS",            kSettingBool, &s_fast_ticks,          0,    NULL, NULL, 0 },
   { "DRAG TURBO",            kSettingCycle, &s_drag_turbo,          0,    NULL,
     kDragTurbos, (int)(sizeof(kDragTurbos) / sizeof(kDragTurbos[0])) },
@@ -8523,7 +8547,10 @@ static void render_settings_menu(SDL_Renderer *renderer) {
         int cv = *(int *)d->field;
         int idx = -1;
         for (int k = 0; k < d->value_count; k++) if (d->values[k] == cv) idx = k;
-        if (d->value_names && idx >= 0) {
+        if(d->field==&s_development_override && !cv) {
+          snprintf(numbuf,sizeof numbuf,"OFF (CITY X%u)",ScWorldDevelopmentSpeed(&s_world));
+          val=numbuf;
+        } else if (d->value_names && idx >= 0) {
           val = d->value_names[idx];
         } else if (cv < 0) {
           val = "OFF"; /* negative sentinel, so 0 stays a real selectable value */
@@ -9712,7 +9739,7 @@ int main(int argc, char **argv) {
       const char *as = getenv("SC_MAPGEN_A");
       const unsigned idx = (unsigned)strtoul(st, NULL, 0);
       const int large = getenv("SC_MAPGEN_LARGE")?atoi(getenv("SC_MAPGEN_LARGE")):0;
-      const unsigned cells = large==4?3072000:large==3?768000:large==2?192000:large?SC_WORLD_CELLS:SC_MAPGEN_CELLS;
+      const unsigned cells = large==5?12288000:large==4?3072000:large==3?768000:large==2?192000:large?SC_WORLD_CELLS:SC_MAPGEN_CELLS;
       static ScMapGenState gs;
       ScMapGenPrng pr;
       { const char *pv = getenv("SC_MAPGEN_PREV");
@@ -9731,7 +9758,8 @@ int main(int argc, char **argv) {
          * Kept only as a sweep knob; 1 is correct. */
         g_sc_mapgen_prng_steps = 0;
         for (unsigned r = 0; r < reps; r++) {
-          if (large==4) sc_mapgen_generate_colossal(&pr, &gs);
+          if (large==5) sc_mapgen_generate_mega(&pr, &gs);
+          else if (large==4) sc_mapgen_generate_colossal(&pr, &gs);
           else if (large==3) sc_mapgen_generate_giant(&pr, &gs);
           else if (large==2) sc_mapgen_generate_huge(&pr, &gs);
           else if (large) sc_mapgen_generate_large(&pr, &gs);
@@ -9894,7 +9922,7 @@ int main(int argc, char **argv) {
     if (e && *e) {
       int value = atoi(e);
       for (unsigned i = 0; i < sizeof(kDevelopmentSpeeds)/sizeof(kDevelopmentSpeeds[0]); ++i)
-        if (value == kDevelopmentSpeeds[i]) s_development_speed = value;
+        if (value == kDevelopmentSpeeds[i]) s_development_override = value;
     }
   }
   { const char *e = getenv("SC_POPULATION_TEST");
@@ -10658,7 +10686,7 @@ int main(int argc, char **argv) {
     ScWorldGuestBindRom(g_snes->cart->rom,rom_size);
   }
   { const char *large=getenv("SC_LARGE_MAPS");
-    s_large_maps=large?atoi(large):s_launch_settings.large_maps; if(s_large_maps<0 || s_large_maps>4) s_large_maps=0; }
+    s_large_maps=large?atoi(large):s_launch_settings.large_maps; if(s_large_maps<0 || s_large_maps>5) s_large_maps=0; }
   s_custom_renderer.world=&s_world;
   s_custom_renderer.sylt = s_ninth_scenario;   /* its pin and mark */
   if (!ScRendererResize(&s_custom_renderer,
@@ -11559,6 +11587,7 @@ int main(int argc, char **argv) {
             (unsigned long long)s_frames,(int)s_middle_pan.active,(int)accepted);
     }
     s_custom_renderer.pointer_hidden=s_middle_pan.active;
+    s_custom_renderer.mouse_panning=s_middle_pan.active;
     /* Only panning confines the pointer. Releasing, opening F12, disabling
      * mouse input or losing focus must always restore normal desktop motion. */
     if(mouse_pan_grab_requested!=mouse_pan_active) {
@@ -11878,6 +11907,7 @@ int main(int argc, char **argv) {
      * the one that mattered, and the other was advancing the simulation during
      * ordinary play. Only explicit held gestures remain. */
     bool fast_forward = keys[SDL_SCANCODE_TAB] || test_fast_forward;
+    bool shift_fast_forward=fast_forward && (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]);
     s_wait_lane_enabled=fast_forward;
     /* Ctrl accelerates scrolling 3x; Ctrl+Shift uses 10x. */
     s_scroll_multiplier=host_map_screen_live() && !s_menu_open?(int)scroll_key_multiplier(keys):1;
@@ -11921,7 +11951,7 @@ int main(int argc, char **argv) {
       fprintf(stderr,"[gpu terrain] capture allocation failed; retaining CPU renderer\n");
       s_gpu_terrain_enabled=false;ScRendererDeferTerrain(&s_custom_renderer,false);
     }
-    int frames_this_iter = fast_forward ? 6 : (dragging ? s_drag_turbo : 1);
+    int frames_this_iter = fast_forward ? (shift_fast_forward?24:6) : (dragging ? s_drag_turbo : 1);
     /* Fixed batches are an oracle for comparing identical guest frames with
      * and without skipped pixels, independently of adaptive wall timings. */
     static int test_tab_batch=-1;
@@ -11929,7 +11959,7 @@ int main(int argc, char **argv) {
       test_tab_batch=e?atoi(e):0;if(test_tab_batch<1 || test_tab_batch>6) test_tab_batch=0;}
     if(fast_forward && test_tab_batch) frames_this_iter=test_tab_batch;
     const uint64_t batch_t0=SDL_GetPerformanceCounter();
-    const double frame_budget_ms=kTargetFrameSeconds*1000.0-2.0;
+    const double frame_budget_ms=(kTargetFrameSeconds*1000.0-2.0)*(shift_fast_forward?4:1);
 
     /* SC_FRAME_TIME=<ms threshold>: log (rate-limited, 500 hits) wall-clock
      * time for any run_one_frame() call slower than the threshold -- there's

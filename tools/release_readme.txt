@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 15 - LOCAL FOLLOW-UP
+URBAN RECOMP ENHANCED BETA 15 - LOCAL CITY SETUP FOLLOW-UP
 ===========================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -27,7 +27,7 @@ Work is limited per frame to keep input responsive; overloaded machines can
 fall below the requested development rate. Large-city frame spikes remain.
 
 Also included: Vulkan presentation/compute, native C simulation kernels,
-full 1920x1600 maps, population up to 9,999,999,999,999, whole-building
+full maps up to 3840x3200, population up to 9,999,999,999,999, whole-building
 Copy/Paste with original-font price/preview, Ctrl-wheel/pinch zoom, threaded
 restored music and continuous middle-button drag pan. Gift menus and F12
 mouse clicks work; Left decreases and Right increases. The map-size page's
@@ -36,9 +36,13 @@ F12 MUTE CITY WARNINGS suppresses crime, traffic and pollution messages
 without altering their simulation; it defaults to OFF.
 
 Select map size before starting a city/Practice: 120x100, 240x200, 480x400,
-960x800 or 1920x1600. Journey starts at Normal and expands at 100,000 and
-1,000,000 residents, with Dr. Wright celebrations. F12 development speed
-is Normal, 2x, 5x, 10x or 50x; calendar/budget scheduling remains normal.
+960x800, 1920x1600 or 3840x3200. Journey starts at Normal map size and expands
+at 100,000 and 1,000,000 residents, with Dr. Wright celebrations.
+The DEVELOPMENT SPEED page after map size offers 1x, 3x, 5x, 10x, 20x and 50x.
+The default is saved per city. F12 OFF uses that city's default; X1/X2/X3/X5/
+X10/X20/X50 temporarily override it. Calendar/budget scheduling remains normal.
+Older saves load at 1x and migrate automatically when saved with this build.
+Mouse drag panning shows the original-size minimap with the live camera marker.
 Fit to Screen increases visible land at the chosen tile scale.
 Ctrl+wheel zoom-out now exposes terrain spanning up to 32768x32768 native
 pixels, enough to fit the entire 1920x1600 test city in a widescreen window.
@@ -90,7 +94,7 @@ L / R        Q / W
 Start        Enter
 Select       B
 
-Tab          fast-forward (hold)
+Tab          fast-forward (hold); Shift+Tab requests 4x the usual boost
 Escape       Save City during play; Back/Close in menus
 Ctrl+Shift+tilde  reveal hidden test City 3 on the load-city page
 X + arrows   pan the free city camera

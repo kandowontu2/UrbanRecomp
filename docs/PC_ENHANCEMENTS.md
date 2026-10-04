@@ -19,7 +19,11 @@ save/load synchronize with that thread; sound commands retain their order.
 The portable release includes the restored soundtrack on this worker.
 
 F12 opens the host settings overlay; F10 remains an alias. **DEVELOPMENT SPEED**
-cycles through Normal, X2, X5, X10 and X50. RCI development runs in batches
+cycles through Off, X1, X2, X3, X5, X10, X20 and X50. Off uses the development
+speed stored for the current city; explicit F12 choices temporarily override it.
+After selecting a map size, the native-font **DEVELOPMENT SPEED** page offers
+**1x, 3x, 5x, 10x, 20x and 50x**. That default is saved per city, including save
+states, and survives Journey expansions. Older saved cities default to 1x. RCI development runs in batches
 spread across the city at every setting, including Normal. One pass visits
 the stable zone index before starting another, instead of giving one zone
 all its accelerated attempts before moving on. Each frame publishes a batch
@@ -94,7 +98,7 @@ private zone calls retain original decisions, RNG and growth/density writes.
 Their scratch, stack, iterators and traffic tallies cannot overwrite a
 suspended native call. Road-access caches age independently over eight Normal intervals and
 invalidate immediately when transport tiles or empty-zone capacity change. A load rebuilds the disposable index.
-`SC_DEVELOPMENT_SPEED=1|2|5|10|50` selects the initial value for testing.
+`SC_DEVELOPMENT_SPEED=0|1|2|3|5|10|20|50` selects the initial value for testing.
 `SC_DEVELOPMENT_BATCH_REFERENCE=1` selects the previous scheduler for comparison.
 
 At accelerated speeds, electrical networks refresh at the selected multiplier
@@ -124,16 +128,18 @@ interpreter. They do not implement acceleration in the optional `SC_FIBER=1`
 execution path or regional ROMs.
 
 Choosing **Start new city** or **Practice** opens a dedicated **MAP SIZE**
-page with five choices: **120x100**, **240x200**, **480x400**, **960x800**, and **1920x1600**.
+page with six choices: **120x100**, **240x200**, **480x400**, **960x800**,
+**1920x1600**, and **3840x3200**.
 It uses the game's original tall menu alphabet and numeral artwork. Mouse,
 D-pad and confirmation buttons select a size; right-click/the game cancel
 button returns to the main menu. Map size is no longer in F12 or the main
 menu's former L toggle. The last selection is remembered in `sc-settings.ini`;
-`SC_LARGE_MAPS=0|1|2|3|4` supplies a default for testing.
+`SC_LARGE_MAPS=0|1|2|3|4|5` supplies a default for testing.
 
 All sizes generate continuous full-size terrain, with independent simulation
 fields, construction, power and population calculation. Preview samples the
-whole landscape at 1:1, 2:1, 4:1, 8:1 or 16:1. The navigation minimap and camera bounds
+whole landscape at 1:1, 2:1, 4:1, 8:1, 16:1 or 32:1. Mouse drag panning shows the original-size navigation minimap and a viewport
+marker derived from the free camera and terrain zoom. Minimap and camera bounds
 use the active saved dimensions. Existing cities keep their saved size;
 scenarios retain their original dimensions.
 
@@ -398,7 +404,10 @@ adds its own one-off frame cost. `SC_PERF=1` logs queue frames, commit time and
 average/maximum frame-stage times for performance diagnosis.
 
 Held **Tab** uses this port's fast-forward loop, independently of Mesen. It
-runs up to six guest frames per display update but reserves time for the final
+runs up to six guest frames per display update. **Shift+Tab** raises the frame
+limit to 24 and gives the batch four times the usual work budget; actual speed
+is limited by CPU/GPU workload and heavy batches can reduce presentation FPS.
+Both modes reserve time for the final
 rendered frame, adapting the boost to the city workload. Intermediate frames
 retain input, native PPU/APU timing and sprite work while omitting the expanded image
 composition. It also omits native background/pixel composition on intermediate

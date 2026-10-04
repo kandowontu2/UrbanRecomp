@@ -213,13 +213,14 @@ int main(int argc,char **argv) {
         if(pattern==5) put(0xb89,0x827c);
         compare_power(world.active?&world:NULL);
     }
+    const int clock_speeds[]={2,3,5,10,20,50};
     const int speeds[]={2,5,10,50};
-    for(unsigned i=0;i<4;++i) {
+    for(unsigned i=0;i<6;++i) {
         ScRefreshClock c;ScRefreshClockReset(&c,200);
-        assert(ScRefreshClockDue(&c,0,speeds[i]));
+        assert(ScRefreshClockDue(&c,0,clock_speeds[i]));
         unsigned count=0;
-        for(unsigned frame=1;frame<=1000;++frame) count+=ScRefreshClockDue(&c,frame,speeds[i]);
-        assert(count==5*(unsigned)speeds[i]);
+        for(unsigned frame=1;frame<=1000;++frame) count+=ScRefreshClockDue(&c,frame,clock_speeds[i]);
+        assert(count==5*(unsigned)clock_speeds[i]);
         assert(!ScRefreshClockDue(&c,1001,1));
     }
     ScRefreshClock c;ScRefreshClockReset(&c,200);

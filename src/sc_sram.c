@@ -25,7 +25,7 @@ static bool s_write_failed;
 static uint8_t *s_extra;
 static uint32_t s_extra_size;
 static bool s_extra_dirty,s_suspended;
-enum {kExtraHeader=24,kExtraMax=32*1024*1024};
+enum {kExtraHeader=24,kExtraMax=128*1024*1024};
 static uint64_t extra_hash(const uint8_t *p,uint32_t n) {
   uint64_t h=UINT64_C(14695981039346656037);
   for(uint32_t i=0;i<n;++i) h=(h^p[i])*UINT64_C(1099511628211);
