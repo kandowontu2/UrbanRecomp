@@ -1,5 +1,6 @@
 /* Runs the actual US zone handlers, supplied by the user's ROM. */
 #include "sc_development.h"
+#include "sc_development_batches.h"
 #include "sc_population.h"
 #include "sc_world_guest.h"
 #include "snes/interp816.h"
@@ -12,7 +13,8 @@
 #include <string.h>
 
 static uint8_t rom[0x80000], ram[0x20000], baseline[0x20000];
-static uint8_t snapshot_ram[0x20000], expected_ram[0x20000];
+static uint8_t snapshot_ram[0x20000], expected_ram[0x20000], initial_ram[0x20000];
+static ScWorld initial_world;
 static uint16_t product, quotient, dividend;
 static uint8_t multiplicand;
 static bool large,huge,giant,colossal;
@@ -90,6 +92,7 @@ static ScDevelopment run(uint16_t entry,unsigned tile,int speed,bool hook) {
     interp816_reset(cpu);
     cpu->k=3; cpu->db=3; cpu->pc=entry; cpu->sp=0x01fd; cpu->dp=0x0300;
     cpu->mf=false; cpu->xf=false; cpu->e=false; cpu->i=true;
+    memcpy(initial_ram,ram,sizeof ram);initial_world=world;
     ScDevelopment s={0};
     ScPopulation population={0};
     population.valid=true;
@@ -352,10 +355,95 @@ static void native_batches(void) {
     }
     interp816_free(c);printf("PASS: %u native C accelerated batches match complete zone execution\n",cases);
 }
+static uint64_t batch_test_ticks;
+static uint64_t batch_test_clock(void) {return ++batch_test_ticks;}
+static void distributed_batches(void) {
+    const unsigned entries[]={0x937a,0x92ce,0x922f},tiles[]={0x84,0x13b,0x1f8};
+    growth_fixture=true;
+    unsigned cases=0;
+    for(unsigned map=0;map<5;++map) for(unsigned kind=0;kind<3;++kind)
+    for(unsigned powered=0;powered<2;++powered) {
+        large=map>0;huge=map>=2;giant=map>=3;colossal=map==4;powered_fixture=powered;
+        run(entries[kind],tiles[kind],1,true);
+        memcpy(expected_ram,ram,sizeof ram);expected_world=world;
+        memcpy(ram,initial_ram,sizeof ram);world=initial_world;
+        ScDevelopmentBatches *b=ScDevelopmentBatchesCreate();assert(b);
+        unsigned count=0;
+        for(unsigned frame=0;count<1 && frame<1;frame+=8)
+            count+=ScDevelopmentBatchesRun(b,&world,ram,rom,sizeof rom,frame,50,1,NULL,0,0,NULL);
+        assert(count==1 && ScDevelopmentBatchesZones(b)==1 && ScDevelopmentBatchesPasses(b)==1);
+        if(memcmp(ram+0xccf,expected_ram+0xccf,14))fprintf(stderr,"batch RNG map=%u kind=%u powered=%u\n",map,kind,powered);
+        assert(!memcmp(ram+0xccf,expected_ram+0xccf,14));
+        if(large) {
+            if(memcmp(world.tiles,expected_world.tiles,2*ScWorldCells(&world))) {
+                fprintf(stderr,"batch world tiles map=%u kind=%u powered=%u\n",map,kind,powered);
+                for(unsigned at=0;at<2*ScWorldCells(&world);at+=2)if(memcmp(world.tiles+at,expected_world.tiles+at,2)) {
+                    fprintf(stderr,"tile x=%u y=%u actual=%x expected=%x\n",at/2%ScWorldWidth(&world),at/2/ScWorldWidth(&world),world.tiles[at]|world.tiles[at+1]<<8,expected_world.tiles[at]|expected_world.tiles[at+1]<<8);break;
+                }
+            }
+            assert(!memcmp(world.tiles,expected_world.tiles,2*ScWorldCells(&world)));
+            for(unsigned f=0;f<17;++f)if(f!=4)
+                assert(!memcmp(world.fields[f],expected_world.fields[f],ScWorldFieldSizeWorld(&world,f)));
+            assert(!memcmp(world.fields[4],initial_world.fields[4],ScWorldFieldSizeWorld(&world,4)));
+        } else {
+            if(memcmp(ram+0x10200,expected_ram+0x10200,24000)) {
+                fprintf(stderr,"batch tiles map=%u kind=%u powered=%u\n",map,kind,powered);
+                for(unsigned at=0;at<24000;at+=2)if(word(0x10200+at)!=(expected_ram[0x10200+at]|expected_ram[0x10201+at]<<8)) {
+                    fprintf(stderr,"tile at=%u actual=%x expected=%x\n",at,word(0x10200+at),expected_ram[0x10200+at]|expected_ram[0x10201+at]<<8);break;
+                }
+            }
+            assert(!memcmp(ram+0x10200,expected_ram+0x10200,24000));
+            assert(!memcmp(ram+0x1ae62,expected_ram+0x1ae62,390));
+        }
+        assert(!memcmp(world.coord,initial_world.coord,sizeof world.coord));
+        assert(world.map_anchor==initial_world.map_anchor && world.field_scan==initial_world.field_scan);
+        assert(!memcmp(ram,initial_ram,0xccf)); /* calendar, money, UI, stack and census */
+        ScDevelopmentBatchesDestroy(b);++cases;
+    }
+    /* Exact requested weighting when work fits the time allowance; startup
+     * synchronization is one pass, then fractional credits govern the rate. */
+    for(unsigned i=0;i<5;++i) {
+        const unsigned speeds[]={1,2,5,10,50};
+        memcpy(ram,initial_ram,sizeof ram);world=initial_world;
+        ScDevelopmentBatches *b=ScDevelopmentBatchesCreate();assert(b);
+        for(unsigned frame=0;frame<=800;++frame)
+            ScDevelopmentBatchesRun(b,&world,ram,rom,sizeof rom,frame,speeds[i],1000,NULL,0,0,NULL);
+        assert(ScDevelopmentBatchesAttempts(b)==speeds[i]+1);
+        unsigned before=(unsigned)ScDevelopmentBatchesAttempts(b);ram[0x193]=3;
+        assert(!ScDevelopmentBatchesRun(b,&world,ram,rom,sizeof rom,900,50,1000,NULL,0,0,NULL));
+        assert(ScDevelopmentBatchesAttempts(b)==before);
+        ScDevelopmentBatchesDestroy(b);
+    }
+    ScWorldReset(&world);world.active=world.huge=world.giant=world.colossal=true;
+    memset(ram,0,sizeof ram);ram[0x193]=2;
+    for(unsigned y=0;y<8;++y)for(unsigned x=0;x<32;++x)
+        for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)
+            ScWorldPutCell(&world,10+x*59+dx,10+y*220+dy,0x80+(dy+1)*3+dx+1);
+    ScDevelopmentBatches *b=ScDevelopmentBatchesCreate();assert(b);
+    assert(ScDevelopmentBatchesRun(b,&world,ram,rom,sizeof rom,0,1,32,NULL,0,0,NULL)==32);
+    assert(ScDevelopmentBatchesZones(b)==256 && ScDevelopmentBatchesLastQuadrants(b)==15);
+    batch_test_ticks=0;
+    unsigned limited=ScDevelopmentBatchesRun(b,&world,ram,rom,sizeof rom,1,1,256,batch_test_clock,1000,4,NULL);
+    assert(limited==24 && batch_test_ticks==5); /* Bounded batches, including probes. */
+    ScWorldReset(&world);world.active=world.huge=world.giant=world.colossal=true;
+    for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)
+        ScWorldPutCell(&world,1900+dx,1580+dy,0x80+(dy+1)*3+dx+1);
+    assert(ScDevelopmentBatchesRun(b,&world,ram,rom,sizeof rom,2,1,256,NULL,0,0,NULL)==1);
+    assert(ScDevelopmentBatchesZones(b)==1); /* A loaded/replaced city's old index is rejected. */
+    uint8_t *encoded=malloc(ScWorldEncodedSize());assert(encoded);
+    assert(ScWorldEncode(&world,encoded,ScWorldEncodedSize()));
+    assert(ScWorldDecode(&world,encoded,ScWorldEncodedSize()));free(encoded);
+    assert(ScDevelopmentBatchesRun(b,&world,ram,rom,sizeof rom,3,1,256,NULL,0,0,NULL)==1);
+    assert(ScDevelopmentBatchesZones(b)==1 && ScDevelopmentBatchesLastQuadrants(b)==8);
+    ScDevelopmentBatchesDestroy(b);
+    puts("PASS: each short Normal batch spans all quadrants; host deadline bounds work; world/save load discards stale queues");
+    printf("PASS: %u isolated city attempts match original ROM growth/RNG on all sizes; native traffic, census, calendar, suspended cursors and pauses preserved\n",cases);
+}
 int main(int argc,char **argv) {
     assert(argc==2);
     FILE *f=fopen(argv[1],"rb"); assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom); fclose(f);
+    if(getenv("SC_BATCH_TEST_ONLY")) {distributed_batches();return 0;}
     native_helpers();native_house_candidates();native_house_mutations();native_batches();if(getenv("SC_NATIVE_HELPER_TEST")) return 0;
     const uint16_t entries[]={0x937a,0x92ce,0x922f};
     const unsigned tiles[]={0x99,0x144,0x201};
@@ -385,6 +473,7 @@ int main(int argc,char **argv) {
         powered_fixture=false;
         run(entries[z],empty[z],50,true);assert(!grown_population);
     }
+    distributed_batches();
     puts("PASS: stock Normal equivalence, RCI attempts, actual growth and power gating on all map sizes, single tallies, calendar, stack integrity and mid-attempt restoration");
     return 0;
 }

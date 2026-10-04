@@ -75,7 +75,7 @@ add_executable(UrbanRecomp
     src/sc_world.c
     src/sc_world_guest.c src/sc_postpass.c src/sc_sweep.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c src/sc_infrastructure.c
     src/sc_journey.c
-    src/sc_development.c
+    src/sc_development.c src/sc_development_batches.c
     src/sc_population.c
     src/sc_mouse_ui.c
     src/sc_construction.c src/sc_refresh_clock.c src/sc_power_refresh.c
@@ -642,7 +642,7 @@ if(NOT MSVC)
 endif()
 
 add_executable(UrbanRecompDevelopmentTest EXCLUDE_FROM_ALL
-    tests/sc_development_test.c src/sc_development.c src/sc_population.c src/sc_math.c
+    tests/sc_development_test.c src/sc_development.c src/sc_development_batches.c src/sc_population.c src/sc_math.c
     src/sc_world.c src/sc_world_guest.c src/sc_postpass.c src/sc_sweep.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c src/sc_infrastructure.c src/sc_mapgen.c
     ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
 target_include_directories(UrbanRecompDevelopmentTest PRIVATE

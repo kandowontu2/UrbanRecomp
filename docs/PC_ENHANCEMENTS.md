@@ -19,13 +19,15 @@ save/load synchronize with that thread; sound commands retain their order.
 The portable release includes the restored soundtrack on this worker.
 
 F12 opens the host settings overlay; F10 remains an alias. **DEVELOPMENT SPEED**
-cycles through Normal, X2, X5, X10 and X50. The extra work repeats the original
-residential, commercial and industrial development decisions per simulation
-tick. It recalculates capacity after tile changes, while running population
-accounting and transport probing only once per zone. Demand, power and access
-requirements still apply; faster development also means faster decline when
-those requirements are unmet. This is a multiplier of development attempts,
-not a promise of a particular population increase.
+cycles through Normal, X2, X5, X10 and X50. RCI development runs in batches
+spread across the city at every setting, including Normal. One pass visits
+the stable zone index before starting another, instead of giving one zone
+all its accelerated attempts before moving on. Each frame publishes a batch
+of completed decisions. Demand, power and access requirements still apply;
+faster development also means faster decline when those requirements are
+unmet. This multiplies attempted decisions, not guaranteed population growth.
+Work is bounded per frame; CPU limits can reduce the achieved rate at X50.
+
 
 **FIT TO SCREEN** in F12 maximizes the window and enables the adaptive renderer's
 Fit aspect. It keeps the current on-screen tile size and adds visible map rows
@@ -81,19 +83,25 @@ residential buildings and the original 2,000-person adviser celebration.
 Its unpowered Commercial zones remained empty. Zone-only tests also cover
 growth and power gating on all sizes, including 960x800 coordinates beyond 255 and spatial indices beyond 65,535.
 
-Extra attempts run as host work without advancing the guest video/audio clock.
-Calendar, budgets and disasters are not fast-forwarded. Larger cities at X50
-still require more host CPU work and can reduce performance. Normal takes the
-unaltered development path. `SC_DEVELOPMENT_SPEED=1|2|5|10|50` selects the initial value
-for testing; the menu setting is otherwise session-only.
+Development batches run as host work without advancing the guest video/audio
+clock. Calendar, budgets and disasters remain with the original dispatcher.
+The Normal development interval is 800/400/200 guest frames at the three
+in-game simulation speeds, independent of map size. The multiplier adds
+fractional attempt credits; a four-millisecond host allowance spreads busy
+updates over frames. Opening menus, pausing or loading cannot cause an
+unbounded backlog. The native sweep retains census/transport bookkeeping;
+private zone calls retain original decisions, RNG and growth/density writes.
+Their scratch, stack, iterators and traffic tallies cannot overwrite a
+suspended native call. Road-access caches age independently over eight Normal intervals and
+invalidate immediately when transport tiles or empty-zone capacity change. A load rebuilds the disposable index.
+`SC_DEVELOPMENT_SPEED=1|2|5|10|50` selects the initial value for testing.
+`SC_DEVELOPMENT_BATCH_REFERENCE=1` selects the previous scheduler for comparison.
 
-At accelerated development speeds, population and electrical networks refresh
-at the selected 2x, 5x, 10x or 50x multiplier of their measured native cadence.
-The scheduler averages alternating native phases and retains fractional-frame
-credit; it does not use a fixed, generally faster polling rate. Population is
-recounted from actual developed RCI zones, without changing the native partial
-simulation tally. The native pre-development census cannot overwrite that
-current count. Normal retains the original population and power schedules.
+At accelerated speeds, electrical networks refresh at the selected multiplier
+of measured native cadence. Live population refresh also runs at Normal speed,
+with an eight-frame display refresh between census events. It counts actual
+RCI capacity and cannot be replaced with the earlier partial native census.
+The original Normal power schedule is retained.
 
 For changed electrical networks, the original power flood fill runs
 in private CPU/WRAM and commits only its power bitmap and tile power flags.

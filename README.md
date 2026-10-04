@@ -36,9 +36,10 @@ Beta 14 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution
-path. The filled-city correctness replay retires no main/kernel interpreter
-calls; unsupported paths retain a compatibility fallback. The tested 1920x1600
-city averages 60.14 FPS at X50 with adaptive Tab, with occasional frame spikes.
+path. Native C simulation kernels retain compatibility fallbacks. The local
+working build now distributes development across city districts at Normal
+speed as well; its time allowance keeps development work bounded per frame.
+See the enhancement notes for current behavior and performance limits.
 Enhanced releases are prereleases; see
 [features, controls, save compatibility and testing limits](docs/PC_ENHANCEMENTS.md).
 

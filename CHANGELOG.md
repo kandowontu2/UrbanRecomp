@@ -1,5 +1,22 @@
 # Enhanced fork changelog
 
+## Unreleased — city development batches
+
+- Update RCI zones in batches distributed throughout the city, including
+  Normal development speed. Use a map-size-independent cadence so a fully
+  built 1920×1600 city no longer waits for a slow moving sweep to reach
+  each district. Each stable zone index completes a pass before repeating.
+- Bound development work per frame to keep rendering and mouse input
+  responsive. Retain the five requested speed multipliers; on overloaded
+  machines, spread pending work across frames instead of blocking input.
+- Reuse native road-access results, stagger their refreshes, and invalidate
+  them after transport edits or zone capacity transitions. Preserve original growth, demand, power and land-value rules,
+  keep the native traffic/census bookkeeping, and leave calendar/budget
+  scheduling with the original simulation. Refresh live population at
+  Normal speed as well.
+- Rebuild the disposable zone index after loading or replacing a city;
+  completed development remains in the existing city/save format.
+
 ## 1.2.0 Enhanced Beta 14 â€” 2026-10-04
 
 - Center the main-menu text block and move its selection pointer with it.

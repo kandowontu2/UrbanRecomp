@@ -104,6 +104,7 @@ uint8_t    g_ram[0x20000];
 #include "sc_mapgen.h"
 #include "sc_decomp.h"
 #include "sc_development.h"
+#include "sc_development_batches.h"
 #include "sc_math.h"
 #include "sc_tile_lookup.h"
 #include "sc_wait.h"
@@ -2524,12 +2525,14 @@ static void sc_maybe_trigger_scenario_event(void) {
  * ROM sites we have never located. 16-bit, so both halves. */
 static bool s_fast_ticks = true;
 
-/* RCI development attempts per normal simulation visit; city time is unchanged. */
+/* RCI development cadence multiplier; city time is unchanged. */
 static int s_development_speed = 1;
 static ScMouseDialog s_mouse_dialog;
 static const int kDevelopmentSpeeds[] = {1, 2, 5, 10, 50};
 static const char *const kDevelopmentSpeedNames[] = {"NORMAL", "X2", "X5", "X10", "X50"};
 static ScDevelopment s_development;
+static ScDevelopmentBatches *s_development_batches;
+static bool s_development_batch_reference;
 static bool s_native_bind_eager;
 static uint64_t s_native_bind_deferred,s_native_bind_fallback;
 static ScPopulation s_population;
@@ -2541,6 +2544,7 @@ static int s_population_game_speed=-1;
 static unsigned s_population_clock_cells;
 static unsigned s_map_cycle_remainder; /* fractional spatial work, below two master clocks */
 static void reset_refresh_clocks(void) {
+  ScDevelopmentBatchesReset(s_development_batches);
   ScRefreshClockReset(&s_population_clock,200);
   ScPowerRefreshReset(&s_power_refresh);
   s_native_power_active=false; s_population_game_speed=-1;s_population_clock_cells=0;
@@ -3845,6 +3849,20 @@ static unsigned sc_run_wait_lane(uint64_t target,long *guard,bool atomic_referen
   return spans;
 }
 
+/* Development attempts run across districts at a bounded frame boundary. A loaded
+ * legacy mid-attempt finishes its remaining native repetitions normally. */
+static uint16_t prepare_development_pc(Interp816 *cpu) {
+  if(s_development_batches && !s_development.repeating)
+    ScDevelopmentBatchesObserve(s_development_batches,&s_world,cpu,g_ram);
+  if(s_development_batches && !s_development.remaining && cpu->k==3) {
+    if(cpu->pc==0x926f)return 0x92cc;
+    if(cpu->pc==0x931b)return 0x9378;
+    if(cpu->pc==0x93d1)return 0x9447;
+  }
+  return ScDevelopmentStepWorld(&s_development,&s_world,g_ram,cpu->pc,cpu->dp,cpu->sp,
+      s_development_batches?1:s_development_speed);
+}
+
 static uint64_t s_development_lane_entries,s_development_lane_spans;
 /* Extra zone attempts have no beam, calendar or audio retirement. Connect
  * their native capacity/decision/artwork/math helpers and compiled C edges
@@ -3883,8 +3901,7 @@ static unsigned sc_run_development_lane(long *guard) {
         }
       }
       ScWorldGuestStepPrepared(&s_world,cpu,g_ram);
-      uint16_t next=ScDevelopmentStepWorld(&s_development,&s_world,g_ram,cpu->pc,
-          cpu->dp,cpu->sp,s_development_speed);
+      uint16_t next=prepare_development_pc(cpu);
       if(next!=cpu->pc)cpu->mf=cpu->xf=false;
       cpu->pc=next;
       if(!s_development.repeating || !sc_development_lane_site(cpu))break;
@@ -3951,7 +3968,7 @@ static unsigned sc_run_city_lane(uint64_t target,long *guard) {
                 if(s_bank_page_sel==3) {++s_b3_page[c->pc>>8];if((c->pc>>8)==s_pc_profile_page)++s_pc_profile_ops[c->pc&255];}
             }
             ScWorldGuestStepPrepared(&s_world,c,g_ram);
-            uint16_t next=ScDevelopmentStepWorld(&s_development,&s_world,g_ram,c->pc,c->dp,c->sp,s_development_speed);
+            uint16_t next=prepare_development_pc(c);
             if(next!=c->pc)c->mf=c->xf=false;
             c->pc=next;
             if(!city_lane_site(c))break;
@@ -4004,6 +4021,15 @@ static bool run_one_frame(void) {
 #ifdef SC_AOT_TIER
   if (s_fiber_mode) return run_one_frame_fiber();
 #endif
+  if(s_rom_is_us && !s_development_batch_reference && !s_development_batches && host_map_screen_live())
+    s_development_batches=ScDevelopmentBatchesCreate();
+  if(s_development_batches && host_map_screen_live() && !ram_w(0xd7) && !ram_w(0x379) &&
+     !s_build_active && !s_build_pending && !s_clip_pending && !s_development.remaining) {
+    unsigned done=ScDevelopmentBatchesRun(s_development_batches,&s_world,g_ram,
+        g_snes->cart->rom,g_snes->cart->romSize,s_frames,s_development_speed,UINT_MAX,
+        SDL_GetPerformanceCounter,SDL_GetPerformanceFrequency(),4.0,ScProgramStep);
+    s_development.extra_attempts+=done;
+  }
   unsigned population_cells=s_world.active?ScWorldCells(&s_world):12000;
   if (s_population_game_speed!=g_ram[0x193] || s_population_clock_cells!=population_cells) {
     s_population_game_speed=g_ram[0x193];
@@ -4011,7 +4037,8 @@ static bool run_one_frame(void) {
     ScRefreshClockReset(&s_population_clock,s_population_game_speed==0?800:s_population_game_speed==1?400:200);
   }
   bool population_due=ScRefreshClockDue(&s_population_clock,s_frames,s_development_speed);
-  if (s_development_speed<=1 || !s_rom_is_us || s_pop_override>=0) s_population.live=false;
+  if(s_development_batches && !(s_frames&7))population_due=true;
+  if ((s_development_speed<=1 && !s_development_batches) || !s_rom_is_us || s_pop_override>=0) s_population.live=false;
   else if (host_map_screen_live() && !ram_w(0xd7) &&
       (!s_population.live || population_due)) {
     uint64_t prior=s_population.value;
@@ -4773,8 +4800,7 @@ static bool run_one_frame(void) {
         cpu->mf = false; cpu->xf = false;
       }
       cpu->pc = population_pc;
-      uint16_t next_pc = ScDevelopmentStepWorld(&s_development, &s_world, g_ram, cpu->pc,
-                                          cpu->dp, cpu->sp, s_development_speed);
+      uint16_t next_pc = prepare_development_pc(cpu);
       if (next_pc != cpu->pc) { cpu->mf = false; cpu->xf = false; }
       cpu->pc = next_pc;
     }
@@ -9845,6 +9871,7 @@ int main(int argc, char **argv) {
     } }
   { const char *e = getenv("SC_MAP_WRITE_TRACE"); if (e && *e) s_map_write_trace = true; }
   { const char *e = getenv("SC_VIEW_WATCH"); if (e && *e) s_view_watch = true; }
+  {const char *e=getenv("SC_DEVELOPMENT_BATCH_REFERENCE");s_development_batch_reference=e && *e=='1';}
   { const char *e = getenv("SC_DEVELOPMENT_SPEED");
     if (e && *e) {
       int value = atoi(e);
@@ -12444,6 +12471,11 @@ int main(int argc, char **argv) {
   SDL_Quit();
   ScRendererDestroy(&s_custom_renderer);
   ScClipboardClear(&s_clipboard);
+  if(s_development_batches)fprintf(stderr,"[development batches] zones=%u attempts=%llu passes=%llu\n",
+      ScDevelopmentBatchesZones(s_development_batches),
+      (unsigned long long)ScDevelopmentBatchesAttempts(s_development_batches),
+      (unsigned long long)ScDevelopmentBatchesPasses(s_development_batches));
+  ScDevelopmentBatchesDestroy(s_development_batches);s_development_batches=NULL;
   ScPopulationCensusDestroy(s_population_census);s_population_census=NULL;
   write_pc_bitmap_dump();
   write_map_trace_summary();
