@@ -32,12 +32,12 @@ the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) an
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 14 is one portable Windows EXE; run it and select your own clean US ROM.
+Beta 15 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution
-path. Native C simulation kernels retain compatibility fallbacks. The local
-working build now distributes development across city districts at Normal
+path. Native C simulation kernels retain compatibility fallbacks. Beta 15
+distributes development across city districts at Normal
 speed as well; its time allowance keeps development work bounded per frame.
 See the enhancement notes for current behavior and performance limits.
 Enhanced releases are prereleases; see

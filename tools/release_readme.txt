@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 14
+URBAN RECOMP ENHANCED BETA 15
 ===========================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -10,14 +10,15 @@ not replaced. No ROM or personal saves/settings are included.
 Enhanced fork: https://github.com/kandowontu2/UrbanRecomp
 Original project: https://github.com/blackerking/UrbanRecomp
 
-Latest additions: much farther terrain zoom-out, with HUD, toolbox and menus
-kept at their normal size. Zoom remains unchanged during edge/keyboard
-scrolling, toolbar popups, gifts and Dr. Wright messages. The original hand
-appears throughout the widened HUD. Mouse budget controls move freely;
-keyboard/gamepad navigation retains its original jumps.
-Main-menu text is centered and its frame stays the same size during the fade.
-Hidden 3. TEST CITY 3 and its pointer align with the numbered save rows;
-empty slots show only 1. or 2. Panning has extra top/bottom space at every zoom.
+Latest additions: city development now runs in bounded batches distributed
+across districts at every development speed, including Normal. Large cities
+no longer wait for a row-by-row sweep to reach their neighborhoods. Original
+growth, demand, power and land-value rules remain active; calendar and budget
+scheduling are unchanged. Transport-access caches refresh at staggered times
+and invalidate after transport edits or zone capacity changes. Live population
+also refreshes at Normal speed. Completed changes use the existing save format.
+Work is limited per frame to keep input responsive; overloaded machines can
+fall below the requested development rate. Large-city frame spikes remain.
 
 Also included: Vulkan presentation/compute, native C simulation kernels,
 full 1920x1600 maps, population up to 9,999,999,999,999, whole-building

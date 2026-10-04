@@ -1,10 +1,10 @@
 # Enhanced fork changelog
 
-## Unreleased — city development batches
+## 1.2.0 Enhanced Beta 15 â€” 2026-10-04
 
 - Update RCI zones in batches distributed throughout the city, including
   Normal development speed. Use a map-size-independent cadence so a fully
-  built 1920×1600 city no longer waits for a slow moving sweep to reach
+  built 1920Ã—1600 city no longer waits for a slow moving sweep to reach
   each district. Each stable zone index completes a pass before repeating.
 - Bound development work per frame to keep rendering and mouse input
   responsive. Retain the five requested speed multipliers; on overloaded
