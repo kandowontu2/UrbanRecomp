@@ -729,6 +729,42 @@ int main(void) {
     p->screenEnabled[0]=20;p->screenEnabled[1]=3;p->cgadsub=3;
     for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
     assert(r.zoom_frame && r.zoom_hud && r.advisor_frame && !r.city_overlay_frame);
+    /* Preview cells use the live BG2 palette, preserve the native box, stay
+     * sharp at every city zoom, and never alter live PPU state. */
+    memset(p,0,sizeof *p);memset(ram,0,0x20000);ScRendererResetHistory(&r);
+    assert(ScRendererResize(&r,(ScViewport){448,224,96,0,1,0}));
+    for(int i=0;i<32;++i)p->brightnessMult[i]=(i<<3)|(i>>2);
+    p->inidisp=15;p->bgmode=1;p->screenEnabled[0]=2;p->bgXsc[1]=0x50;
+    for(unsigned i=0;i<1024;++i)p->vram[0x5000+i]=7<<10;
+    p->cgram[123]=31<<5;p->cgram[125]=31<<10;p->cgram[120]=31;
+    rom[0x1148e]=11;rom[0x1148f]=13;rom[0x114a6]=8;word(ram,0x14,5);
+    r.map_preview.active=1;r.map_preview.cells[0]=1;r.map_preview.reveal[0]=10;
+    r.map_preview.cells[1]=0x18;r.map_preview.reveal[1]=50;
+    r.map_zoom=.015625;r.defer_terrain=false;
+    for(int x=0;x<256;++x)native[x]=0xff123456;
+    memcpy(before,p,sizeof *p);
+    r.map_preview.frame=0;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(ScRendererPixel(&r,96+48,88)==0xff00ff00);
+    assert(ScRendererPixel(&r,96+47,88)==0xff123456);
+    r.map_preview.frame=45;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(ScRendererPixel(&r,96+48,88)==0xff0000ff);
+    assert(ScRendererPixel(&r,96+49,88)==0xff00ff00);
+    r.map_preview.frame=90;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(ScRendererPixel(&r,96+49,88)==0xffff0000);
+    assert(!memcmp(before,p,sizeof *p));
+    /* Scenario mouse hand spans wide margins without moving native pins.
+     * The guest keeps its original card selection and all OAM bytes. */
+    word(ram,0x14,11);p->screenEnabled[0]=16;p->obsel=0;
+    p->cgram[241]=31;
+    p->vram[0x1000+0x9e*16]=0x0080;
+    r.menu_pointer_active=true;r.menu_pointer_x=280;r.menu_pointer_y=100;
+    memcpy(before,p,sizeof *p);
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(ScRendererPixel(&r,96+280,100)==0xffff0000);
+    assert(!memcmp(before,p,sizeof *p));
     ScRendererDestroy(&r); free(p); free(before); free(ram); free(rom);
     puts("PASS: tile flips, overlays, map bounds, native pixels, tall/wide surfaces and PPU immutability");
     return 0;

@@ -36,7 +36,10 @@ The single-file distribution includes these files internally; run
   identifying the original cursor bytes used by mouse control.
 - **Vitor Vilela:** [SimCity SA-1 Beta 2](https://www.patreon.com/vitorvilela/posts/simcity-sa-1-2-168886217),
   a reference for requested mouse behavior. This fork's implementation is
-  independent; it contains no SA-1 patch bytes.
+  independent; it contains no SA-1 patch bytes. His
+  [animated map-generation demonstration](https://x.com/HackerVilela/status/2106821857437737450)
+  also provided the behavior reference for the staged map-select preview;
+  geography and preview animation are independently implemented.
 
 ## Restored soundtrack
 

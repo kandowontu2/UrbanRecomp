@@ -139,6 +139,8 @@ static bool s_journey_arming;
 static unsigned s_journey_menu_selection;
 static unsigned s_loading_slot;
 static bool s_city_loading;
+static ScMouseUiPointer s_ui_mouse_pointer;
+static uint64_t s_preview_started;
 static bool s_city_present_pending,s_city_fade_started,s_city_black_seen;
 static bool s_test_revealed,s_test_load_pending,s_test_generate_pending,s_test_saving,s_test_swap;
 static bool s_test_menu_pending;
@@ -1035,6 +1037,15 @@ static void handle_pos_stuff(void) {
       ScSavedCityMenuFont(g_ppu->vram,g_ppu->oam,g_ppu->highOam,
           ram_w(0x44),screen==17,s_test_revealed);
     }
+    uint16_t mouse_oam[256];uint8_t mouse_high[32];
+    bool free_ui_cursor=s_ui_mouse_pointer.active && ScMouseUiPointerScreen(g_ram) &&
+        !(s_custom_video.enabled && ScSelector_OnScreen(g_ram[0x14]));
+    if(free_ui_cursor) {
+      memcpy(mouse_oam,g_ppu->oam,sizeof mouse_oam);memcpy(mouse_high,g_ppu->highOam,sizeof mouse_high);
+      /* Presentation only: menu loops can keep jumping their own cursor.
+       * The PPU/GPU see the same mouse endpoint; restore before guest work. */
+      ScMouseUiCursorPlace(g_ram,g_ppu->oam,g_ppu->highOam,s_ui_mouse_pointer.x,s_ui_mouse_pointer.y);
+    }
     if (snes->vPos <= kVideoHeight) {
       uint64_t raster_t0=s_perf_detail?SDL_GetPerformanceCounter():0;
       /* Host-map mode renders each visible line TWICE: once with the layer
@@ -1728,6 +1739,9 @@ static void handle_pos_stuff(void) {
       startingVblank = !ppu_checkOverscan(g_ppu);
     } else if (snes->vPos == 240) {
       if (!snes->inVblank) startingVblank = true;
+    }
+    if(free_ui_cursor) {
+      memcpy(g_ppu->oam,mouse_oam,sizeof mouse_oam);memcpy(g_ppu->highOam,mouse_high,sizeof mouse_high);
     }
     if (startingVblank) {
       ppu_handleVblank(g_ppu);
@@ -4287,7 +4301,9 @@ static bool run_one_frame(void) {
         if (s_large_maps && !s_journey_arming && s_rom_fnv==SC_ROM_FNV_US) {
           if(s_large_maps==5) ScWorldGenerateMega(&s_world,&pr); else if(s_large_maps==4) ScWorldGenerateColossal(&s_world,&pr); else if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr); else if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr); else ScWorldGenerate(&s_world,&pr); ScWorldMirror(&s_world,g_ram);
         } else {
-          ScWorldReset(&s_world); sc_mapgen_generate(&pr, &gs);
+          ScWorldReset(&s_world);
+          if(getenv("SC_MAPGEN_ORIGINAL"))sc_mapgen_generate(&pr,&gs);
+          else sc_mapgen_generate_geographic(&pr,&gs,0);
           s_world.journey=s_journey_arming;
         }
         /* The map is at $7F0200 -- bank 7F, so 0x10200 into WRAM. */
@@ -4295,6 +4311,17 @@ static bool run_one_frame(void) {
           g_ram[0x10200 + 2 * i]     = (uint8_t)(gs.map[i] & 0xff);
           g_ram[0x10200 + 2 * i + 1] = (uint8_t)((gs.map[i] >> 8) & 0xff);
         }
+        if(s_world.active) {
+          memcpy(gs.map,s_world.tiles,ScWorldCells(&s_world)*2);
+        }
+        sc_mapgen_preview_build(&s_custom_renderer.map_preview,gs.map,
+            s_world.active?ScWorldWidth(&s_world):120,s_world.active?ScWorldHeight(&s_world):100,pr.s0);
+        /* Generation precedes the native Please wait panel. Start the reveal
+         * only when map selection is visible, so that panel cannot consume it. */
+        s_preview_started=0;
+        if(getenv("SC_MAP_PREVIEW_DIAG")) fprintf(stderr,"[map preview] started frame %llu mode %u geometry %u,%u\n",
+            (unsigned long long)s_frames,ram_w(0x14),s_world.active?ScWorldWidth(&s_world):120,
+            s_world.active?ScWorldHeight(&s_world):100);
         g_ram[0x59] = (uint8_t)(pr.s0 & 0xff); g_ram[0x5a] = (uint8_t)(pr.s0 >> 8);
         g_ram[0x5b] = (uint8_t)(pr.s1 & 0xff); g_ram[0x5c] = (uint8_t)(pr.s1 >> 8);
         g_ram[0x5d] = (uint8_t)(pr.t  & 0xff); g_ram[0x5e] = (uint8_t)(pr.t  >> 8);
@@ -4520,14 +4547,14 @@ static bool run_one_frame(void) {
     if (s_development_speed>1 && s_rom_is_us && cpu->k==1 && cpu->pc==0x897f &&
         cpu->dp==0 && cpu->db==0 && host_map_screen_live() && !ram_w(0xd7))
       refresh_fast_power(true);
-    if (s_rom_is_us && cpu->k == 3 && cpu->pc == 0xd3e0 && g_ram[0x0b2d] == 1 &&
+    if (s_rom_is_us && cpu->k == 3 && cpu->pc == 0xd3e0 &&
         (s_map_mouse_refresh_pending || s_map_mouse_accept_pending)) {
       if (g_ram[0x0b31]) {
         /* Keyboard navigation normally enters 03:d695 on reaching OK:
          * finish a changed map number before accepting this preview. */
         cpu->pc = 0xd695; cpu->mf = true; cpu->xf = true;
         s_map_mouse_refresh_pending = false;
-      } else if (s_map_mouse_accept_pending) {
+      } else if (s_map_mouse_accept_pending && g_ram[0x0b2d]==1) {
         g_ram[0xca] |= 0x80;
         s_map_mouse_accept_pending = false;
         s_map_mouse_refresh_pending = false;
@@ -7512,6 +7539,9 @@ static bool load_state(const char *path) {
                     "Save it again with this build.\n", path);
     fseek(f, 0, SEEK_SET);
   }
+  s_ui_mouse_pointer=(ScMouseUiPointer){0};
+  s_custom_renderer.menu_pointer_active=false;
+  s_custom_renderer.map_preview.active=0;s_preview_started=0;
   ScConstructionFree(s_build_work);s_build_work=NULL;
   FileSli fs;
   fs.base.func = file_sli_read;
@@ -11434,6 +11464,7 @@ int main(int argc, char **argv) {
     const uint8_t cursor_before_mouse_x = g_ram[0x01eb];
     const uint8_t cursor_before_mouse_y = g_ram[0x01ed];
     bool mouse_target_valid = false;
+    bool mouse_pointer_moved=false;
     bool mouse_ui_handled = false, mouse_ui_hit = false;
     bool mouse_ui_select = false;
     bool mouse_raw_left = false;
@@ -11561,6 +11592,7 @@ int main(int argc, char **argv) {
         if (inside) {
           int dx = last_inside ? mouse_target_x - last_x : 0;
           int dy = last_inside ? mouse_target_y - last_y : 0;
+          mouse_pointer_moved=dx || dy || !last_inside;
           /* Write the full absolute position, never clamp the travel delta:
            * a jump across the viewport must land correctly in one frame. */
           /* The ROM pointer remains byte sized. Host construction uses the
@@ -11780,6 +11812,18 @@ int main(int argc, char **argv) {
      * Note these are the SERIAL-order pad bits (kPad_B = $0001, kPad_A =
      * $0100), not the $4218/$4219 hardware layout -- see
      * docs/HANDOVER_metal_marines.md #1. */
+    ScMouseUiPointerUpdate(&s_ui_mouse_pointer,mouse_target_valid && !s_menu_open,
+        mouse_pointer_moved,mouse_raw_left,input!=0,mouse_target_x,mouse_target_y);
+    s_custom_renderer.menu_pointer_active=s_ui_mouse_pointer.active;
+    s_custom_renderer.menu_pointer_x=s_ui_mouse_pointer.x;
+    s_custom_renderer.menu_pointer_y=s_ui_mouse_pointer.y;
+    if(s_custom_renderer.map_preview.active && !ram_w(0xb31) &&
+       (ram_w(0x14)==5 || ram_w(0x14)==6)) {
+      uint64_t now=SDL_GetPerformanceCounter();
+      if(!s_preview_started)s_preview_started=now;
+      unsigned frame=(now-s_preview_started)*60/SDL_GetPerformanceFrequency();
+      s_custom_renderer.map_preview.frame=frame>90?90:frame;
+    }
     /* Budget mouse input takes control only on motion/press. A stationary
      * pointer must not pull a keyboard/gamepad selection back to its last
      * desktop position after the guest has jumped to another arrow. */
@@ -11805,8 +11849,19 @@ int main(int argc, char **argv) {
           (mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT)))
         s_map_mouse_accept_pending = true;
     }
-    if (g_ram[0x14] != 5 || g_ram[0x0b2d] != 1) {
+    {
+      static bool map_mouse_was_down;
+      /* NEXT and map-number arrows normally defer generation until the pad
+       * reaches OK. A released mouse click should rebuild the preview now,
+       * while retaining the native selection and confirmation path. */
+      if(s_rom_is_us && g_ram[0x14]==5 && g_ram[0xb31] &&
+         map_mouse_was_down && !mouse_raw_left)s_map_mouse_refresh_pending=true;
+      map_mouse_was_down=mouse_raw_left && g_ram[0x14]==5;
+    }
+    if (g_ram[0x14] != 5) {
       s_map_mouse_accept_pending = false; s_map_mouse_refresh_pending = false;
+    } else if(g_ram[0xb2d]!=1) {
+      s_map_mouse_accept_pending=false;
     }
     {
       static bool previous_left;

@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 16 - LOCAL PLACEMENT / ENTRY FIXES
+URBAN RECOMP ENHANCED BETA 16 - LOCAL TERRAIN / MOUSE FIXES
 ======================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -7,7 +7,10 @@ embedded. They unpack into a versioned private cache under LOCALAPPDATA.
 Saves and settings stay beside the portable EXE; existing installations are
 not replaced. No ROM or personal saves/settings are included.
 
-Local follow-up: cheaper large drag previews, responsive batched construction
+Local follow-up: connected rivers, tributaries, lakes, coasts/islands and forest
+districts on every size, with staged map-select previews and free mouse
+pointers across menus. Keyboard/gamepad selection still uses native jumps.
+Also included: cheaper large drag previews, responsive batched construction
 (including the money cheat), and sharp city entry across start/load paths.
 Very large selections still require processing time; they no longer block
 window events throughout placement. This build has not been published.

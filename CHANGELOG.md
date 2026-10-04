@@ -1,6 +1,20 @@
 # Enhanced fork changelog
 
-## Unreleased — local placement and city-entry fixes
+## Unreleased — local terrain, mouse, placement and city-entry fixes
+
+- Generate connected meandering rivers and tributaries, irregular lakes,
+  coastal and island maps, and coherent forest districts on all six map sizes.
+  Sample the full map dimensions with a deterministic 32-bit geographic stream.
+  Keep native shoreline/tree tiles and preserve existing saved terrain.
+- Animate the map-select overview: waterways appear first, followed by forest
+  patches. Begin the reveal after the native waiting panel; show the entire
+  selected map at the original overview size. Mouse NEXT/digit clicks refresh
+  the preview on release without requiring a move to OK.
+- Let the native menu hand/arrow follow mouse motion freely across startup,
+  naming, difficulty, load/save, gifts and city dialogs. Keep native selection,
+  D-pad/menu input and keyboard/gamepad jumps. Real pad input takes ownership
+  from an idle mouse. Preserve title lights, map digits and scenario pins;
+  the scenario selector gains a separate hand that can enter wide margins.
 
 - Replace per-zone drag-preview rectangles with a clipped shared grid; at
   very distant zoom, show an outline instead of a solid subpixel fill. Cache

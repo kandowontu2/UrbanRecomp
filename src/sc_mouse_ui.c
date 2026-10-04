@@ -206,3 +206,39 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
   }
   return result;
 }
+
+bool ScMouseUiPointerScreen(const uint8_t *r) {
+    switch(word(r,0x14)) {
+    case 2:case 3:case 5:case 6:case 7:case 9:case 10:case 11:case 12:
+    case 17:case 18:case 22:return true;
+    case 0:case 0x8000:
+        return word(r,0xd7) || word(r,0x379) || r[0x391] || r[0xe3];
+    default:return false;
+    }
+}
+void ScMouseUiPointerUpdate(ScMouseUiPointer *p,bool inside,bool moved,bool pressed,
+                           bool pad_input,int x,int y) {
+    if(!inside || pad_input) p->active=false;
+    else if(moved || pressed)p->active=true;
+    p->x=x;p->y=y;
+}
+
+int ScMouseUiCursorPlace(const uint8_t *ram,uint16_t *oam,uint8_t *high,int x,int y) {
+    int slot=-1;
+    unsigned mode=word(ram,0x14);
+    if(mode>=10 && mode<=12) {
+        /* Scenario OAM begins with pins, followed by the selection frame.
+         * Its unused final slot can show the shared native menu hand without
+         * changing either the frame or the scroll inferred from those pins. */
+        slot=127;oam[slot*2+1]=0x3f9e;
+        high[slot/4]=(high[slot/4]&~(3u<<6))|(2u<<6);
+    } else if((oam[1]==0x31ec || oam[1]==0x3f9e) &&
+              (oam[0]>>8)<224 && !(high[0]&1))slot=0;
+    else for(int i=0;i<128;++i)
+        if(oam[i*2+1]==0x30c2 && (oam[i*2]>>8)<224 &&
+           !(high[i/4]&(1u<<(2*(i&3))))) {slot=i;break;}
+    if(slot<0)return -1;
+    x=x<0?0:x>255?255:x;y=y<0?0:y>223?223:y;
+    oam[slot*2]=(uint16_t)(x|(y<<8));high[slot/4]&=~(1u<<(2*(slot&3)));
+    return slot;
+}

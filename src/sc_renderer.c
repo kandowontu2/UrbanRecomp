@@ -1970,6 +1970,21 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
             if (row==marker.y || row==marker.y+marker.h-1 || x==marker.x || x==marker.x+marker.w-1)
                 out[x]=ink;
 }
+/* Same 120x100 view and color table as 02:899b/8b34. Show the entire
+ * expanded city, instead of its first 120x100 corner. Keep UI at native scale. */
+static void map_preview_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
+    if(!r->map_preview.active || (u16(ram,0x14)!=5 && u16(ram,0x14)!=6) ||
+        y<88 || y>=188 || !(p->screenEnabled[0]&2))return;
+    uint32_t *row=r->pixels+(size_t)(y+r->view.core_y)*r->view.width;
+    unsigned palette=((bg_word(p,1,48,y+1)>>10)&7)*16;
+    for(unsigned x=0;x<120;++x) {
+        unsigned cell=sc_mapgen_preview_cell(&r->map_preview,x,y-88);
+        unsigned ink=palette+rom_read(r,0x02948e + cell);
+        unsigned object=ScObjPixel(p,48+x);
+        if((p->screenEnabled[0]&16) && (object&255))ink=object&255;
+        row[r->view.core_x+48+x]=color(p,ink);
+    }
+}
 void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const uint32_t *native) {
     if (!r->pixels || !p || !ram || !native || line<0 || line>=224) return;
     if (line==0) {
@@ -2072,6 +2087,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         (p->screenEnabled[0]&3)==3 && !u16(ram,0x379))
         ScRendererPopulationRow(r,p,r->view,r->split_hud,line,
             r->pixels+(size_t)(line+r->view.core_y)*r->view.width);
+    map_preview_row(r,p,ram,line);
     MEASURE_END(r,SC_RENDER_HUD,measured);
     if (line==223) {
         measured=MEASURE_BEGIN(r);
@@ -2088,6 +2104,17 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         MEASURE_END(r,SC_RENDER_ROWS,measured);
         measured=MEASURE_BEGIN(r);
         city_pointer(r,p,ram);
+        /* The selector's OAM starts with map pins, not a cursor. Use its
+         * shared native menu hand across the entire expanded canvas. */
+        if(r->menu_pointer_active && ScSelector_OnScreen(ram[0x14]) &&
+           !PPU_forcedBlank(p) && (p->screenEnabled[0]&16))
+            for(int y=0;y<16;++y)for(int x=0;x<16;++x) {
+                unsigned ci=sprite_word_pixel(p,0x3f9e,16,x,y);
+                int ax=r->view.core_x+r->menu_pointer_x+x;
+                int ay=r->view.core_y+r->menu_pointer_y+y;
+                if(ci && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
+                    r->pixels[(size_t)ay*r->view.width+ax]=color(p,ci);
+            }
         MEASURE_END(r,SC_RENDER_POINTER,measured);
         if(!r->staged_mismatches && !u16(ram,0xd7) && !u16(ram,0x379) && !ram[0x391]) r->scroll_repair=false;
     }

@@ -37,6 +37,7 @@
 #include "sc_mapgen.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 /* Geometry belongs to each generation, so a large map cannot leak its
  * stride into a subsequent stock generation or the standalone helpers. */
@@ -520,11 +521,11 @@ static void generate(ScMapGenPrng *p, ScMapGenState *st, int large) {
 }
 
 void sc_mapgen_generate(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,0); }
-void sc_mapgen_generate_large(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,1); }
-void sc_mapgen_generate_huge(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,2); }
-void sc_mapgen_generate_giant(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,3); }
-void sc_mapgen_generate_mega(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,5); }
-void sc_mapgen_generate_colossal(ScMapGenPrng *p, ScMapGenState *st) { generate(p,st,4); }
+void sc_mapgen_generate_large(ScMapGenPrng *p, ScMapGenState *st) { sc_mapgen_generate_geographic(p,st,1); }
+void sc_mapgen_generate_huge(ScMapGenPrng *p, ScMapGenState *st) { sc_mapgen_generate_geographic(p,st,2); }
+void sc_mapgen_generate_giant(ScMapGenPrng *p, ScMapGenState *st) { sc_mapgen_generate_geographic(p,st,3); }
+void sc_mapgen_generate_mega(ScMapGenPrng *p, ScMapGenState *st) { sc_mapgen_generate_geographic(p,st,5); }
+void sc_mapgen_generate_colossal(ScMapGenPrng *p, ScMapGenState *st) { sc_mapgen_generate_geographic(p,st,4); }
 
 /* ── What is decompiled, and what the comparison says ──────────────────
  *
@@ -1491,3 +1492,135 @@ unsigned sc_mapgen_cell_index(unsigned x, unsigned y) {
  * SEP/REP and will mis-size operands after a width change; and do not trust a
  * harness-side number as if it came from the emulator -- the audio work
  * measured the test harness twice before noticing. */
+
+/* A full-width deterministic stream for geography. The cartridge's range
+ * helper multiplies two bytes: N>=255 wraps and cannot sample a large map. */
+static uint32_t geo_hash(uint32_t v) {
+    v^=v>>16;v*=0x7feb352du;v^=v>>15;v*=0x846ca68bu;return v^(v>>16);
+}
+static uint32_t geo_next(uint32_t *s) { *s+=0x9e3779b9u;return geo_hash(*s); }
+static int geo_lerp(int a,int b,unsigned t) {
+    return a+(int)(((int64_t)(b-a)*t)/65536);
+}
+static unsigned geo_smooth(unsigned t) {
+    return (unsigned)(((uint64_t)t*t*(196608u-2*t))>>32);
+}
+static unsigned geo_noise(unsigned x,unsigned y,unsigned frequency,uint32_t seed) {
+    unsigned ax=x*frequency,ay=y*frequency,ix=ax>>16,iy=ay>>16;
+    unsigned tx=geo_smooth(ax&65535),ty=geo_smooth(ay&65535);
+    int a=geo_hash(seed+ix*374761393u+iy*668265263u)>>16;
+    int b=geo_hash(seed+(ix+1)*374761393u+iy*668265263u)>>16;
+    int c=geo_hash(seed+ix*374761393u+(iy+1)*668265263u)>>16;
+    int d=geo_hash(seed+(ix+1)*374761393u+(iy+1)*668265263u)>>16;
+    return geo_lerp(geo_lerp(a,b,tx),geo_lerp(c,d,tx),ty);
+}
+static int geo_profile(const int *a,unsigned v) {
+    unsigned index=v*8>>16,t=geo_smooth((v*8)&65535);
+    return geo_lerp(a[index],a[index+1],t);
+}
+void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned size) {
+    if(size>5)size=0;
+    unsigned width=120u<<size,height=100u<<size,cells=width*height;
+    st->width=width;st->height=height;
+    memset(st->map,0,sizeof st->map);
+    uint32_t seed=(uint32_t)sc_mapgen_prng_step(p)<<16;
+    seed|=sc_mapgen_prng_step(p);uint32_t rng=seed;
+    unsigned style=geo_next(&rng)%4,vertical=geo_next(&rng)&1,coast_side=geo_next(&rng)&1;
+    int river[9],branch[9],coast[9];
+    int center=21000+geo_next(&rng)%23000;
+    for(unsigned i=0;i<9;++i) {
+        river[i]=center+(int)(geo_next(&rng)%18000)-9000;
+        branch[i]=8000+(int)(geo_next(&rng)%7000)+i*4500;
+        coast[i]=7000+(int)(geo_next(&rng)%6000);
+    }
+    unsigned radius=1700+geo_next(&rng)%1600,join=26000+geo_next(&rng)%17000;
+    struct { int x,y,rx,ry; } lakes[4];
+    unsigned lake_count=1+geo_next(&rng)%4;
+    for(unsigned i=0;i<lake_count;++i) {
+        lakes[i].x=7000+geo_next(&rng)%51500;lakes[i].y=7000+geo_next(&rng)%51500;
+        lakes[i].rx=2600+geo_next(&rng)%3800;lakes[i].ry=2200+geo_next(&rng)%3700;
+    }
+    unsigned forest_threshold=36000+geo_next(&rng)%8000;
+    uint8_t *classes=malloc(cells);
+    /* Allocation failure still produces a playable connected river. */
+    for(unsigned y=0;y<height;++y) {
+        unsigned ny=(uint64_t)y*65535/(height-1);
+        for(unsigned x=0;x<width;++x) {
+            unsigned nx=(uint64_t)x*65535/(width-1),major=vertical?ny:nx,minor=vertical?nx:ny;
+            int river_center=geo_profile(river,major);
+            unsigned rough=geo_noise(nx,ny,24,seed^0xabcdefu);
+            int river_width=radius+(int)rough/40;
+            bool water=abs((int)minor-river_center)<river_width;
+            /* A tributary runs from an edge into the primary channel. Its
+             * interpolated endpoint overlaps the trunk, without isolated dots. */
+            if(major<=join) {
+                unsigned t=(uint64_t)major*65535/join;
+                int tributary=geo_lerp(geo_profile(branch,major),geo_profile(river,join),t);
+                water|=abs((int)minor-tributary)<(int)(radius*2/3+rough/80);
+            }
+            if(style==1 || style==3) {
+                int edge=coast_side?65535-(int)minor:(int)minor;
+                water|=edge<geo_profile(coast,major)+(int)rough/32;
+            }
+            if(style==2) {
+                /* An island with irregular coasts and a through river. */
+                int edge_x=nx<32768?nx:65535-nx,edge_y=ny<32768?ny:65535-ny;
+                water|=edge_x<3700+(int)rough/22 || edge_y<3700+(int)rough/22;
+            }
+            for(unsigned i=0;i<lake_count && !water;++i) {
+                int64_t dx=(int)nx-lakes[i].x,dy=(int)ny-lakes[i].y;
+                water=(dx*dx*65536/(lakes[i].rx*lakes[i].rx)+
+                       dy*dy*65536/(lakes[i].ry*lakes[i].ry))<48000+rough/2;
+            }
+            unsigned type=0;
+            if(water)type=1;
+            else {
+                unsigned forest=(geo_noise(nx,ny,7,seed^0x7654321u)*3+
+                    geo_noise(nx,ny,29,seed^0x1234567u))/4;
+                if(forest>forest_threshold)type=2;
+            }
+            unsigned at=y*width+x;
+            st->map[at]=type==1?1:type==2?0x18:0;
+            if(classes)classes[at]=type;
+        }
+    }
+    if(classes) {
+        static const uint8_t shore[16]={1,7,10,9,8,1,11,1,5,4,1,1,6,1,1,1};
+        static const uint8_t trees[16]={0,0,0,0x16,0,0,0x14,0x15,0,0x1c,0,0x19,0x1a,0x1b,0x17,0x18};
+        const int dx[4]={-1,0,1,0},dy[4]={0,1,0,-1};
+        for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
+            unsigned at=y*width+x,type=classes[at],mask=0;
+            if(!type)continue;
+            for(int d=3;d>=0;--d) {
+                int px=x+dx[d],py=y+dy[d];
+                unsigned other=px>=0 && py>=0 && px<(int)width && py<(int)height?classes[py*width+px]:0;
+                mask=(mask<<1)|(type==1?other!=1:other==2);
+            }
+            unsigned tile=type==1?shore[mask]:trees[mask];
+            unsigned variant=geo_hash(seed^at)&1;
+            if(type==1 && tile!=1)tile+=variant*8;
+            if(type==2 && tile)tile+=variant*9;
+            st->map[at]=tile;
+        }
+        free(classes);
+    }
+    g_sc_mapgen_cur=st;
+}
+void sc_mapgen_preview_build(ScMapPreview *p,const uint16_t *map,
+                             unsigned width,unsigned height,unsigned seed) {
+    memset(p,0,sizeof *p);
+    if(!map || !width || !height)return;
+    for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x) {
+        unsigned at=y*120+x,wx=(uint64_t)x*width/120,wy=(uint64_t)y*height/100;
+        unsigned cell=map[wy*width+wx]&1023;
+        p->cells[at]=cell;
+        p->reveal[at]=cell && cell<0x14?1+y*44/100:
+            cell>=0x14?46+(geo_hash(seed+(x/4)*31337+(y/4)*7919)%44):0;
+    }
+    p->active=1;
+}
+unsigned sc_mapgen_preview_cell(const ScMapPreview *p,unsigned x,unsigned y) {
+    if(!p || !p->active || x>=120 || y>=100)return 0;
+    unsigned at=y*120+x;
+    return p->frame>=p->reveal[at]?p->cells[at]:0;
+}

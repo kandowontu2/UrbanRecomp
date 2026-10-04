@@ -6,6 +6,7 @@
 #include "sc_world.h"
 #include "sc_population.h"
 #include "sc_terrain.h"
+#include "sc_mapgen.h"
 #include <stdint.h>
 #include <stddef.h>
 typedef struct Ppu Ppu;
@@ -34,6 +35,7 @@ typedef struct ScRenderer {
     uint8_t object_grid_high[32],object_grid_y[128],object_grid_grace[128];
     int16_t object_grid_x[128];
     ScVehicleSprite object_grid_vehicles[19];
+    ScMapPreview map_preview;
     ScViewport view;
     ScViewport gameplay_view; /* configured HUD anchor; menus are centered */
     double map_zoom;
@@ -61,6 +63,8 @@ typedef struct ScRenderer {
     bool clipboard_font_valid;
     uint8_t clipboard_font[128][16]; /* original 8x8 adviser lettering */
     int pointer_x, pointer_y; /* full canvas position, relative to the native anchor */
+    bool menu_pointer_active;
+    int menu_pointer_x,menu_pointer_y; /* scenario pointer can enter wide margins */
     int light_slot, light_x, light_pitch;
     bool scroll_valid;
     bool scroll_repair; /* validate staged city tiles until one complete frame agrees */

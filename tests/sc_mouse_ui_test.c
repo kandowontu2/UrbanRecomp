@@ -12,6 +12,41 @@ static bool point(int x,int y) {
   ScMouseUiResult s=ScMouseUiPoint(r,x,y,true,true); assert(s.handled); return s.hit;
 }
 int main(void) {
+  ScMouseUiPointer pointer={0};
+  ScMouseUiPointerUpdate(&pointer,true,true,false,false,117,83);
+  assert(pointer.active && pointer.x==117 && pointer.y==83);
+  ScMouseUiPointerUpdate(&pointer,true,false,false,false,117,83);assert(pointer.active);
+  ScMouseUiPointerUpdate(&pointer,true,false,false,true,117,83);assert(!pointer.active);
+  ScMouseUiPointerUpdate(&pointer,true,false,true,false,118,84);assert(pointer.active);
+  ScMouseUiPointerUpdate(&pointer,false,true,false,false,117,83);assert(!pointer.active);
+  const unsigned modes[]={2,3,5,6,7,9,11,17,18,22};
+  for(unsigned i=0;i<sizeof modes/sizeof *modes;++i) {put(0x14,modes[i]);assert(ScMouseUiPointerScreen(r));}
+  put(0x14,0);assert(!ScMouseUiPointerScreen(r));
+  r[0x391]=255;assert(ScMouseUiPointerScreen(r));r[0x391]=0;
+  put(0x379,255);assert(ScMouseUiPointerScreen(r));put(0x379,0);
+  uint16_t oam[256],original[256];uint8_t high[32],high_before[32];
+  for(unsigned i=0;i<256;++i)oam[i]=original[i]=(uint16_t)(i*113);
+  memset(high,0,sizeof high);oam[0]=0x5080;oam[1]=0x31ec;
+  memcpy(original,oam,sizeof oam);memcpy(high_before,high,sizeof high);
+  assert(ScMouseUiCursorPlace(r,oam,high,117,83)==0);
+  assert(oam[0]==(117|(83<<8)) && !memcmp(oam+1,original+1,sizeof oam-2));
+  assert(!memcmp(high,high_before,sizeof high));
+  assert(ScMouseUiCursorPlace(r,oam,high,-3,500)==0 && oam[0]==(223<<8));
+  /* Main-menu slot zero is a title light, not the arrow in slot 64. */
+  put(0x14,3);oam[1]=0x34b9;oam[128]=0x7c2a;oam[129]=0x30c2;
+  memcpy(original,oam,sizeof oam);
+  assert(ScMouseUiCursorPlace(r,oam,high,100,87)==64);
+  assert(oam[128]==(100|(87<<8)) && !memcmp(oam,original,128*2));
+  assert(!memcmp(oam+129,original+129,127*2));
+  /* Scenario pins and frame remain intact; its extra mouse hand is private. */
+  put(0x14,11);memcpy(original,oam,sizeof oam);
+  assert(ScMouseUiCursorPlace(r,oam,high,99,88)==127);
+  assert(oam[254]==(99|(88<<8)) && oam[255]==0x3f9e);
+  assert(!memcmp(oam,original,254*2) && (high[31]&192)==128);
+  /* No cursor yet: do not reposition an arbitrary native sprite. */
+  put(0x14,5);oam[129]=0;oam[255]=0;
+  memcpy(original,oam,sizeof oam);
+  assert(ScMouseUiCursorPlace(r,oam,high,77,66)==-1 && !memcmp(oam,original,sizeof oam));
   ScMousePan pan={0};ScMousePanDelta d;
   d=ScMousePanUpdate(&pan,true,true,true,100,100,.5,.25);
   assert(pan.active && !d.x && !d.y);

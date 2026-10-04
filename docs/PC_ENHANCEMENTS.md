@@ -7,6 +7,35 @@ enhancements. Windows packages are available from
 
 ## Implemented
 
+Newly generated maps use connected meandering rivers with tributaries,
+organic lakes and forest districts. Seeds vary between river plains, coasts
+and islands. This applies from 120x100 through 3840x3200; saved cities retain
+all their existing terrain. Native shoreline and tree tile rules still apply.
+The original stock generator remains available to developers through
+`SC_MAPGEN_ORIGINAL=1` for Normal maps and unchanged oracle tests.
+
+The map-select preview shows the whole selected map at the original 120x100
+preview resolution. It reveals water first, then forest patches over roughly
+1.5 seconds after the waiting panel. Its palette comes from the live native
+BG2 layer, and the preview does not change city zoom or UI scale. NEXT and
+map-number mouse clicks regenerate the preview when released.
+
+Mouse-driven menus display a free hand or arrow at the absolute pointer,
+while the game retains native selections and synthesized pad interaction.
+Keyboard/gamepad input restores the native jumping cursor; a stationary mouse
+cannot pull it back. Cursor presentation is restored before guest execution,
+so it does not alter simulation or saved OAM. Scenario pins and selection
+frames stay intact, with a separate native hand across the wide canvas.
+
+Validation: deterministic geography checks cover 40 seeds across all six
+sizes, a connected water component spanning opposite edges, feature coverage
+in every quadrant, native tile bounds and preview phases. Stock fingerprints
+remain exact. Renderer tests cover palette, preview borders, unchanged zoom,
+wide scenario pointers and PPU immutability. Local native-ROM replays verify
+water/forest animation, the largest map preview, menu/name/scenario pointers,
+annual and toolbar budget mouse controls, and keyboard takeover. Tests use
+private scratch saves.
+
 Large drag selections use a clipped grid preview and resumable private placement
 batches. Rendering, window events and music continue while the transaction runs;
 the city simulation waits at a safe input boundary until the complete result is

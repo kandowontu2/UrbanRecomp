@@ -21,6 +21,15 @@ bool ScMouseUiBudgetLive(const uint8_t *ram);
 ScMouseUiResult ScMouseUiPoint(uint8_t *ram, int x, int y,
                               bool select, bool ninth_scenario);
 bool ScMouseUiScenarioScroll(uint8_t *ram, int direction, bool ninth_scenario);
+/* Mouse owns the displayed cursor until real keyboard/pad input takes over.
+ * The game retains its selection state and synthesized pad handling. */
+typedef struct ScMouseUiPointer { bool active; int x,y; } ScMouseUiPointer;
+bool ScMouseUiPointerScreen(const uint8_t *ram);
+/* Locate the native hand/arrow without moving map digits, title lights or
+ * scenario pins. Returns the changed slot, or -1 when no cursor is ready. */
+int ScMouseUiCursorPlace(const uint8_t *ram,uint16_t *oam,uint8_t *high,int x,int y);
+void ScMouseUiPointerUpdate(ScMouseUiPointer *p,bool inside,bool moved,bool pressed,
+                           bool pad_input,int x,int y);
 typedef struct ScMousePan { bool active; double x,y; } ScMousePan;
 typedef struct ScMousePanDelta { double x,y; } ScMousePanDelta;
 /* Immediate world-pixel displacement: no pad input, inertia or queued motion.

@@ -3,6 +3,7 @@
 #undef NDEBUG
 #endif
 #include <assert.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,44 @@ static uint64_t hash(const uint16_t *map,unsigned cells) {
         h=(h^(map[i]>>8))*UINT64_C(1099511628211);
     }
     return h;
+}
+static void geographic_check(ScMapGenState *st,unsigned seed,unsigned size) {
+    unsigned w=st->width,h=st->height,n=w*h,counts[3]={0},quadrants[4]={0};
+    uint8_t *seen=calloc(n,1);unsigned *queue=malloc(n*sizeof *queue);assert(seen && queue);
+    bool crossing=false;
+    for(unsigned i=0;i<n;++i) {
+        unsigned v=st->map[i];assert(v<=0x25);
+        unsigned type=!v?0:v<0x14?1:2;++counts[type];
+        if(v)++quadrants[((i/w)>=h/2)*2+((i%w)>=w/2)];
+        if(type!=1 || seen[i])continue;
+        unsigned head=0,tail=0,edges=0;queue[tail++]=i;seen[i]=1;
+        while(head<tail) {
+            unsigned at=queue[head++],x=at%w,y=at/w;
+            edges|=(x==0?1:0)|(x==w-1?2:0)|(y==0?4:0)|(y==h-1?8:0);
+            const int dx[]={-1,1,0,0},dy[]={0,0,-1,1};
+            for(unsigned d=0;d<4;++d) {
+                int px=x+dx[d],py=y+dy[d];
+                if(px<0 || py<0 || px>=(int)w || py>=(int)h)continue;
+                unsigned next=py*w+px,v=st->map[next];
+                if(!seen[next] && v && v<0x14) {seen[next]=1;queue[tail++]=next;}
+            }
+        }
+        crossing|=(edges&3)==3 || (edges&12)==12;
+    }
+    if(!crossing || counts[0]<=n/4 || counts[1]<=n/20 || counts[2]<=n/100) fprintf(stderr,"failed seed %u size %u: crossing %d counts %u,%u,%u\n",seed,size,crossing,counts[0],counts[1],counts[2]);
+    assert(crossing && counts[0]>n/4 && counts[1]>n/20 && counts[2]>n/100);
+    for(unsigned i=0;i<4;++i)assert(quadrants[i]>0);
+    ScMapPreview preview;sc_mapgen_preview_build(&preview,st->map,w,h,seed);
+    preview.frame=0;
+    for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x)assert(!sc_mapgen_preview_cell(&preview,x,y));
+    preview.frame=45;
+    for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x)assert(sc_mapgen_preview_cell(&preview,x,y)<0x14);
+    preview.frame=90;
+    for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x)
+        assert(sc_mapgen_preview_cell(&preview,x,y)==st->map[((uint64_t)y*h/100)*w+(uint64_t)x*w/120]);
+    free(queue);free(seen);
+    printf("geography seed %u size %u: land %.1f%% water %.1f%% trees %.1f%%\n",seed,size,
+        counts[0]*100.0/n,counts[1]*100.0/n,counts[2]*100.0/n);
 }
 int main(void) {
     /* Captured before making geometry configurable: both generator branches. */
@@ -93,6 +132,17 @@ int main(void) {
       unsigned first=g->state.map[0];sc_mapgen_write_cell(&g->state,1919,1599,0xc123);
       assert(g->state.map[3071999]==0xc123 && g->state.map[0]==first && g->before==g->after);
     }
+    uint64_t last=0;
+    for(unsigned size=0;size<6;++size)for(unsigned seed=0;seed<(size<2?16:2);++seed) {
+        ScMapGenPrng p,q;sc_mapgen_seed(&p,0x5c00,seed,0,0,2,0);q=p;
+        sc_mapgen_generate_geographic(&p,&g->state,size);
+        sc_mapgen_generate_geographic(&q,again,size);
+        unsigned cells=g->state.width*g->state.height;
+        assert(!memcmp(g->state.map,again->map,cells*2));
+        uint64_t current=hash(g->state.map,cells);assert(current!=last);last=current;
+        assert(g->before==g->after && g->after==UINT64_C(0xfacedeed98765432));
+        geographic_check(&g->state,seed,size);
+    }
     free(g); free(again);
-    puts("PASS: 16 stock fingerprints, deterministic continuous Big/Huge/960x800/1920x1600 terrain, far-bank cells and bounds guards");
+    puts("PASS: 16 stock fingerprints, 40 deterministic river/forest/coast seeds across all six sizes through 3840x3200, connected water, feature coverage, preview phases, far-bank cells and bounds guards");
 }
