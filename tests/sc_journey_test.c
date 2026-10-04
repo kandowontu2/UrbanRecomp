@@ -54,8 +54,10 @@ static void menu_test(void) {
         const unsigned counts[]={4,7,9,7};unsigned k=0;
         for(unsigned row=0;row<4;++row) for(unsigned i=0;i<counts[row];++i,++k) {
             assert(ram[0x2001+4*k]==ScJourneyMenuY(saved,row+1));
-            assert(ram[0x2000+4*k]>=74 && ram[0x2000+4*k]<224);
+            assert(ram[0x2000+4*k]>=60 && ram[0x2000+4*k]<224);
         }
+        /* Longest line is 136px: centered at x128, with its final Y at188. */
+        assert(ram[0x2000+4*11]==60 && ram[0x2000+4*19]==188);
         interp816_free(c);
     }
     /* Dispatch changes the screen first; the native menu emitter then runs
@@ -86,6 +88,33 @@ static void menu_test(void) {
     assert(ScJourneyMenuY(false,5)==196);
     interp816_free(c);ScMapSizeMenuSet(false);assert(!ScMapSizeMenuActive());
 
+}
+static void saved_city_menu_test(void) {
+    uint16_t oam[256],before_oam[256];uint8_t high[32];
+    for(unsigned mask=0;mask<4;++mask) {
+        for(unsigned i=0;i<256;++i)oam[i]=(uint16_t)(i*17+3);
+        memset(high,0xff,sizeof high);memcpy(before_oam,oam,sizeof oam);
+        for(unsigned i=0;i<0x8000;++i)vram[i]=(uint16_t)(i*197+57);
+        memcpy(font,vram,sizeof font);
+        ScSavedCityMenuFont(vram,oam,high,mask,true,true);
+        for(unsigned city=0;city<2;++city) for(unsigned slot=72+24*city;slot<96+24*city;++slot) {
+            assert(oam[2*slot]==((mask&(1u<<city))?before_oam[2*slot]:(240<<8)));
+            assert(oam[2*slot+1]==before_oam[2*slot+1]);
+        }
+        /* Native heading and numbered rows remain untouched. */
+        assert(!memcmp(oam,before_oam,72*4));
+        assert(oam[240]==((196<<8)|70));
+        assert(oam[242]==((196<<8)|91));
+        assert((high[30]&3)==2);
+        assert(!memcmp(vram+0x1e0*16,font+0x193*16,32));
+        assert(!memcmp(vram+0x1f0*16,font+0x1a3*16,32));
+        assert(!memcmp(vram+0x1f1*16,font+0x3d*16,32));
+        for(unsigned i=0;i<16;++i)assert(!vram[0x1e1*16+i]);
+        ScSavedCityMenuFont(vram,oam,high,mask,false,false);
+        for(unsigned slot=120;slot<127;++slot)assert(oam[2*slot]==(240<<8));
+    }
+    assert(ScSavedCityMenuY(0)==132 && ScSavedCityMenuY(1)==164 && ScSavedCityMenuY(2)==196);
+    puts("PASS: numbered City 3, shared row alignment, empty slots blank and both native save labels preserved");
 }
 static void saved(void) {
     size_t n=ScWorldEncodedSize();uint8_t *p=malloc(n);assert(p);
@@ -153,7 +182,7 @@ static void preserved(unsigned ow,unsigned oh,unsigned dx,unsigned dy,bool host)
 }
 int main(int argc,char **argv) {
     assert(argc==2);FILE *f=fopen(argv[1],"rb");assert(f);
-    assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);menu_test();legacy_giant_save();
+    assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);menu_test();saved_city_menu_test();legacy_giant_save();
     memset(ram,0,sizeof ram);ScWorldReset(&world);
     for(unsigned i=0;i<sizeof ram;++i) ram[i]=(uint8_t)(i*13+9);
     put(0x1bd,20);put(0x1bf,15);put(0x205,37);put(0x207,32);

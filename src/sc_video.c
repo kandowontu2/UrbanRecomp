@@ -154,7 +154,7 @@ bool ScVideoZoom(ScVideoSettings *s,ScViewport current,int w,int h,double factor
     if(!s || w<=0 || h<=0 || !isfinite(factor) || factor<=0 ||
        !isfinite(current.pixel_aspect) || current.pixel_aspect<=0) return false;
     double previous=s->map_zoom>0?s->map_zoom:1;
-    double minimum=fmax((double)current.width/SC_MAX_CANVAS,(double)current.height/SC_MAX_CANVAS);
+    double minimum=fmax((double)current.width/SC_MAX_MAP_SPAN,(double)current.height/SC_MAX_MAP_SPAN);
     double zoom=fmax(minimum,fmin(4,previous*factor));
     bool changed=fabs(previous-zoom)>1e-9;
     if(changed) s->map_zoom=zoom;

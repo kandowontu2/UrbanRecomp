@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 13
+URBAN RECOMP ENHANCED BETA 14
 ===========================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -10,11 +10,14 @@ not replaced. No ROM or personal saves/settings are included.
 Enhanced fork: https://github.com/kandowontu2/UrbanRecomp
 Original project: https://github.com/blackerking/UrbanRecomp
 
-Latest addition: sharper Vulkan terrain zoom at the displayed resolution,
-with the HUD, toolbox, menus and mouse mapping kept at their existing scale.
-CPU and unsupported-backend rendering retain their existing zoom path.
-Mouse drag now controls a free host camera directly, preserving zoom and
-stopping immediately when the mouse stops. PAN SPEED adjusts sensitivity.
+Latest additions: much farther terrain zoom-out, with HUD, toolbox and menus
+kept at their normal size. Zoom remains unchanged during edge/keyboard
+scrolling, toolbar popups, gifts and Dr. Wright messages. The original hand
+appears throughout the widened HUD. Mouse budget controls move freely;
+keyboard/gamepad navigation retains its original jumps.
+Main-menu text is centered and its frame stays the same size during the fade.
+Hidden 3. TEST CITY 3 and its pointer align with the numbered save rows;
+empty slots show only 1. or 2. Panning has extra top/bottom space at every zoom.
 
 Also included: Vulkan presentation/compute, native C simulation kernels,
 full 1920x1600 maps, population up to 9,999,999,999,999, whole-building
@@ -30,8 +33,8 @@ Select map size before starting a city/Practice: 120x100, 240x200, 480x400,
 1,000,000 residents, with Dr. Wright celebrations. F12 development speed
 is Normal, 2x, 5x, 10x or 50x; calendar/budget scheduling remains normal.
 Fit to Screen increases visible land at the chosen tile scale.
-Ctrl+wheel zoom-out now exposes up to 4096x4096 native pixels, twice the
-previous width and height.
+Ctrl+wheel zoom-out now exposes terrain spanning up to 32768x32768 native
+pixels, enough to fit the entire 1920x1600 test city in a widescreen window.
 
 Hidden TEST CITY 3: press Ctrl+Shift+tilde on Resume Saved City to reveal
 the 1920x1600 developed test city. With no saved cities, the same shortcut

@@ -828,7 +828,7 @@ static bool terrain_city_row(ScRenderer *r,const uint8_t *map,unsigned width,uns
 static bool terrain_objects_grid(ScRenderer *r,const Ppu *p,int y) {
     ScTerrainFrame *f=&r->terrain;ScTerrainRow *row=f->rows+y+r->view.core_y;
     unsigned object_width=r->zoom_frame?f->stride*8-7:f->width;
-    if(object_width>SC_MAX_CANVAS)object_width=SC_MAX_CANVAS;
+    if(object_width>SC_MAX_MAP_SPAN)object_width=SC_MAX_MAP_SPAN;
     unsigned key[6]={object_width,(unsigned)r->view.core_x,p->obsel,p->oamaddl,
         (unsigned)r->vehicle_count,(r->city_input && (r->pointer_active || r->pointer_hidden || r->split_hud)?1u:0u)|(r->pan_frame?2u:0u)|(r->zoom_frame?4u:0u)|(r->zoom_hud?8u:0u)};
     if(!r->object_grid_valid || memcmp(key,r->object_grid_key,sizeof key) ||
@@ -839,7 +839,7 @@ static bool terrain_objects_grid(ScRenderer *r,const Ppu *p,int y) {
        memcmp(r->object_grace,r->object_grid_grace,sizeof r->object_grace) ||
        memcmp(r->vehicles,r->object_grid_vehicles,r->vehicle_count*sizeof *r->vehicles)) {
         uint32_t records[147][6];unsigned count=0,columns=(object_width+31)/32;
-        unsigned sizes[1024]={0}; /* eight wrapped Y buckets, max 128 X buckets */
+        unsigned sizes[SC_MAX_MAP_SPAN/4]={0}; /* eight wrapped Y buckets */
         int first=PPU_objPriority(p)?(p->oamaddl&0xfe)/2:0;
         for(int k=-r->vehicle_count;k<128;++k) {
             int left,top,size,clip=0;unsigned attr;
@@ -849,7 +849,7 @@ static bool terrain_objects_grid(ScRenderer *r,const Ppu *p,int y) {
                 size=sprite_sizes[PPU_objSize(p)][v->large?1:0];attr=p->oam[v->slot*2+1];
             } else {
                 int slot=(first+127-k)&127,index=slot*2;
-                if(((key[5]&4) && (slot<4 || ((key[5]&8) && (slot<=33 || (slot>=64 && slot<=71))))) || ((key[5]&1) && slot<4) || ((key[5]&2) && slot>=39 && slot<=52) || !r->object_grace[slot]) continue;
+                if(((key[5]&4) && (slot<4 || ((key[5]&8) && (slot<=38 || (slot>=64 && slot<=108))))) || ((key[5]&1) && slot<4) || ((key[5]&2) && slot>=39 && slot<=52) || !r->object_grace[slot]) continue;
                 bool replaced=false;
                 if(r->camera_x || r->camera_y) for(int v=0;v<r->vehicle_count;++v)
                     if(r->vehicles[v].slot==slot) {replaced=true;break;}
@@ -906,7 +906,7 @@ static bool terrain_objects_grid(ScRenderer *r,const Ppu *p,int y) {
         memcpy(r->object_grid_vehicles,r->vehicles,r->vehicle_count*sizeof *r->vehicles);r->object_grid_valid=true;
     }
     row->reserved=r->object_grid_header;
-    row->world_y=(row->world_y&7)|((uint32_t)(uint16_t)y<<8);
+    row->world_y=(row->world_y&7)|((uint32_t)y<<8);
     row->math|=SC_ROW_GPU_OBJECTS|SC_ROW_OBJECT_GRID|(y>=0 && y<224?SC_ROW_OBJECT_CORE:0);
     return true;
 }
@@ -1109,32 +1109,47 @@ static void zoom_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y,bo
         row->zoom_fraction=(uint32_t)((int64_t)(r->view.core_x+(r->zoom_hud?56:0))*(65536-(int64_t)row->zoom_step))&65535;
         row->math&=~(SC_ROW_NATIVE_REPAIR|SC_ROW_STAGING_CHECK|SC_ROW_OBJECT_CORE|SC_ROW_CITY_HUD|SC_ROW_HUD_TOP);
         row->math|=SC_ROW_CITY_ZOOM;
-        terrain_objects_grid(r,p,y);
+        if(!r->advisor_frame && !r->city_overlay_frame)terrain_objects_grid(r,p,y);
+        else {
+            row->math&=~SC_ROW_GPU_OBJECTS;
+            if(r->advisor_frame)row->math|=SC_ROW_ADVISOR_BACKGROUND;
+        }
         row->math&=~SC_ROW_OBJECT_CORE;
-        row->world_y=(row->world_y&7)|((uint32_t)(uint16_t)virtual_y<<8);
+        row->world_y=(row->world_y&7)|((uint32_t)virtual_y<<8);
     }
     uint32_t *out=r->pixels+(size_t)ay*r->view.width;
     int first=core_only?r->view.core_x:0,end=core_only?r->view.core_x+256:r->view.width;
-    if(r->zoom_hud && y>=0 && y<46)return;
-    /* Fixed HUD coverage and the PPU's blanking bit are row constants.
-     * Split at the sidebar once, then fill contiguous GPU-owned spans;
-     * avoid testing HUD/blanking and updating a counter at every pixel. */
+    if(r->zoom_hud && !r->advisor_frame && !r->city_overlay_frame && y>=0 && y<46)return;
+    /* Project continuous land spans, then apply fixed UI ink. */
     bool deferred=r->defer_terrain && !PPU_forcedBlank(p);
-    int stop=end,next=end;
-    if(r->zoom_hud && y>=46 && y<224) {
-        /* The toolbox starts at x=8. Its left overscan gutter still needs
-         * terrain every frame, unless native composition found real ink
-         * there. Otherwise an old CPU pixel or GPU marker survives zoom. */
-        int sidebar=r->view.core_x+(!core_only || (r->repaired_edges[y]&1)?8:0);
-        if(stop>sidebar)stop=sidebar;
-        next=r->view.core_x+56;if(next<first)next=first;
+    if(deferred) {
+        for(int x=first;x<end;++x)out[x]=SC_TERRAIN_PIXEL;
+        if(end>first)r->terrain.deferred+=(unsigned)(end-first);
+    } else for(int x=first;x<end;++x)out[x]=ScTerrainPixel(&r->terrain,x,ay);
+    if(!core_only || !r->zoom_hud || r->advisor_frame || r->city_overlay_frame || y<46 || y>=224)return;
+    /* The toolbox is BG3 plus fixed UI objects. Recompose that artwork over
+     * projected land, never the native city cache or its building roofs. */
+    unsigned ranks[56]={0};
+    if(p->screenEnabled[0]&4)for(int x=0;x<56;++x) {
+        if((p->screenWindowed[0]&4) && window_contains(p,2,x))continue;
+        bool high=false;unsigned ci=bg_sample(p,2,x,y+1,&high);
+        if(ci) {
+            out[r->view.core_x+x]=composite_color(p,ci,2,0,5,x);
+            ranks[x]=high?(PPU_bg3priority(p)?15:3):1;
+        }
     }
-    for(unsigned span=0;span<2;++span) {
-        if(deferred) {
-            for(int x=first;x<stop;++x)out[x]=SC_TERRAIN_PIXEL;
-            if(stop>first)r->terrain.deferred+=(unsigned)(stop-first);
-        } else for(int x=first;x<stop;++x)out[x]=ScTerrainPixel(&r->terrain,x,ay);
-        first=next;stop=end;next=end;
+    if(p->screenEnabled[0]&16)for(int slot=108;slot>=34;--slot) {
+        if(slot>38 && slot<64)continue; /* land sprites and navigation */
+        int ox=sprite_x(p,slot);if(ox>=256)ox-=512;
+        int dy=y-(p->oam[slot*2]>>8);
+        int index=slot*2,size=sprite_sizes[PPU_objSize(p)][(p->highOam[index/8]>>(index%8+1))&1];
+        if(dy<0 || dy>=size || ox>=56 || ox+size<=0)continue;
+        unsigned rank=2+4*((p->oam[index+1]>>12)&3);
+        for(int x=ox<0?0:ox;x<ox+size && x<56;++x) {
+            if(rank<=ranks[x] || ((p->screenWindowed[0]&16) && window_contains(p,4,x)))continue;
+            unsigned ci=sprite_pixel(p,slot,x-ox,dy);
+            if(ci)out[r->view.core_x+x]=composite_color(p,ci,ci<192?6:4,0,5,x);
+        }
     }
 }
 void ScRendererResetHistory(ScRenderer *r) {
@@ -1164,7 +1179,11 @@ void ScRendererPan(ScRenderer *r,double dx,double dy) {
     double right=ox+(r->view.width-r->view.core_x-ox)/zoom;
     double bottom=oy+(r->view.height-r->view.core_y-oy)/zoom;
     double min_x=fmin(-left,width*8-right),max_x=fmax(-left,width*8-right);
-    double min_y=fmin(-top,height*8-bottom),max_y=fmax(-top,height*8-bottom);
+    /* Keep 64 canvas pixels of vertical overscan at either edge, including
+     * when zoomed out. This lets edge tiles move clear of the fixed HUD. */
+    double slack_y=64/zoom;
+    double min_y=fmin(-top,height*8-bottom)-slack_y;
+    double max_y=fmax(-top,height*8-bottom)+slack_y;
     /* A zoom change or loaded native camera may already lie beyond these
      * viewport bounds. Let the drag bring it back without an initial jump. */
     min_x=fmin(min_x,base_x+r->camera_x);max_x=fmax(max_x,base_x+r->camera_x);
@@ -1434,6 +1453,14 @@ static void capture_advisor_row(ScRenderer *r,const Ppu *p,int y,const uint32_t 
         bool obj=(p->screenEnabled[0]&16) &&
             (!(p->screenWindowed[0]&16) || !window_contains(p,4,x)) &&
             (ScObjPixel(p,x)&255);
+        if(obj && r->city_overlay_frame) {
+            obj=false;
+            for(int slot=0;slot<109 && !obj;++slot) {
+                int ox=sprite_x(p,slot);if(ox>=256)ox-=512;
+                int dy=y-(p->oam[slot*2]>>8);
+                if(dy>=0 && dy<64 && sprite_pixel(p,slot,x-ox,dy))obj=true;
+            }
+        }
         r->advisor_pixels[y*256+x]=(page || obj) ?
             r->native_line ? SC_RELOCATED_NATIVE_PIXEL|((unsigned)(y+r->view.core_y)<<8)|x :
             native[x]|0xff000000 : 0;
@@ -1697,8 +1724,8 @@ static void city_pointer(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
             for (int x=0;x<64;++x) if (sprite_pixel(p,slot,x,row)) {
                 int source=ox+x,ax=r->view.core_x+source,ay=r->view.core_y+y;
                 /* Zoom reconstructs the land without proxy sprites. Only
-                 * restore native sidebar pixels here; its hand stays full size. */
-                if (r->zoom_frame && (!r->zoom_hud || source>=56)) continue;
+                 * the separately composed sidebar has no proxy cursor either. */
+                if (r->zoom_frame) continue;
                 if (source>=0 && source<256 && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
                     r->pixels[(size_t)ay*r->view.width+ax]=without_pointer(r,p,ram,source,y);
             }
@@ -1956,7 +1983,8 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
          * native rectangle (which would drag the city along with the page). */
         r->advisor_frame=city_live(r,p,ram) && (p->screenEnabled[0]&31)==20 &&
             (p->screenEnabled[1]&31)==3 && !(PPU_mathEnabled(p)&20) &&
-            (r->view.core_x!=(r->view.width-256)/2 || r->view.core_y!=(r->view.height-224)/2);
+            (r->map_zoom!=1 || r->camera_x || r->camera_y ||
+             r->view.core_x!=(r->view.width-256)/2 || r->view.core_y!=(r->view.height-224)/2);
         bool hud=city_live(r,p,ram) && !r->advisor_frame && u16(ram,0x1d7) &&
             (p->screenEnabled[0]&3)==3 && !u16(ram,0x379);
         r->split_hud=hud && r->view.width>256;
@@ -1965,14 +1993,21 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
             sprite_x(p,40)<256; /* high X bit parks the hidden minimap */
         r->city_input=city_live(r,p,ram) && !r->advisor_frame && !u16(ram,0x379) &&
             !u16(ram,0xd7) && !ram[0x391] && !ram[0xe3]; /* gift picker */
-        r->zoom_hud=hud;
-        r->zoom_frame=r->city_input && !r->map_hold && r->map_zoom>0 && (fabs(r->map_zoom-1)>1e-9 || r->camera_x || r->camera_y);
+        /* Input/modal gates do not change the terrain's selected zoom.
+         * Retain its pivot while overlays temporarily hide the HUD. */
+        if(r->city_input || !city_live(r,p,ram))r->zoom_hud=hud;
+        r->zoom_frame=city_live(r,p,ram) && !r->map_hold && r->map_zoom>0 && (fabs(r->map_zoom-1)>1e-9 || r->camera_x || r->camera_y);
+        r->city_overlay_frame=r->zoom_frame && !r->city_input && !r->advisor_frame && !r->pan_frame;
+        if(getenv("SC_CITY_VIEW_DIAG"))fprintf(stderr,
+            "[city view] input=%d adviser=%d pan=%d zoom=%g applied=%d hud=%d masks=%u/%u modal=%u/%u/%u/%u\n",
+            r->city_input,r->advisor_frame,r->pan_frame,r->map_zoom,r->zoom_frame,r->zoom_hud,
+            p->screenEnabled[0],p->screenEnabled[1],u16(ram,0xd7),u16(ram,0x379),ram[0x391],ram[0xe3]);
         if(r->zoom_frame) {
             unsigned span=(unsigned)ceil(r->view.width*(double)zoom_step(r)/65536);
             /* Native HUD and menu sampling still addresses the full UI row
              * when terrain is magnified. Never shrink its tile allocation. */
             if(span<(unsigned)r->view.width)span=(unsigned)r->view.width;
-            if(span>SC_MAX_CANVAS)span=SC_MAX_CANVAS;
+            if(span>SC_MAX_MAP_SPAN)span=SC_MAX_MAP_SPAN;
             if(!ScTerrainResize(&r->terrain,r->view.width,r->view.height) || !ScTerrainSpanWidth(&r->terrain,span))r->zoom_frame=false;
         } else if(r->terrain.tiles)ScTerrainSpanWidth(&r->terrain,r->view.width);
         find_lights(r,p);
@@ -2004,7 +2039,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
     measured=MEASURE_BEGIN(r);
     int first=(r->repaired_edges[line]&1) ? 8 : 0;
     int end=(r->repaired_edges[line]&2) ? 248 : 256;
-    if (r->advisor_frame) capture_advisor_row(r,p,line,native);
+    if (r->advisor_frame || r->city_overlay_frame) capture_advisor_row(r,p,line,native);
     else if(r->native_line) {
         unsigned policy=r->terrain.rows[line+r->view.core_y].math&~255u;
         capture_native_row(r,p,line+r->view.core_y,line+1);
@@ -2033,6 +2068,10 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         }
         fill_flat_margins(r);
         if (r->advisor_frame) place_advisor(r);
+        else if(r->city_overlay_frame)for(int y=0;y<224;++y)for(int x=0;x<256;++x) {
+            uint32_t pixel=r->advisor_pixels[y*256+x];
+            if(pixel)r->pixels[(size_t)(y+r->view.core_y)*r->view.width+r->view.core_x+x]=pixel;
+        }
         MEASURE_END(r,SC_RENDER_ROWS,measured);
         measured=MEASURE_BEGIN(r);
         city_pointer(r,p,ram);

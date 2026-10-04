@@ -58,7 +58,7 @@ typedef struct {
      * phase, vertical coordinate, map/CHR bases and map dimensions. Otherwise
      * this remains the reference decoder's 256 palette-index samples. */
     uint32_t brightness[32],sub_bg[256];
-    /* world_y low three bits: CHR row; bits 8..23: signed canvas row for
+    /* world_y low three bits: CHR row; bits 8..31: signed 24-bit canvas row for
      * OBJECT_GRID. Keeping the packed row ABI avoids another GPU buffer. */
     uint32_t chr_snapshot,chr_base,warning_base,world_y;
     uint32_t city_base,city_roof,city_owner,reserved; /* reserved: OBJ bucket stream word offset */

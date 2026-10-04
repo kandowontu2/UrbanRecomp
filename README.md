@@ -32,7 +32,7 @@ the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) an
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 13 is one portable Windows EXE; run it and select your own clean US ROM.
+Beta 14 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution
@@ -230,6 +230,8 @@ sit on the keys labelled Y and X — which on QWERTZ are not where a positional
 binding would put them.
 
 The right mouse button also pans the map while it is held and moved.
+The camera allows extra space above and below the map at every zoom level,
+so edge tiles can move clear of the HUD.
 
 Keys that are not SNES buttons:
 
@@ -374,7 +376,12 @@ replacing City 1 or 2. Its full map is stored inside the SRM; the original
 32 KiB cartridge area remains intact. Keep the whole SRM when backing up
 City 3. Save-state loads also retain its hidden-city identity.
 
-Ctrl+mouse-wheel zoom can expose terrain spanning up to **4096x4096** native
-pixels, twice the previous maximum width and height. Only the land zooms;
+Ctrl+mouse-wheel zoom can expose terrain spanning up to **32768x32768** native
+pixels, enough to fit the complete 1920×1600 test city inside a widescreen
+window. Only the land zooms;
 the HUD, minimap, overview panels and menus keep their normal display size.
 Expanded cities update across the map instead of sweeping visibly row by row.
+
+Both the yearly and toolbar budget pages accept a freely moving mouse. Click
+the visible tax/funding arrows or Go With Figures button. Keyboard and gamepad
+navigation retain their original jumps; an idle mouse does not override them.

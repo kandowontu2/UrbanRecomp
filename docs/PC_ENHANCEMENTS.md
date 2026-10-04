@@ -541,6 +541,27 @@ Zoom reveals more land when reducing scale and keeps the complete native HUD
 visible at the upper limit. Geometry checks cover DPI, centered views, bounds
 and pointer mapping. Hardware touchpad behavior has not been verified locally.
 
+Enhanced Beta 14 allows terrain spanning up to 32768x32768 native pixels,
+separately from the canvas size. This can show the entire 1920x1600 test city
+in a widescreen window. HUD, toolbox, overview maps and menus retain their
+normal size. Keyboard and mouse edge scrolling, toolbar popups, gifts and
+Dr. Wright messages preserve the selected terrain zoom. Mouse edge scrolling
+uses the free host camera, including Ctrl's 3x rate. The host camera allows
+64 canvas pixels of extra space above and below the city at each zoom level.
+
+Both yearly and toolbar budget panels accept a freely moving mouse. Click the
+visible adjustment arrows or Go With Figures; keyboard and gamepad navigation
+continue to jump between controls. A stationary mouse does not undo those jumps.
+The hand appears across the entire widened header. The zoomed toolbox uses
+its own original artwork, preventing land and building sprites from leaking
+into its background.
+
+The main menu's centered text and extended panel retain their geometry during
+the fade. Hidden **3. TEST CITY 3** aligns with the numbered save rows and its
+selection pointer. Empty slots display only **1.** or **2.**; existing save
+names and dates remain visible. The third row uses unused sprite slots so it
+cannot overwrite the second city's label.
+
 Population calculation, negative migration, history, reports, HUD and save
 records support 9,999,999,999,999. Existing 64-bit save encoding is retained, so
 older city values load without a format migration. Thirteen-digit HUD values

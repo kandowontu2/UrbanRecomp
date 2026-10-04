@@ -64,7 +64,8 @@ static void check_zoom(void) {
         assert(ScVideoToGuest(after,d,px,py,&x,&y) && x==128 && y==112);
         assert(ScVideoZoom(&s,after,w,h,2));assert(s.map_zoom==1);
         assert(ScVideoZoom(&s,after,w,h,1e-30));
-        assert(s.map_zoom>0 && before.width/s.map_zoom<=SC_MAX_CANVAS+1);
+        assert(s.map_zoom>0 && before.width/s.map_zoom<=SC_MAX_MAP_SPAN+1);
+        assert(before.width/s.map_zoom>=16384); /* full largest-city coverage */
         after=ScVideoViewport(&s,w,h);
         assert(after.width==before.width && after.height==before.height);
         assert(ScVideoZoom(&s,after,w,h,1e30));assert(s.map_zoom==4);

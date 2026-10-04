@@ -43,6 +43,9 @@ int main(void) {
   }
   put(0x14,3); put(0x3e,1);
   assert(point(100,142) && word(0x3e)==2);
+  assert(point(42,114) && word(0x3e)==1); /* shifted native pointer */
+  assert(!point(39,114) && word(0x3e)==1);
+  assert(point(100,142) && word(0x3e)==2);
   assert(!point(100,100) && word(0x3e)==2);
   assert(!point(100,134)); /* gap between rows */
   assert(point(180,164) && word(0x3e)==3); /* Journey below New City */
@@ -86,6 +89,27 @@ int main(void) {
   put(0x14,0x8000); assert(!ScMouseUiPoint(r,100,100,true,true).handled);
   put(0x3e,2); put(0x0ab5,0xffff); put(0x0101,0xffff); put(0x0379,0xff);
   assert(ScMouseUiPoint(r,100,100,true,true).handled); /* native modal cursor */
+  /* Annual budget has no toolbar modal flags. Its free mouse must hit the
+   * arrows directly and reject gaps without moving or snapping the pointer. */
+  put(0xab5,0);put(0x101,0);put(0x379,0);put(0x1fb,2);r[0xe3]=r[0xc3]=1;
+  assert(ScMouseUiBudgetLive(r));put(0x1eb,119);put(0x1ed,73);
+  const int budget_rows[]={52,96,112,128};
+  for(int row=0;row<4;++row)for(int col=0;col<2;++col)
+    for(int y=budget_rows[row]-6;y<budget_rows[row]+8;++y)
+      for(int x=204+col*12;x<216+col*12;++x) {
+        assert(point(x,y) && word(0xd67)==(unsigned)(row*2+col));
+        assert(word(0x1eb)==119 && word(0x1ed)==73);
+      }
+  put(0xd67,3);memcpy(before,r,sizeof r);
+  assert(ScMouseUiPoint(r,210,128,false,true).hit && !memcmp(before,r,sizeof r));
+  assert(!point(120,73) && !point(232,100) && !point(215,85) && word(0xd67)==3);
+  assert(point(72,195) && word(0xd67)==8 && point(191,211));
+  assert(!point(71,200) && !point(192,208) && !point(128,194) && !point(128,212));
+  put(0x379,255);put(0xab5,65535);put(0x101,65535);
+  assert(ScMouseUiBudgetLive(r) && point(220,52) && word(0xd67)==1);
+  put(0x1fb,3);assert(!ScMouseUiBudgetLive(r));
+  put(0x1fb,2);r[0xe3]=255;assert(!ScMouseUiBudgetLive(r));
+  put(0x1fb,0);r[0xe3]=r[0xc3]=0;
   /* The park/casino gift also opens automatically, without toolbar flags. */
   put(0x0ab5,0); put(0x0101,0); put(0x0397,0x0d); put(0x039b,0x0d); r[0x391]=0xff;
   assert(point(84,140) && word(0x037f)==1);
@@ -127,5 +151,5 @@ int main(void) {
   memcpy(before,r,sizeof r); ScMouseUiDialogPoint(dialog,r,80,150,false);
   assert(!memcmp(before,r,sizeof r));
   ScMouseUiObserve(&dialog,r,1,0xcc3a,0); assert(dialog==SC_MOUSE_DIALOG_NONE);
-  puts("PASS: direct grab-and-drag panning, zoom/DPI and fractional movement, stationary holds, captured exit/release, focus/modal cancellation; menu hit regions, gaps, pad coexistence, saved-slot and scenario gates, name keys and map controls");
+  puts("PASS: direct grab-and-drag panning, zoom/DPI and fractional movement, stationary holds, captured exit/release, focus/modal cancellation; free budget pointer/arrow/button regions, gaps, pad coexistence, saved-slot and scenario gates, name keys and map controls");
 }

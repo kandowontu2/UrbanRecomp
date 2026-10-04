@@ -1,4 +1,5 @@
 #include "sc_terrain.h"
+#include "sc_video.h"
 #include <stdlib.h>
 #include <string.h>
 bool ScTerrainResize(ScTerrainFrame *f,unsigned width,unsigned height) {
@@ -21,7 +22,7 @@ void ScTerrainDestroy(ScTerrainFrame *f) {
     free(f->tiles);free(f->palette);free(f->rows);free(f->overlays);free(f->native);free(f->resources);free(f->city);memset(f,0,sizeof *f);
 }
 bool ScTerrainSpanWidth(ScTerrainFrame *f,unsigned width) {
-    if(!f || !f->tiles || !width || width>4096)return false;
+    if(!f || !f->tiles || !width || width>SC_MAX_MAP_SPAN)return false;
     if(width<f->width)width=f->width;
     unsigned stride=(width+14)/8;
     if(stride==f->stride) return true;
@@ -63,7 +64,7 @@ static unsigned captured_object(const ScTerrainFrame *f,const ScTerrainRow *row,
         if((int)x<(int32_t)r[5] || dx<0 || (unsigned)dx>=r[1]) continue;
         unsigned y=r[2],attr=r[3],size=r[1];
         if(row->math&SC_ROW_OBJECT_GRID) {
-            int dy=(int16_t)(row->world_y>>8)-(int32_t)r[2];
+            int dy=((int32_t)row->world_y>>8)-(int32_t)r[2];
             if(attr&0x10000) dy&=255;
             if(dy<0 || (unsigned)dy>=size) continue;
             y=(unsigned)dy;
@@ -191,6 +192,7 @@ static uint32_t terrain_pixel(const ScTerrainFrame *f,unsigned x,unsigned y,
     bool windows[]={contains(row,1,edge),contains(row,5,edge)};
     ScTerrainOverlay overlay=f->overlays[(size_t)y*f->width+x];
     int local=(int)x-(int)row->core_x;
+    if(row->math&SC_ROW_CITY_ZOOM)overlay.object=0; /* UI is composed at fixed scale */
     if(!(row->math&SC_ROW_CITY_ZOOM) && local>=0 && local<256 && (f->native[y].flags&SC_NATIVE_RAW_OBJ))
         overlay.object=(overlay.object&~UINT32_C(0xfff))|ScTerrainNativeObject(f,y,local);
     if((row->math&SC_ROW_GPU_OBJECTS) && !((row->math&SC_ROW_OBJECT_CORE) && local>=0 && local<256)) {
@@ -280,7 +282,7 @@ uint32_t ScTerrainZoomPixel(const ScTerrainFrame *f,unsigned x,unsigned y,
     unsigned step=row.zoom_step;
     unsigned phase=(uint32_t)((int64_t)((int)y-origin_y)*step)&65535;
     unsigned delta=(phase+(unsigned)(((uint64_t)fraction_y*step)>>16))>>16;
-    int target=(int16_t)(row.world_y>>8)+(int)delta;
+    int target=((int32_t)row.world_y>>8)+(int)delta;
     int chr=(row.world_y&7)+(int)delta;
     unsigned source=y;
     /* Adjacent captured rows own immutable city strips. At tile boundaries
@@ -291,13 +293,13 @@ uint32_t ScTerrainZoomPixel(const ScTerrainFrame *f,unsigned x,unsigned y,
         const ScTerrainRow *candidate=f->rows+next;
         if((candidate->math&(SC_ROW_CITY_ZOOM|SC_ROW_CITY_SPANS))!=
             (SC_ROW_CITY_ZOOM|SC_ROW_CITY_SPANS)) break;
-        int candidate_chr=(int)(candidate->world_y&7)+target-(int16_t)(candidate->world_y>>8);
+        int candidate_chr=(int)(candidate->world_y&7)+target-((int32_t)candidate->world_y>>8);
         if(candidate_chr>=0 && candidate_chr<8) {
             row=*candidate;source=next;chr=candidate_chr;break;
         }
     }
-    if(chr>=8) {target=(int16_t)(row.world_y>>8);chr=row.world_y&7;}
-    row.world_y=(unsigned)chr|((uint32_t)(uint16_t)target<<8);
+    if(chr>=8) {target=((int32_t)row.world_y>>8);chr=row.world_y&7;}
+    row.world_y=(unsigned)chr|((uint32_t)target<<8);
     unsigned vx=(unsigned)(((uint64_t)x*row.zoom_step+row.zoom_fraction+
         (((uint64_t)fraction_x*row.zoom_step)>>16))>>16);
     return terrain_pixel(f,x,source,&row,vx);

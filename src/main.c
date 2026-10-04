@@ -996,6 +996,8 @@ static unsigned long long s_loop_frame;
  * then composites over the host map. */
 static uint8_t s_hud_mask = (uint8_t)~0x02;
 
+static bool s_rom_is_us = true;
+
 static void handle_pos_stuff(void) {
   Snes *snes = g_snes;
   Interp816 *cpu = g_cpu;
@@ -1016,9 +1018,13 @@ static void handle_pos_stuff(void) {
 
   if (snes->hPos == 0) {
     bool startingVblank = false;
-    if(snes->vPos==1)
-      ScTestCityMenuFont(g_ppu->vram,g_ppu->oam,g_ppu->highOam,
-          s_test_revealed && ram_w(0x14)==17);
+    if(s_rom_is_us && snes->vPos==1) {
+      unsigned screen=ram_w(0x14);
+      if(screen==2 || screen==3 || screen==17 || screen==18)
+        ScJourneyMenuFrame(g_ppu->vram,PPU_bgTilemapAdr(g_ppu,2));
+      ScSavedCityMenuFont(g_ppu->vram,g_ppu->oam,g_ppu->highOam,
+          ram_w(0x44),screen==17,s_test_revealed);
+    }
     if (snes->vPos <= kVideoHeight) {
       uint64_t raster_t0=s_perf_detail?SDL_GetPerformanceCounter():0;
       /* Host-map mode renders each visible line TWICE: once with the layer
@@ -2687,7 +2693,7 @@ static const int kDragTurbos[] = { 1, 2, 3, 4, 6 };
  * hook in this file is a US address, so all of them have to be gated on it:
  * the other four regions are the same game at different offsets, where the
  * same PC is some unrelated instruction. */
-static bool s_rom_is_us = true;
+
 static uint32_t s_rom_fnv;      /* FNV-1a of the ROM file, see main() */
 static uint32_t s_tr_off, s_tr_len;  /* SC_TRANSLATION, for the recheck */
 /* Translated scenario briefings, keyed by the address they decompress FROM.
@@ -4293,7 +4299,7 @@ static bool run_one_frame(void) {
         cpu->pc=0xbede; /* retain native hand publication and input yield */
       }
       if(s_test_revealed && cpu->k==2 && cpu->pc==0xbef2 && ram_w(0x421)==2)
-        cpu->a=(cpu->a&0xff00)|204;
+        cpu->a=(cpu->a&0xff00)|ScSavedCityMenuY(2);
       if(s_test_revealed && cpu->k==3 && cpu->pc==0xe2a5 && ram_w(0x421)==2)
         cpu->pc=0xe2a9; /* generated City 3 is available even before first save */
       if(cpu->k==3 && cpu->pc==0xe2b8 && s_test_revealed && ram_w(0x421)==2) {
@@ -4346,6 +4352,10 @@ static bool run_one_frame(void) {
         cpu->pc=0xd370;
       }
       if(ScMapSizeMenuActive() && cpu->k==2 && cpu->pc==0xbcbd) cpu->pc=0xbcd0;
+      /* Expand the decompressed panel BEFORE its first DMA. A VRAM-only
+       * edit is overwritten by that pending upload during the entry fade. */
+      if(cpu->k==2 && cpu->pc==0xbb89)
+        ScJourneyMenuFrame((uint16_t *)(g_ram+0x8000),0x3000);
       /* Extend the real five-choice menu and its native hand sprite. */
       if(cpu->k==2 && cpu->pc==0xbcd6) {
         ScJourneyMenuFont(g_ppu->vram);
@@ -4354,6 +4364,7 @@ static bool run_one_frame(void) {
       if(cpu->k==2 && cpu->pc==0xbcfe) {
         unsigned selection=ScMapSizeMenuActive() && !s_size_selecting?s_large_maps+1:
             ram_w(0x14)==2 || ram_w(0x14)==3 || ram_w(0x14)==18?ram_w(0x3e):s_journey_menu_selection;
+        if(!ScMapSizeMenuActive()) ram_set_w(0x25d,42);
         cpu->a=(cpu->a&0xff00)|ScJourneyMenuY(!ScMapSizeMenuActive() && ram_w(0x44)!=0,selection);
         if(ScMapSizeMenuActive() && getenv("SC_SIZE_MENU_DIAG"))
           fprintf(stderr,"[map-size pointer] frame %llu choice %u y %u selecting %d action %u\n",
@@ -7773,7 +7784,7 @@ static void apply_frame_input(uint64_t frame) {
  * use a different anchor from the city HUD. */
 static bool s_mouse_enabled = true;
 static ScMouseUiResult mouse_ui_point(uint8_t *ram,int x,int y,bool select,bool ninth) {
-  if(s_test_revealed && ram_w(0x14)==17 && x>=48 && x<222 && y>=196 && y<220) {
+  if(s_test_revealed && ram_w(0x14)==17 && x>=48 && x<222 && y>=(int)ScSavedCityMenuY(2) && y<(int)ScSavedCityMenuY(2)+24) {
     if(select)ram_set_w(0x421,2);
     return (ScMouseUiResult){true,true};
   }
@@ -11402,8 +11413,8 @@ int main(int argc, char **argv) {
               !right && s_mouse_dialog==SC_MOUSE_DIALOG_NONE && ram_w(0x1d7) &&
               !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3]) {
             int gx,gy;
-            if(ScVideoWindowToGuest(pointer_view,s_destination,ww,wh,drawable_w,drawable_h,mx,my,&gx,&gy) &&
-                ((gy>=0 && gy<46) || (gx>=0 && gx<56 && gy>=46 && gy<224))) {
+            ScVideoWindowToGuest(pointer_view,s_destination,ww,wh,drawable_w,drawable_h,mx,my,&gx,&gy);
+            if((gy>=0 && gy<46) || (gx>=0 && gx<56 && gy>=46 && gy<224)) {
               s_custom_renderer.pointer_active=true;s_custom_renderer.pointer_hud=true;
               s_custom_renderer.pointer_x=gx;s_custom_renderer.pointer_y=gy;
             }
@@ -11418,7 +11429,8 @@ int main(int argc, char **argv) {
           if (s_rom_is_us) {
             ScMouseUiResult ui = mouse_ui_point(g_ram, mouse_target_x, mouse_target_y,
                 false, s_ninth_scenario);
-            mouse_ui_select = dx || dy || (mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT));
+            mouse_ui_select = dx || dy || (mouse_buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) ||
+                (ScMouseUiBudgetLive(g_ram) && !last_inside);
             mouse_ui_handled = ui.handled; mouse_ui_hit = ui.hit;
             if (mouse_navigation_hit) { mouse_ui_handled=true; mouse_ui_hit=false; }
             if (mouse_clip_hit) {mouse_ui_handled=true;mouse_ui_hit=false;}
@@ -11443,7 +11455,20 @@ int main(int argc, char **argv) {
             if (canvas_y >= pointer_view.height-8) mouse_edge_input |= kPad_Down;
             if ((hud_hidden || pointer_view.core_x>0) && canvas_x < 8) mouse_edge_input |= kPad_Left;
             if ((hud_hidden || pointer_view.core_y>0) && canvas_y < 8) mouse_edge_input |= kPad_Up;
-            if (mouse_edge_input) mouse_edge_input |= kPad_A;
+            if(mouse_edge_input && s_custom_video.enabled) {
+              if(s_custom_renderer.city_input && !s_custom_renderer.map_hold) {
+                double zoom=s_custom_renderer.map_zoom>0?s_custom_renderer.map_zoom:1;
+                double speed=2/zoom*((keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL])?3:1);
+                int ex=((mouse_edge_input&kPad_Right)!=0)-((mouse_edge_input&kPad_Left)!=0);
+                int ey=((mouse_edge_input&kPad_Down)!=0)-((mouse_edge_input&kPad_Up)!=0);
+                ScRendererPan(&s_custom_renderer,ex*speed,ey*speed);
+                if(getenv("SC_MOUSE_PAN_DIAG"))fprintf(stderr,
+                    "[host edge] frame %llu camera %d,%d zoom %.6f native %d,%d mode %u\n",
+                    (unsigned long long)s_frames,s_custom_renderer.scroll_x,s_custom_renderer.scroll_y,zoom,
+                    (int16_t)ram_w(0x1bd)*8,(int16_t)ram_w(0x1bf)*8,ram_w(0xd7));
+              }
+              mouse_edge_input=0;
+            } else if(mouse_edge_input)mouse_edge_input|=kPad_A;
           }
         } else {
           /* Letterboxing is outside the rendered input surface. */
@@ -11566,6 +11591,13 @@ int main(int argc, char **argv) {
      * Note these are the SERIAL-order pad bits (kPad_B = $0001, kPad_A =
      * $0100), not the $4218/$4219 hardware layout -- see
      * docs/HANDOVER_metal_marines.md #1. */
+    /* Budget mouse input takes control only on motion/press. A stationary
+     * pointer must not pull a keyboard/gamepad selection back to its last
+     * desktop position after the guest has jumped to another arrow. */
+    if(s_rom_is_us && ScMouseUiBudgetLive(g_ram) && !mouse_ui_select) {
+      g_ram[0x01eb]=cursor_before_mouse_x;g_ram[0x01ed]=cursor_before_mouse_y;
+      mouse_target_valid=false;
+    }
     /* A keyboard direction owns the guest cursor while held. Do not reset
      * its movement to the desktop pointer at the start of the next frame. */
     if (input & (kPad_Left | kPad_Right | kPad_Up | kPad_Down)) {

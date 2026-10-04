@@ -1,5 +1,33 @@
 # Enhanced fork changelog
 
+## 1.2.0 Enhanced Beta 14 — 2026-10-04
+
+- Center the main-menu text block and move its selection pointer with it.
+  Expand the original panel before its entry-fade upload so it keeps one
+  height throughout the fade, rather than growing when the fade ends.
+- Align hidden "3. TEST CITY 3" with the two native numbered save rows and
+  correct its pointer height. Keep its sprites clear of saved City 2's text.
+  Empty save slots show only their numbers, without placeholder names/dates.
+- Add 64 display-space pixels of camera slack above and below the city at
+  every zoom level, allowing edge tiles to move away from the fixed HUD.
+
+- Make both yearly and toolbar budget mouse controls free-moving, with direct
+  arrow/button hit areas, gap rejection and native held-click repeat. Retain
+  keyboard/gamepad jumps; an idle mouse no longer overrides their positions.
+- Increase maximum terrain coverage from 4096 to 32768 native pixels per
+  dimension. Allow the complete 1920×1600 test city to fit inside a widescreen
+  view; retain sharp original tile sampling and fixed-size UI.
+- Preserve city zoom during keyboard navigation, toolbar popups, gift dialogs
+  and Dr. Wright messages. Draw popup artwork at its original size over the
+  selected city view instead of switching the land back to native scale.
+- Use the free host camera for mouse edge scrolling and retain Ctrl's 3× rate.
+- Draw the toolbox from its own BG3 and sprite artwork over zoomed land,
+  preventing unscaled city tiles and building roofs from leaking around it.
+- Show the original hand cursor throughout the full widened HUD, including
+  the space between the left toolbar and right-aligned population/money.
+- Extend packed projected sprite coordinates to signed 24-bit values, with
+  CPU/Vulkan regression coverage beyond the original 16-bit range.
+
 ## 1.2.0 Enhanced Beta 13 — 2026-10-04
 
 - Sharpen terrain zoom on Vulkan by sampling the original tile graphics at

@@ -44,7 +44,7 @@ typedef struct ScRenderer {
     bool native_line; /* this row's native pixels were delegated to Vulkan */
     bool reference_terrain; /* exact per-pixel oracle for regression/profiling */
     uint32_t *advisor_pixels;
-    bool advisor_frame;
+    bool advisor_frame, city_overlay_frame;
     size_t capacity;
     const uint8_t *rom;
     size_t rom_size;

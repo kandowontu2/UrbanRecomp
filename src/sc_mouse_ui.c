@@ -67,6 +67,11 @@ bool ScMouseUiScenarioScroll(uint8_t *r, int direction, bool ninth) {
   put(r, 0x22, col >= 3 ? (col - 2) * 80 : col == 0 ? 0 : word(r, 0x22));
   return true;
 }
+bool ScMouseUiBudgetLive(const uint8_t *r) {
+  unsigned mode=word(r,0x14);
+  return (mode==0 || mode==0x8000) && word(r,0x3e) &&
+      word(r,0x1fb)==2 && r[0xe3]==1 && r[0xc3]==1 && !r[0x391];
+}
 ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
                               bool select, bool ninth) {
   ScMouseUiResult result = {true, false};
@@ -74,6 +79,18 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
   switch (mode) {
   case 0:
   case 0x8000:
+    if(ScMouseUiBudgetLive(r)) {
+      /* 02:ab6a's eight arrow positions and the Go With Figures button.
+       * Absolute mouse coordinates never become D-pad movement. The guest
+       * still owns arithmetic, held-button repeat and budget confirmation. */
+      const int rows[]={52,96,112,128};int choice=-1;
+      for(int row=0;row<4;++row)for(int col=0;col<2;++col)
+        if(box(x,y,204+col*12,rows[row]-6,12,14))choice=row*2+col;
+      if(box(x,y,72,195,120,17))choice=8;
+      result.hit=choice>=0;
+      if(result.hit && select)put(r,0xd67,(unsigned)choice);
+      break;
+    }
     /* 01:a507..a5f8 brackets the adviser dialogue with the byte $0391.
      * Gift 0d is the amusement-park/casino choice, including when it opens
      * automatically outside a toolbar modal. $039b identifies the displayed
@@ -119,7 +136,7 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
     const int first = saved ? 0 : 1;
     for (int i = first; i < 5; ++i) {
       int by = saved ? 100 + 24 * i : 112 + 24 * (i - 1);
-      if (!box(x, y, 48, by, 184, 16)) continue;
+      if (!box(x, y, 40, by, 192, 16)) continue;
       result.hit = true;
       if (select) put(r, 0x3e, (unsigned)i);
     }

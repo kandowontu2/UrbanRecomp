@@ -16,6 +16,8 @@ void ScMouseUiObserve(ScMouseDialog *dialog, const uint8_t *ram,
                       unsigned bank, unsigned pc, unsigned sp);
 ScMouseUiResult ScMouseUiDialogPoint(ScMouseDialog dialog, uint8_t *ram,
                                     int x, int y, bool select);
+/* Both yearly and toolbar budget pages, excluding city/gift/report transitions. */
+bool ScMouseUiBudgetLive(const uint8_t *ram);
 ScMouseUiResult ScMouseUiPoint(uint8_t *ram, int x, int y,
                               bool select, bool ninth_scenario);
 bool ScMouseUiScenarioScroll(uint8_t *ram, int direction, bool ninth_scenario);

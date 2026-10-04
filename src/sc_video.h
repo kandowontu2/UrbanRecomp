@@ -15,7 +15,7 @@ typedef struct ScViewport {
     double pixel_scale; /* Fit keeps this drawable-pixel scale across resizes. */
 } ScViewport;
 typedef struct ScVideoRect { int x, y, w, h; } ScVideoRect;
-enum { SC_MAX_CANVAS = 4096 };
+enum { SC_MAX_CANVAS = 4096, SC_MAX_MAP_SPAN = 32768 };
 const char *ScAspectName(ScAspect aspect);
 const char *ScAspectLabel(ScAspect aspect);
 bool ScParseAspect(const char *value, ScAspect *out);

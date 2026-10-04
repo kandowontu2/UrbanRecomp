@@ -83,7 +83,8 @@ static void build_menu(void) {
     const char **lines=size_menu?sizes:normal;
     unsigned attr=menu_rom[0x23d3]&0xfe,flags_at=0,flags=0;
     for(unsigned row=0;row<(size_menu?6:4);++row) {
-        const char *s=lines[row];unsigned x=74;
+        /* Center the 136-pixel longest line inside the 192-pixel panel. */
+        const char *s=lines[row];unsigned x=size_menu?74:60;
         while(*s) {
             if(*s==' ') {x+=8;++s;continue;}
             const char *end=s;while(*end && *end!=' ') ++end;
@@ -118,32 +119,48 @@ void ScJourneyMenuFont(uint16_t *vram) {
         memcpy(vram+(dst+16)*16,vram+(src+16)*16,32);
     }
 }
-void ScTestCityMenuFont(uint16_t *vram,uint16_t *oam,uint8_t *high,bool visible) {
+unsigned ScSavedCityMenuY(unsigned slot) {return 132+32*slot;}
+void ScSavedCityMenuFont(uint16_t *vram,uint16_t *oam,uint8_t *high,
+        unsigned saved_slots,bool visible,bool test_visible) {
     static bool drawn;
-    if(!visible && !drawn)return;
-    static const char label[]="TEST CITY 3 ";
-    for(unsigned k=0;k<6;++k) {
-        unsigned slot=108+k,index=2*slot,t=0x1e0+2*k,shift=2*(slot&3);
-        if(visible) {
+    if(!menu_rom || (!visible && !drawn)) return;
+    if(!visible) test_visible=false;
+    /* The native name/date rows occupy 72..95 and 96..119. Hide only the
+     * absent city's placeholders; its original number and period remain. */
+    for(unsigned city=0;visible && city<2;++city) if(!(saved_slots&(1u<<city)))
+        for(unsigned slot=72+24*city;slot<96+24*city;++slot)
+            oam[2*slot]=(uint16_t)(240<<8);
+    /* 120..126 are unused by BOTH native save rows. The previous 108..113
+     * allocation overwrote City 2's name/date sprites when it was populated. */
+    static const char label[]="3.TEST CITY 3 ";
+    for(unsigned k=0;k<7;++k) {
+        unsigned slot=120+k,index=2*slot,t=0x1e0+2*k,shift=2*(slot&3);
+        if(test_visible) {
             for(unsigned half=0;half<2;++half) {
                 unsigned c=label[2*k+half],dst=t+half;
-                if(c==' ') {memset(vram+dst*16,0,32);memset(vram+(dst+16)*16,0,32);}
-                else {
+                if(c==' ' || c=='.') {
+                    memset(vram+dst*16,0,32);
+                    if(c=='.') memcpy(vram+(dst+16)*16,vram+0x3d*16,32);
+                    else memset(vram+(dst+16)*16,0,32);
+                } else {
                     unsigned src=c>='0' && c<='9'?0x190+c-'0':c<='P'?c-'A':32+c-'Q';
-                    memcpy(vram+dst*16,vram+src*16,32);memcpy(vram+(dst+16)*16,vram+(src+16)*16,32);
+                    memcpy(vram+dst*16,vram+src*16,32);
+                    memcpy(vram+(dst+16)*16,vram+(src+16)*16,32);
                 }
             }
-            oam[index]=(196<<8)|(74+16*k);
+            unsigned x=k?91+16*(k-1):70;
+            oam[index]=(uint16_t)((ScSavedCityMenuY(2)<<8)|x);
             oam[index+1]=(uint16_t)(t|((menu_rom[0x23d3]&0xfe)<<8));
             high[slot/4]=(high[slot/4]&~(3u<<shift))|(2u<<shift);
         } else oam[index]=(uint16_t)(240<<8);
     }
-    drawn=visible;
+    drawn=test_visible;
 }
 void ScJourneyMenuFrame(uint16_t *vram,unsigned base) {
     /* Extend the original frame by two tile rows so Select Scenario fits
      * below Journey even when Resume adds a fifth choice. Idempotent after
-     * the menu packet's DMA; all border and fill tiles come from that frame. */
+     * the menu packet's DMA, or on its decompressed buffer before upload.
+     * All border and fill tiles come from that frame. */
     if(!vram || base>0x7c00 || (vram[base+25*32+4]&1023)!=0x19c) return;
     memcpy(vram+base+27*32+4,vram+base+25*32+4,24*sizeof *vram);
     for(unsigned row=25;row<27;++row)

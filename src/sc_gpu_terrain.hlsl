@@ -53,7 +53,7 @@ uint captured_object(uint at,uint x,uint world_y) {
   if(int(x)<int(city[record+5]) || dx<0 || uint(dx)>=size) continue;
   uint y=city[record+2],attr=city[record+3];
   if(rows[at+9]&524288) {
-   int dy=(int(world_y<<8)>>16)-int(y);
+   int dy=(int(world_y)>>8)-int(y);
    if(attr&65536) dy&=255;
    if(dy<0 || uint(dy)>=size) continue;
    y=uint(dy);
@@ -150,17 +150,17 @@ void main(uint3 id : SV_DispatchThreadID) {
    uint base_at=source_y*311,step=rows[base_at+308];
    uint phase=(uint(int(source_y)-int(origin_y))*step)&65535;
    uint delta=(phase+fractional_step(fraction.y,step))>>16;
-   int target=(int(world_y<<8)>>16)+int(delta);
+   int target=(int(world_y)>>8)+int(delta);
    int chr=int(world_y&7)+int(delta);
    uint original_y=source_y,original_world=world_y;
    [loop] for(uint next=original_y+1;chr>=8 && next<height && next<=original_y+8;++next) {
     uint candidate=next*311;
     if((rows[candidate+9]&1081344)!=1081344) break;
-    int candidate_chr=int(rows[candidate+303]&7)+target-(int(rows[candidate+303]<<8)>>16);
+    int candidate_chr=int(rows[candidate+303]&7)+target-(int(rows[candidate+303])>>8);
     if(candidate_chr>=0 && candidate_chr<8) {source_y=next;chr=candidate_chr;break;}
    }
-   if(chr>=8) {target=int(original_world<<8)>>16;chr=int(original_world&7);}
-   world_y=uint(chr)|((uint(target)&65535)<<8);
+   if(chr>=8) {target=int(original_world)>>8;chr=int(original_world&7);}
+   world_y=uint(chr)|(uint(target)<<8);
   }
   uint at=source_y*311;Row r;
   r.phase=rows[at];r.core_x=rows[at+1];r.main_mask=rows[at+2];r.sub_mask=rows[at+3];
@@ -186,6 +186,7 @@ void main(uint3 id : SV_DispatchThreadID) {
   if(unused&2) {
    if(local>=0 && local<256) overlay=overlays[source_y*256+uint(local)];
   } else overlay=overlays[source_y*width+source_x];
+  if(!native_pixel && (r.math&1048576))overlay.y=0; /* fixed UI is composed separately */
   if((native_pixel || !(r.math&1048576)) && local>=0 && local<256 && (native_rows[source_y*202+3]&8))
    overlay.y=(overlay.y&~4095u)|native_object(source_y*202,at,uint(local));
   if((r.math&65536) && (!(r.math&1048576) || !native_pixel) && !((r.math&131072) && local>=0 && local<256)) {

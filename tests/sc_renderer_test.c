@@ -19,8 +19,10 @@ static void free_camera_test(void) {
     for(unsigned n=0;n<1000;++n) ScRendererPan(r,0,0);
     assert(r->camera_x==x && r->camera_y==y);
     ScRendererPan(r,100000,100000);
-    assert(r->scroll_x==12608 && r->scroll_y==10970); /* full-map viewport bounds */
+    assert(r->scroll_x==12608 && r->scroll_y==11226); /* full-map viewport bounds */
     assert(r->native_scroll_x==2400 && r->native_scroll_y==2400 && r->map_zoom==.25);
+    ScRendererPan(r,-100000,-100000);
+    assert(r->scroll_x==-56 && r->scroll_y==-302); /* 64 screen pixels beyond top */
     ScRendererResetCamera(r);assert(!r->camera_x && !r->camera_y);
     assert(r->scroll_x==2400 && r->scroll_y==2400 && r->map_zoom==.25);
     free(r);free(world);
@@ -695,18 +697,34 @@ int main(void) {
         assert(r.zoom_frame && r.zoom_hud && (r.repaired_edges[100]&1));
         for(int x=0;x<8;++x)
             assert(ScRendererPixel(&r,gutter_view.core_x+x,100)==0xff00ff00);
-        assert(ScRendererPixel(&r,gutter_view.core_x+32,100)==0xff0000ff);
+        assert(ScRendererPixel(&r,gutter_view.core_x+32,100)==0xff00ff00);
         assert(!memcmp(before,p,sizeof *p));
         /* Opaque native UI in the edge band still owns those pixels. */
-        p->screenEnabled[0]=7;p->bgXsc[2]=0x60;
+        p->screenEnabled[0]=7;p->bgXsc[2]=0x60;p->cgram[2]=31;
         for(int cell=0;cell<1024;++cell)p->vram[0x6000+cell]=1;
-        for(int y=0;y<8;++y)p->vram[8+y]=0xff;
+        for(int y=0;y<8;++y)p->vram[8+y]=0xff00;
         for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
         assert(!(r.repaired_edges[100]&1));
-        for(int x=0;x<8;++x)
-            assert(ScRendererPixel(&r,gutter_view.core_x+x,100)==0xff0000ff);
+        for(int x=0;x<56;++x)
+            assert(ScRendererPixel(&r,gutter_view.core_x+x,100)==0xffff0000);
+        assert(ScRendererPixel(&r,gutter_view.core_x+80,100)==0xff00ff00);
         p->screenEnabled[0]=3;memset(p->vram+8,0,8*sizeof *p->vram);
     }
+    /* Native navigation/modal gates may pause city input, but must never
+     * switch its selected terrain scale or the fixed HUD's projection pivot. */
+    r.defer_terrain=false;r.map_zoom=.0625;
+    p->screenEnabled[0]=23;p->screenEnabled[1]=4;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(r.zoom_frame && r.zoom_hud && r.city_input);
+    word(ram,0x379,255);
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(r.zoom_frame && r.zoom_hud && !r.city_input && r.city_overlay_frame);
+    word(ram,0x379,0);ram[0x391]=255;ram[0xe3]=255;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(r.zoom_frame && r.zoom_hud && !r.city_input && r.city_overlay_frame);
+    p->screenEnabled[0]=20;p->screenEnabled[1]=3;p->cgadsub=3;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(r.zoom_frame && r.zoom_hud && r.advisor_frame && !r.city_overlay_frame);
     ScRendererDestroy(&r); free(p); free(before); free(ram); free(rom);
     puts("PASS: tile flips, overlays, map bounds, native pixels, tall/wide surfaces and PPU immutability");
     return 0;
