@@ -4684,6 +4684,7 @@ static bool run_one_frame(void) {
       if(s_city_loading && cpu->k==3 && (cpu->pc==0xc8b3 || cpu->pc==0xc8e6))
         ram_set_w(0x421,s_loading_slot+1);
       if (cpu->k==3 && (cpu->pc==0xce2e || cpu->pc==0xc8c8)) {
+        ScRendererResetCamera(&s_custom_renderer);
         ScRendererBeginMapLoad(&s_custom_renderer);
         reset_refresh_clocks();
         ScWorldReset(&s_world);
@@ -7457,6 +7458,7 @@ static bool load_state(const char *path) {
     }
   }
   g_ppu->lastBrightnessMult = 0xff;   /* rebuild the brightness tables */
+  ScRendererResetCamera(&s_custom_renderer);
   ScRendererResetHistory(&s_custom_renderer);
   memset(s_scroll_pass,0,sizeof s_scroll_pass);
   s_scroll_multiplier=1;
@@ -7825,8 +7827,6 @@ static int s_mouse_sensitivity = 100;
 static int s_pan_max_tiles = 1;
 static const int kPanMaxTiles[] = { 1, 2, 3, 4, 6, 8 };
 
-static uint16_t s_pan_dir;
-static int      s_pan_dir_frames;
 static uint16_t s_mouse_dir;
 static int      s_mouse_dir_frames;
 static const int kMouseSensitivities[] = { 50, 75, 100, 150, 200 };
@@ -11265,14 +11265,12 @@ int main(int argc, char **argv) {
     bool mouse_ui_select = false;
     bool mouse_raw_left = false;
     bool mouse_pan_active = false;
-    static bool panning;
     static bool mouse_pan_grab_requested;
     static bool mouse_pan_relative_requested;
     static double mouse_pan_virtual_x,mouse_pan_virtual_y;
     static double mouse_pan_restore_x,mouse_pan_restore_y;
     bool mouse_navigation_hit = false;
     uint16_t mouse_edge_input = 0;
-    uint16_t middle_pan_input = 0;
     int mouse_target_x = 0, mouse_target_y = 0;
     int mouse_city_x = 0, mouse_city_y = 0;
     bool mouse_city_hit = false;
@@ -11287,7 +11285,7 @@ int main(int argc, char **argv) {
     if (s_mouse_enabled && !scripted_input && !s_menu_open) {
       const uint32_t wf = (uint32_t)SDL_GetWindowFlags(window);
       bool focused = (wf & SDL_WINDOW_INPUT_FOCUS) &&
-                           ((wf & SDL_WINDOW_MOUSE_FOCUS) || s_build_active || s_clip_drag || s_middle_pan.active || panning);
+                           ((wf & SDL_WINDOW_MOUSE_FOCUS) || s_build_active || s_clip_drag || s_middle_pan.active);
       double mx, my;
 #if SNESRECOMP_SDL3
       float fx = 0, fy = 0;
@@ -11305,6 +11303,9 @@ int main(int argc, char **argv) {
         double dx,dy;sc_relative_mouse_delta(&dx,&dy);
         mouse_pan_virtual_x+=dx;mouse_pan_virtual_y+=dy;
         mx=mouse_pan_virtual_x;my=mouse_pan_virtual_y;
+        if(!(mouse_buttons&(SDL_BUTTON(SDL_BUTTON_MIDDLE)|SDL_BUTTON(SDL_BUTTON_RIGHT)))) {
+          mx=mouse_pan_restore_x;my=mouse_pan_restore_y;
+        }
       }
       int ww = 0, wh = 0;
       SDL_GetWindowSize(window, &ww, &wh);
@@ -11358,62 +11359,32 @@ int main(int argc, char **argv) {
               &mouse_city_x,&mouse_city_y);
       static bool last_inside;
       static int last_x, last_y;
-      static double pan_x, pan_y;
-      static unsigned pan_clock;
       const bool right = focused && (mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT));
       const bool middle = focused && (mouse_buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE));
       const bool middle_was_active=s_middle_pan.active;
-      const bool pan_allowed=focused && !mouse_raw_left && !right && !s_build_active && !s_build_pending &&
+      const bool pan_allowed=focused && s_custom_video.enabled && !mouse_raw_left && !s_build_active && !s_build_pending &&
           !s_clip_drag && !s_clip_pending && host_map_screen_live() && !ram_w(0x379) &&
           s_mouse_dialog==SC_MOUSE_DIALOG_NONE && !s_custom_renderer.advisor_frame &&
           (s_middle_pan.active || (!ram_w(0xd7) && !g_ram[0x391] && !g_ram[0xe3] && !s_custom_renderer.map_hold));
       const bool pan_land=inside && !mouse_navigation_hit && !mouse_clip_hit &&
           (s_custom_video.enabled?mouse_city_hit:(!ram_w(0x1d7) || (mouse_target_x>=56 && mouse_target_y>=48)));
-      ScMousePanDirection middle_direction=ScMousePanUpdate(&s_middle_pan,pan_allowed,middle,pan_land,mx,my,
-          ww>0 && s_destination.w>0?(double)drawable_w/ww*pointer_view.width/s_destination.w/(s_custom_renderer.zoom_frame?s_custom_renderer.map_zoom:1):0,
-          wh>0 && s_destination.h>0?(double)drawable_h/wh*pointer_view.height/s_destination.h/(s_custom_renderer.zoom_frame?s_custom_renderer.map_zoom:1):0,
-          (int16_t)ram_w(0x1bd)*8+(g_ppu->hScroll[1]&7),
-          (int16_t)ram_w(0x1bf)*8+(g_ppu->vScroll[1]&7));
+      const bool pan_held=middle || (right && !s_clip_tool);
+      double sensitivity=(double)s_mouse_sensitivity/100*s_pan_max_tiles;
+      double zoom=s_custom_renderer.map_zoom>0?s_custom_renderer.map_zoom:1;
+      ScMousePanDelta pan_delta=ScMousePanUpdate(&s_middle_pan,pan_allowed,pan_held,pan_land,mx,my,
+          ww>0 && s_destination.w>0?(double)drawable_w/ww*pointer_view.width/s_destination.w/zoom*sensitivity:0,
+          wh>0 && s_destination.h>0?(double)drawable_h/wh*pointer_view.height/s_destination.h/zoom*sensitivity:0);
+      if(s_middle_pan.active) ScRendererPan(&s_custom_renderer,pan_delta.x,pan_delta.y);
       if(getenv("SC_MOUSE_PAN_DIAG") && (middle_was_active || s_middle_pan.active))
-        fprintf(stderr,"[middle pan] frame %llu active %d direction %d,%d camera %d,%d pending %.2f,%.2f\n",
-            (unsigned long long)s_frames,(int)s_middle_pan.active,middle_direction.x,middle_direction.y,
-            (int16_t)ram_w(0x1bd)*8+(g_ppu->hScroll[1]&7),(int16_t)ram_w(0x1bf)*8+(g_ppu->vScroll[1]&7),
-            s_middle_pan.pending_x,s_middle_pan.pending_y);
+        fprintf(stderr,"[host pan] frame %llu active %d delta %.4f,%.4f camera %.4f,%.4f zoom %.6f native %d,%d mode %u\n",
+            (unsigned long long)s_frames,(int)s_middle_pan.active,pan_delta.x,pan_delta.y,
+            s_custom_renderer.scroll_x+s_custom_renderer.scroll_adjust_x+s_custom_renderer.camera_x-lround(s_custom_renderer.camera_x),
+            s_custom_renderer.scroll_y+s_custom_renderer.scroll_adjust_y+s_custom_renderer.camera_y-lround(s_custom_renderer.camera_y),zoom,
+            (int16_t)ram_w(0x1bd)*8,(int16_t)ram_w(0x1bf)*8,ram_w(0xd7));
       if(!middle_was_active && s_middle_pan.active) SDL_CaptureMouse(true);
       if(s_middle_pan.active) {
-        middle_pan_input=kPad_A;
-        if(middle_direction.x<0) middle_pan_input|=kPad_Left;
-        if(middle_direction.x>0) middle_pan_input|=kPad_Right;
-        if(middle_direction.y<0) middle_pan_input|=kPad_Up;
-        if(middle_direction.y>0) middle_pan_input|=kPad_Down;
-        panning=false;s_pan_dir_frames=0;s_mouse_dir_frames=0;
-      } else if (right && !mouse_raw_left && !s_build_active && !s_clip_drag && !s_clip_tool &&
-          (inside || panning) && host_map_screen_live()) {
-        if (!panning) { pan_x = mx; pan_y = my; pan_clock = 0; }
-        panning = true;
-        /* A held displacement keeps scrolling: no need to keep dragging.
-         * Scale in guest pixels so DPI and window size do not change feel. */
-        double dx = ww > 0 && s_destination.w > 0 ?
-            (mx-pan_x) * drawable_w / ww * pointer_view.width / s_destination.w : 0;
-        double dy = wh > 0 && s_destination.h > 0 ?
-            (my-pan_y) * drawable_h / wh * pointer_view.height / s_destination.h : 0;
-        dx *= (double)s_mouse_sensitivity / 100;
-        dy *= (double)s_mouse_sensitivity / 100;
-        double distance = fabs(dx) > fabs(dy) ? fabs(dx) : fabs(dy);
-        distance *= s_pan_max_tiles;
-        unsigned interval = distance >= 48 ? 1 : distance >= 24 ? 2 : 4;
-        s_pan_dir = 0;
-        if (pan_clock++ % interval == 0) {
-          if (dx < -4) s_pan_dir |= kPad_Left;
-          if (dx > 4) s_pan_dir |= kPad_Right;
-          if (dy < -4) s_pan_dir |= kPad_Up;
-          if (dy > 4) s_pan_dir |= kPad_Down;
-        }
-        s_pan_dir_frames = s_pan_dir ? 1 : 0;
-        s_mouse_dir_frames = 0;
+        s_mouse_dir_frames=0;
       } else {
-        panning = false;
-        s_pan_dir_frames = 0;
         if (inside) {
           int dx = last_inside ? mouse_target_x - last_x : 0;
           int dy = last_inside ? mouse_target_y - last_y : 0;
@@ -11463,7 +11434,7 @@ int main(int argc, char **argv) {
           } else {
             edge_clock = 0;
           }
-          if (buttons_up && host_map_screen_live()) {
+          if (buttons_up && !middle_was_active && host_map_screen_live()) {
             /* The visible HUD occupies the top and left edges. */
             const bool hud_hidden = !(g_ram[0x01d7] | g_ram[0x01d8]);
             int canvas_x=mouse_target_x+pointer_view.core_x;
@@ -11481,21 +11452,23 @@ int main(int argc, char **argv) {
         }
       }
       last_inside = inside; last_x = mouse_target_x; last_y = mouse_target_y;
-      if (!focused) { mouse_buttons = 0; panning = false; }
-      mouse_pan_active=focused && (panning || s_middle_pan.active);
+      if (!focused) mouse_buttons=0;
+      mouse_pan_active=focused && s_middle_pan.active;
       if(mouse_pan_active && !mouse_pan_grab_requested) {
         mouse_pan_virtual_x=mouse_pan_restore_x=mx;
         mouse_pan_virtual_y=mouse_pan_restore_y=my;
       }
     } else {
       s_middle_pan=(ScMousePan){0};
-      panning=false;s_pan_dir_frames=0;
     }
     if(mouse_pan_relative_requested!=s_middle_pan.active) {
+      bool accepted=sc_window_relative_mouse(window,s_middle_pan.active);
+      mouse_pan_relative_requested=accepted && s_middle_pan.active;
+      /* A mode transition/warp is not a drag movement. Discard stale deltas
+       * before the first real relative event; warp only after disabling. */
+      double discard_x,discard_y;sc_relative_mouse_delta(&discard_x,&discard_y);
       if(!s_middle_pan.active && (SDL_GetWindowFlags(window)&SDL_WINDOW_INPUT_FOCUS))
         SDL_WarpMouseInWindow(window,(int)mouse_pan_restore_x,(int)mouse_pan_restore_y);
-      bool accepted=sc_window_relative_mouse(window,s_middle_pan.active);
-      mouse_pan_relative_requested=s_middle_pan.active;
       if(!accepted) fprintf(stderr,"mouse drag relative mode: %s\n",SDL_GetError());
       if(getenv("SC_MOUSE_PAN_DIAG"))
         fprintf(stderr,"[mouse drag relative] frame %llu enabled %d accepted %d\n",
@@ -11701,7 +11674,7 @@ int main(int argc, char **argv) {
         }
       }
       if (s_build_active || s_build_cancelled || s_build_pending) {
-        mouse_edge_input = 0; s_pan_dir_frames = 0; s_mouse_dir_frames = 0;
+        mouse_edge_input=0;s_mouse_dir_frames=0;
       }
       if (s_custom_video.enabled && (s_build_active || s_build_pending)) {
         s_custom_renderer.pointer_active=true;
@@ -11744,12 +11717,10 @@ int main(int argc, char **argv) {
       /* Right button drives the map pan directly (see the pan block in the
        * mouse handler) rather than feeding A, so it does not also trigger the
        * ROM's own hold-A scroll and double up. */
-      if ((mb & SDL_BUTTON(SDL_BUTTON_RIGHT)) && !s_build_cancelled && !mouse_clip_consumed) {
+      if ((mb & SDL_BUTTON(SDL_BUTTON_RIGHT)) && !s_middle_pan.active && !s_build_cancelled && !mouse_clip_consumed) {
         input |= kPad_A;                      /* the game's own pan modifier */
-        if (s_pan_dir_frames > 0) { input |= s_pan_dir; s_pan_dir_frames--; }
       } }
     input |= mouse_edge_input;
-    input |= middle_pan_input;
     /* Don't feed the keyboard to the game while the settings menu is open:
      * the menu navigates with Up/Down/Left/Right/Enter, which are also the
      * SNES D-pad and Start bindings. The game is frozen so nothing acts on
@@ -11791,13 +11762,12 @@ int main(int argc, char **argv) {
      * ordinary play. Only explicit held gestures remain. */
     bool fast_forward = keys[SDL_SCANCODE_TAB] || test_fast_forward;
     s_wait_lane_enabled=fast_forward;
-    /* Mouse pans consume their queued motion at the faster native scroll rate
-     * at every zoom. Ctrl uses the same rate, rather than multiplying it again. */
-    s_scroll_multiplier=(keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL] ||
-        s_middle_pan.active || s_pan_dir_frames) &&
+    /* Ctrl accelerates keyboard/native scroll. Mouse drag uses the host camera. */
+    s_scroll_multiplier=(keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL]) &&
         host_map_screen_live() && !s_menu_open?3:1;
     /* Deterministic equivalent of Ctrl for mouse/keyboard scroll replays. */
     {const char *e=getenv("SC_SCROLL_MULTIPLIER");if(e && !s_menu_open) s_scroll_multiplier=atoi(e)==3?3:1;}
+    ScVehicles_FullView(s_custom_renderer.camera_x || s_custom_renderer.camera_y);
     s_measure_custom_frame=fast_forward || perf_on;
     if(s_gpu_terrain_enabled && s_custom_video.enabled && !gpu_terrain && !gpu_failed) {
       gpu_terrain=ScGpuTerrainCreate(renderer,s_linear_filter);
@@ -12070,6 +12040,7 @@ int main(int argc, char **argv) {
     }
     SDL_Texture *present_texture=texture;
     if(s_custom_renderer.defer_terrain && s_custom_renderer.terrain.deferred) {
+      ScGpuTerrainDisplaySize(gpu_terrain,(unsigned)s_destination.w,(unsigned)s_destination.h);
       SDL_Texture *computed=ScGpuTerrainDraw(gpu_terrain,&s_custom_renderer);
       if(computed) present_texture=computed;
       else {

@@ -1,5 +1,22 @@
 # Enhanced fork changelog
 
+## 1.2.0 Enhanced Beta 13 — 2026-10-04
+
+- Sharpen terrain zoom on Vulkan by sampling the original tile graphics at
+  the displayed resolution, instead of shrinking land into the logical canvas
+  and enlarging that result. Keep HUD, toolbox, menus and mouse coordinates
+  at their existing scale. Preserve nearest-neighbor pixel edges and immutable
+  city/graphics snapshots across tile boundaries; cap the output at 4096 per
+  dimension. CPU and unsupported-backend rendering retain their existing path.
+
+- Replace mouse pan's SNES directional scrolling with a free host camera.
+  Middle-button drag (and right-button drag over land) applies exact world-pixel
+  displacement without a queue or inertia. Keep zoom unchanged, stop instantly
+  on stationary holds, preserve fractional movement and reach the full map.
+  Hide/capture the pointer during a drag and discard relative-mode transition
+  deltas. PAN SPEED and MOUSE SPEED adjust sensitivity. Keep guest camera and
+  simulation registers unchanged; loading another city resets the view offset.
+
 ## 1.2.0 Enhanced Beta 12 — 2026-10-04
 
 - Convert connected road, bridge and rail upkeep to native C, including

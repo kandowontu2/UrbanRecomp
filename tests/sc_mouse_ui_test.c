@@ -12,40 +12,34 @@ static bool point(int x,int y) {
   ScMouseUiResult s=ScMouseUiPoint(r,x,y,true,true); assert(s.handled); return s.hit;
 }
 int main(void) {
-  ScMousePan pan={0};ScMousePanDirection d;
-  d=ScMousePanUpdate(&pan,true,true,true,100,100,.5,.25,15000,12000);
+  ScMousePan pan={0};ScMousePanDelta d;
+  d=ScMousePanUpdate(&pan,true,true,true,100,100,.5,.25);
   assert(pan.active && !d.x && !d.y);
-  d=ScMousePanUpdate(&pan,true,true,true,132,132,.5,.25,15000,12000);
-  assert(d.x==-1 && d.y==-1 && pan.pending_x==-48 && pan.pending_y==-24); /* direction and 3x DPI/zoom conversion */
-  d=ScMousePanUpdate(&pan,true,true,false,132,132,.5,.25,15000,12000);
-  assert(d.x==-1 && d.y==-1); /* queue survives guest simulation frames */
-  d=ScMousePanUpdate(&pan,true,true,false,132,132,.5,.25,14976,11976);
-  assert(d.x==-1 && !d.y);
-  d=ScMousePanUpdate(&pan,true,true,false,132,132,.5,.25,14952,11976);
-  assert(!d.x && !d.y); /* stationary mouse stops after consumed motion */
-  d=ScMousePanUpdate(&pan,true,true,false,132,132,.5,.25,14928,11976);
-  assert(!d.x && !d.y); /* unrelated keyboard scroll creates no mouse debt */
-  d=ScMousePanUpdate(&pan,true,true,false,-100,-100,.5,.25,14928,11976);
-  assert(d.x==1 && d.y==1 && pan.active); /* outside captured drag */
-  d=ScMousePanUpdate(&pan,true,false,false,-100,-100,.5,.25,14984,11992);
-  assert(!pan.active && !d.x && !d.y && !pan.pending_x);
-  ScMousePanUpdate(&pan,true,true,false,100,100,1,1,0,0);
-  assert(!pan.active); /* cannot start on HUD/outside */
-  ScMousePanUpdate(&pan,true,true,true,100,100,1,1,0,0);
-  ScMousePanUpdate(&pan,true,true,true,92,100,1,1,0,0);
-  d=ScMousePanUpdate(&pan,true,true,true,92,100,1,1,48,0);
-  assert(!d.x && !pan.pending_x); /* Ctrl's 3x pass does not oscillate */
-  d=ScMousePanUpdate(&pan,false,true,true,92,100,1,1,24,0);
-  assert(!pan.active && !d.x && !d.y); /* focus/modal cancellation */
-  for(int i=0;i<3;++i) {
-    const double scale=i==0?.25:i==1?1:2;
+  d=ScMousePanUpdate(&pan,true,true,true,132,132,.5,.25);
+  assert(d.x==-16 && d.y==-8); /* direct DPI/zoom conversion; land follows drag */
+  for(unsigned i=0;i<1000;++i) {
+    d=ScMousePanUpdate(&pan,true,true,false,132,132,.5,.25);
+    assert(!d.x && !d.y && pan.active); /* no drift, debt or delayed camera steps */
+  }
+  d=ScMousePanUpdate(&pan,true,true,false,-100,-100,.5,.25);
+  assert(d.x==116 && d.y==58 && pan.active);
+  d=ScMousePanUpdate(&pan,true,false,false,-100,-100,.5,.25);
+  assert(!pan.active && !d.x && !d.y);
+  ScMousePanUpdate(&pan,true,true,false,100,100,1,1);
+  assert(!pan.active);
+  ScMousePanUpdate(&pan,true,true,true,100,100,1,1);
+  d=ScMousePanUpdate(&pan,false,true,true,92,100,1,1);
+  assert(!pan.active && !d.x && !d.y);
+  for(int i=0;i<4;++i) {
+    const double scale=i==0?.25:i==1?1:i==2?2:4;
     pan=(ScMousePan){0};
-    ScMousePanUpdate(&pan,true,true,true,100,100,scale,scale,0,0);
-    d=ScMousePanUpdate(&pan,true,true,true,116,84,scale,scale,0,0);
-    assert(d.x==-1 && d.y==1);
-    assert(pan.pending_x==-48*scale && pan.pending_y==48*scale);
-    d=ScMousePanUpdate(&pan,true,true,true,116,84,scale,scale,(int)(-48*scale),(int)(48*scale));
-    assert(!d.x && !d.y && !pan.pending_x && !pan.pending_y);
+    ScMousePanUpdate(&pan,true,true,true,100,100,scale,scale);
+    d=ScMousePanUpdate(&pan,true,true,true,116,84,scale,scale);
+    assert(d.x==-16*scale && d.y==16*scale);
+    d=ScMousePanUpdate(&pan,true,true,true,116.25,83.75,scale,scale);
+    assert(d.x==-.25*scale && d.y==.25*scale); /* sub-tile motion retained */
+    d=ScMousePanUpdate(&pan,true,true,true,116.25,83.75,scale,scale);
+    assert(!d.x && !d.y);
   }
   put(0x14,3); put(0x3e,1);
   assert(point(100,142) && word(0x3e)==2);
@@ -133,5 +127,5 @@ int main(void) {
   memcpy(before,r,sizeof r); ScMouseUiDialogPoint(dialog,r,80,150,false);
   assert(!memcmp(before,r,sizeof r));
   ScMouseUiObserve(&dialog,r,1,0xcc3a,0); assert(dialog==SC_MOUSE_DIALOG_NONE);
-  puts("PASS: grab-and-drag 3x panning, zoom/DPI scaling, camera feedback, captured exit/release, Ctrl overshoot, focus/modal cancellation; menu hit regions, gaps, pad coexistence, saved-slot and scenario gates, name keys and map controls");
+  puts("PASS: direct grab-and-drag panning, zoom/DPI and fractional movement, stationary holds, captured exit/release, focus/modal cancellation; menu hit regions, gaps, pad coexistence, saved-slot and scenario gates, name keys and map controls");
 }

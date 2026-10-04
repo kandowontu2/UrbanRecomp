@@ -9,5 +9,6 @@ typedef struct ScGpuTerrain ScGpuTerrain;
 SDL_Renderer *ScGpuTerrainRenderer(SDL_Window *window);
 /* Unsupported renderers return NULL; the CPU renderer remains available. */
 ScGpuTerrain *ScGpuTerrainCreate(SDL_Renderer *renderer,bool linear_filter);
+void ScGpuTerrainDisplaySize(ScGpuTerrain *g,unsigned width,unsigned height);
 SDL_Texture *ScGpuTerrainDraw(ScGpuTerrain *g,const ScRenderer *r);
 void ScGpuTerrainDestroy(ScGpuTerrain *g);

@@ -14,6 +14,55 @@
 #include <stdlib.h>
 #include <string.h>
 static void word(uint8_t *data,unsigned at,unsigned v) {data[at]=v;data[at+1]=v>>8;}
+#ifdef SC_TEST_GPU
+static ScGpuTerrain *sharp_gpu;
+#endif
+static void sharp_zoom_test(void) {
+    ScRenderer *r=calloc(1,sizeof *r);assert(r);r->view=(ScViewport){16,16,0,0,1,0};r->zoom_frame=true;
+    assert(ScTerrainResize(&r->terrain,16,16));assert(ScTerrainSpanWidth(&r->terrain,128));
+    ScTerrainFrame *f=&r->terrain;
+    f->deferred=256;
+    r->pixels=calloc(256,4);assert(r->pixels);
+    f->resource_capacity=2048+16384;f->snapshots=1;
+    f->resources=calloc(f->resource_capacity,4);f->city_capacity=f->city_words=512;
+    f->city=calloc(512,4);assert(f->resources && f->city);
+    f->resources[0]=0x23000000; /* alternating original CHR; transparent roof */
+    for(unsigned y=0;y<8;++y) f->resources[2048+y/2]|=(y&1?0x55u:0xaau)<<((y&1)*16);
+    const unsigned steps[]={262144,327680,131072,73728,58254,32768,16384};
+    for(unsigned test=0;test<sizeof steps/sizeof *steps;++test) {
+        unsigned step=steps[test];
+        for(unsigned y=0;y<16;++y) {
+            ScTerrainRow *row=f->rows+y;memset(row,0,sizeof *row);
+            row->math=SC_ROW_CITY_ZOOM|SC_ROW_CITY_SPANS|SC_ROW_RAW_TERRAIN;
+            row->main=2;row->zoom_step=step;row->chr_snapshot=2048;
+            unsigned vy=y*step>>16;row->world_y=(vy&7)|(vy<<8);
+            for(unsigned i=0;i<32;++i) row->brightness[i]=(i<<3)|(i>>2);
+            f->palette[y*256+1]=32767;
+            for(unsigned x=0;x<16;++x) r->pixels[y*16+x]=SC_TERRAIN_PIXEL;
+        }
+        /* Opaque UI must retain exactly the same nearest-scaled footprint. */
+        r->pixels[0]=0xff123456;
+        unsigned detail=0;
+        for(unsigned y=0;y<60;++y) for(unsigned x=0;x<60;++x) {
+            unsigned vx=(uint64_t)((2*x+1)*16-1)*step/(128*65536),vy=(uint64_t)((2*y+1)*16-1)*step/(128*65536);
+            uint32_t expected=x<4 && y<4?0xff123456:((vx+vy)&1?0xff000000:0xffffffff);
+            uint32_t actual=ScRendererPresentationPixel(r,x,y,64,64);
+            if(actual!=expected) fprintf(stderr,"Sharp zoom step=%u at %u,%u virtual=%u,%u: %08x expected %08x\n",step,x,y,vx,vy,actual,expected);
+            assert(actual==expected);
+            if(actual!=ScRendererPixel(r,x/4,y/4)) ++detail;
+        }
+        if(step>65536 || (step&(step-1))) assert(detail>0);
+#ifdef SC_TEST_GPU
+        ScGpuTerrainDisplaySize(sharp_gpu,64,64);
+        assert(ScGpuTerrainDraw(sharp_gpu,r));
+#endif
+    }
+#ifdef SC_TEST_GPU
+    ScGpuTerrainDisplaySize(sharp_gpu,0,0);
+#endif
+    free(r->pixels);ScTerrainDestroy(f);free(r);
+    puts("PASS: display-resolution zoom preserves original alternating CHR, fractional scales, tile boundaries and fixed UI");
+}
 #if defined(SC_TEST_GPU) && SNESRECOMP_SDL3
 static void presentation_test(SDL_Renderer *renderer,SDL_Texture *computed,const ScRenderer *cpu,bool linear) {
     SDL_Texture *reference=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_ARGB8888,
@@ -69,7 +118,17 @@ int main(void) {
 #endif
     ScGpuTerrain *gpu=ScGpuTerrainCreate(renderer,false);
     if(!gpu) {fprintf(stderr,"SKIP: Vulkan compute unavailable\n");SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();return 77;}
+    sharp_gpu=gpu;
 #endif
+    sharp_zoom_test();
+    if(getenv("SC_TEST_SHARP_ONLY")) {
+#ifdef SC_TEST_GPU
+        ScGpuTerrainDestroy(gpu);SDL_DestroyRenderer(renderer);SDL_DestroyWindow(window);SDL_Quit();
+#endif
+        ScRendererDestroy(cpu);ScRendererDestroy(deferred);ScRendererDestroy(optimized);
+        free(cpu);free(deferred);free(optimized);free(p);free(world);free(rom);free(ram);
+        return 0;
+    }
     const ScViewport views[]={{448,224,0,0,1,0},{684,448,214,112,1,0},{256,448,0,112,1,0},{684,448,0,0,1,0}};
     uint32_t native[256];unsigned captures=0,city_captures=0,compact_captures=0,sub_bg_rows=0;
     for(unsigned scene=0;scene<3;++scene) for(unsigned map=0;map<5;++map) {

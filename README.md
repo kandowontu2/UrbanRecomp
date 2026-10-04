@@ -32,7 +32,7 @@ the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) an
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 12 is one portable Windows EXE; run it and select your own clean US ROM.
+Beta 13 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution

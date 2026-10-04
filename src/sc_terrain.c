@@ -87,8 +87,7 @@ ScTerrainTile ScTerrainRawTile(const ScTerrainFrame *f,unsigned y,unsigned colum
     }
     return t;
 }
-ScTerrainTile ScTerrainResolveTile(const ScTerrainFrame *f,unsigned y,ScTerrainTile t) {
-    const ScTerrainRow *row=f->rows+y;
+static ScTerrainTile resolve_tile(const ScTerrainFrame *f,const ScTerrainRow *row,ScTerrainTile t) {
     if(!(row->math&SC_ROW_RAW_TERRAIN)) return t;
     unsigned base=t.base==UINT32_MAX?0:f->resources[t.base&1023]&65535;
     unsigned roof=t.roof==UINT32_MAX?0x2300:f->resources[t.roof&1023]>>16;
@@ -108,6 +107,9 @@ ScTerrainTile ScTerrainResolveTile(const ScTerrainFrame *f,unsigned y,ScTerrainT
     at=(row->warning_base+0x376*16+world_y)&0x7fff;
     t.reserved=warning?resource_word(f,row,at)|(uint32_t)resource_word(f,row,at+8)<<16:0;
     return t;
+}
+ScTerrainTile ScTerrainResolveTile(const ScTerrainFrame *f,unsigned y,ScTerrainTile t) {
+    return resolve_tile(f,f->rows+y,t);
 }
 static bool contains_mode(const ScTerrainRow *row,unsigned layer,int x,bool logic) {
     unsigned flags=(row->windows>>(layer*4))&15;
@@ -174,11 +176,11 @@ static bool native_repair(const ScTerrainFrame *f,unsigned x,unsigned y,
     if(!land) overlay->object|=0x80000000;
     return true;
 }
-uint32_t ScTerrainPixel(const ScTerrainFrame *f,unsigned x,unsigned y) {
+static uint32_t terrain_pixel(const ScTerrainFrame *f,unsigned x,unsigned y,
+    const ScTerrainRow *row,unsigned virtual_x) {
     if(!f || !f->tiles || x>=f->width || y>=f->height) return 0xff000000;
-    const ScTerrainRow *row=f->rows+y;
-    unsigned px=((row->math&SC_ROW_CITY_ZOOM)?(unsigned)(((uint64_t)x*row->zoom_step+row->zoom_fraction)>>16):x)+row->phase;
-    ScTerrainTile resolved=ScTerrainResolveTile(f,y,ScTerrainRawTile(f,y,px/8));
+    unsigned px=virtual_x+row->phase;
+    ScTerrainTile resolved=resolve_tile(f,row,ScTerrainRawTile(f,y,px/8));
     const ScTerrainTile *t=&resolved;
     unsigned b=decode(t->base,t->attributes&(1<<16)?px&7:7-(px&7));
     unsigned roof=decode(t->roof,t->attributes&(1<<17)?px&7:7-(px&7));
@@ -192,7 +194,7 @@ uint32_t ScTerrainPixel(const ScTerrainFrame *f,unsigned x,unsigned y) {
     if(!(row->math&SC_ROW_CITY_ZOOM) && local>=0 && local<256 && (f->native[y].flags&SC_NATIVE_RAW_OBJ))
         overlay.object=(overlay.object&~UINT32_C(0xfff))|ScTerrainNativeObject(f,y,local);
     if((row->math&SC_ROW_GPU_OBJECTS) && !((row->math&SC_ROW_OBJECT_CORE) && local>=0 && local<256)) {
-        unsigned object_x=(row->math&SC_ROW_CITY_ZOOM)?(unsigned)(row->zoom_x+(int)(((uint64_t)x*row->zoom_step+row->zoom_fraction)>>16)):x;
+        unsigned object_x=(row->math&SC_ROW_CITY_ZOOM)?(unsigned)(row->zoom_x+(int)virtual_x):x;
         overlay.object=captured_object(f,row,object_x)|
             ((row->math&SC_ROW_CITY_HUD) && ((row->math&SC_ROW_HUD_TOP) || local<56)?UINT32_C(0x80000000):0);
     }
@@ -260,6 +262,45 @@ uint32_t ScTerrainPixel(const ScTerrainFrame *f,unsigned x,unsigned y) {
         result|=row->brightness[value]<<(16-channel*8);
     }
     return result;
+}
+
+uint32_t ScTerrainPixel(const ScTerrainFrame *f,unsigned x,unsigned y) {
+    if(!f || x>=f->width || y>=f->height) return 0xff000000;
+    const ScTerrainRow *row=f->rows+y;
+    unsigned vx=(row->math&SC_ROW_CITY_ZOOM)?
+        (unsigned)(((uint64_t)x*row->zoom_step+row->zoom_fraction)>>16):x;
+    return terrain_pixel(f,x,y,row,vx);
+}
+uint32_t ScTerrainZoomPixel(const ScTerrainFrame *f,unsigned x,unsigned y,
+    unsigned fraction_x,unsigned fraction_y,int origin_y) {
+    if(!f || x>=f->width || y>=f->height) return 0xff000000;
+    ScTerrainRow row=f->rows[y];
+    if((row.math&(SC_ROW_CITY_ZOOM|SC_ROW_CITY_SPANS))!=
+        (SC_ROW_CITY_ZOOM|SC_ROW_CITY_SPANS)) return ScTerrainPixel(f,x,y);
+    unsigned step=row.zoom_step;
+    unsigned phase=(uint32_t)((int64_t)((int)y-origin_y)*step)&65535;
+    unsigned delta=(phase+(unsigned)(((uint64_t)fraction_y*step)>>16))>>16;
+    int target=(int16_t)(row.world_y>>8)+(int)delta;
+    int chr=(row.world_y&7)+(int)delta;
+    unsigned source=y;
+    /* Adjacent captured rows own immutable city strips. At tile boundaries
+     * borrow the strip covering the desired CHR row, preserving its snapshot.
+     * Extremely small zooms can skip entire strips; retain that native row
+     * rather than ever sampling another tile's data. */
+    for(unsigned next=y+1;chr>=8 && next<f->height && next<=y+8;++next) {
+        const ScTerrainRow *candidate=f->rows+next;
+        if((candidate->math&(SC_ROW_CITY_ZOOM|SC_ROW_CITY_SPANS))!=
+            (SC_ROW_CITY_ZOOM|SC_ROW_CITY_SPANS)) break;
+        int candidate_chr=(int)(candidate->world_y&7)+target-(int16_t)(candidate->world_y>>8);
+        if(candidate_chr>=0 && candidate_chr<8) {
+            row=*candidate;source=next;chr=candidate_chr;break;
+        }
+    }
+    if(chr>=8) {target=(int16_t)(row.world_y>>8);chr=row.world_y&7;}
+    row.world_y=(unsigned)chr|((uint32_t)(uint16_t)target<<8);
+    unsigned vx=(unsigned)(((uint64_t)x*row.zoom_step+row.zoom_fraction+
+        (((uint64_t)fraction_x*row.zoom_step)>>16))>>16);
+    return terrain_pixel(f,x,source,&row,vx);
 }
 
 uint32_t ScNativePixel(const ScTerrainFrame *f,unsigned x,unsigned y) {

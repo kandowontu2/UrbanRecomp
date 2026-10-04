@@ -199,12 +199,12 @@ static void track_scroll(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     int x=(int16_t)u16(ram,0x1bd)*8+(h&7),y=(int16_t)u16(ram,0x1bf)*8+(v&7);
     if (r->scroll_valid) {
         int dx=scroll_delta(h,r->scroll_h),dy=scroll_delta(v,r->scroll_v);
-        if(dx || dy || x!=r->scroll_x || y!=r->scroll_y) r->scroll_repair=true;
+        if(dx || dy || x!=r->native_scroll_x || y!=r->native_scroll_y) r->scroll_repair=true;
         if (abs(dx)<32 && abs(dy)<32) {
-            int ax=dx-(x-r->scroll_x),ay=dy-(y-r->scroll_y);
+            int ax=dx-(x-r->native_scroll_x),ay=dy-(y-r->native_scroll_y);
             if (ax%8==0) r->scroll_adjust_x+=ax;
             if (ay%8==0) r->scroll_adjust_y+=ay;
-            if (!dx && !dy && x==r->scroll_x && y==r->scroll_y) ++r->scroll_still;
+            if (!dx && !dy && x==r->native_scroll_x && y==r->native_scroll_y) ++r->scroll_still;
             else r->scroll_still=0;
             if (r->scroll_still>=8) r->scroll_adjust_x=r->scroll_adjust_y=0;
             if (r->scroll_adjust_x>8) r->scroll_adjust_x=8;
@@ -213,7 +213,9 @@ static void track_scroll(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
             if (r->scroll_adjust_y< -8) r->scroll_adjust_y=-8;
         } else r->scroll_adjust_x=r->scroll_adjust_y=0;
     } else r->scroll_adjust_x=r->scroll_adjust_y=r->scroll_still=0;
-    r->scroll_valid=true; r->scroll_x=x; r->scroll_y=y; r->scroll_h=h; r->scroll_v=v;
+    r->scroll_valid=true;r->native_scroll_x=x;r->native_scroll_y=y;
+    r->scroll_x=x+(int)lround(r->camera_x);r->scroll_y=y+(int)lround(r->camera_y);
+    r->scroll_h=h;r->scroll_v=v;
 }
 static void track_objects(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     bool city=city_live(r,p,ram);
@@ -683,6 +685,19 @@ uint32_t ScRendererPixel(const ScRenderer *r,int x,int y) {
            pixel==SC_NATIVE_PIXEL?ScNativePixel(&r->terrain,x,y):
            SC_IS_RELOCATED_NATIVE(pixel)?ScRelocatedNativePixel(&r->terrain,pixel):pixel;
 }
+uint32_t ScRendererPresentationPixel(const ScRenderer *r,unsigned x,unsigned y,
+    unsigned width,unsigned height) {
+    /* Match nearest texture sampling at exact texel boundaries: the lower
+     * texel wins. This keeps the existing HUD footprint at half-integer scales. */
+    unsigned sx=(2*x+1)*r->view.width-1,sy=(2*y+1)*r->view.height-1;
+    unsigned nx=sx/(2*width),ny=sy/(2*height);
+    uint32_t pixel=r->pixels[(size_t)ny*r->view.width+nx];
+    if(pixel!=SC_TERRAIN_PIXEL) return ScRendererPixel(r,nx,ny);
+    unsigned fx=width==(unsigned)r->view.width?0:(sx%(2*width))*65536/(2*width);
+    unsigned fy=height==(unsigned)r->view.height?0:(sy%(2*height))*65536/(2*height);
+    return ScTerrainZoomPixel(&r->terrain,nx,ny,fx,fy,
+        r->view.core_y+(r->zoom_hud?46:0));
+}
 bool ScRendererDeferNativeLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line) {
     static int reference=-1;
     if(reference<0) {const char *e=getenv("SC_NATIVE_PPU_REFERENCE");reference=e && *e=='1';}
@@ -835,9 +850,17 @@ static bool terrain_objects_grid(ScRenderer *r,const Ppu *p,int y) {
             } else {
                 int slot=(first+127-k)&127,index=slot*2;
                 if(((key[5]&4) && (slot<4 || ((key[5]&8) && (slot<=33 || (slot>=64 && slot<=71))))) || ((key[5]&1) && slot<4) || ((key[5]&2) && slot>=39 && slot<=52) || !r->object_grace[slot]) continue;
+                bool replaced=false;
+                if(r->camera_x || r->camera_y) for(int v=0;v<r->vehicle_count;++v)
+                    if(r->vehicles[v].slot==slot) {replaced=true;break;}
+                if(replaced) continue;
                 left=r->object_x[slot]+r->view.core_x;top=r->object_y[slot];
                 size=sprite_sizes[PPU_objSize(p)][(p->highOam[index/8]>>(index%8+1))&1];
                 attr=p->oam[index+1]|0x10000; /* native OAM wraps Y modulo 256 */
+            }
+            if(r->camera_x || r->camera_y) {
+                left-=(int)lround(r->camera_x);top-=(int)lround(r->camera_y);
+                clip=0;if(k>=0) attr&=~0x10000u; /* full Y, never wrap distant objects */
             }
             int begin=left>clip?left:clip,end=left+size;
             if(begin<0) begin=0;
@@ -1119,6 +1142,39 @@ void ScRendererResetHistory(ScRenderer *r) {
     r->scroll_valid=r->objects_valid=r->map_valid=r->map_hold=r->title_live=false;
     r->city_input=r->pointer_active=r->pointer_hud=r->pointer_hidden=false;
     memset(r->changed_cells,0,sizeof r->changed_cells);
+}
+void ScRendererResetCamera(ScRenderer *r) {
+    r->scroll_x-=(int)lround(r->camera_x);r->scroll_y-=(int)lround(r->camera_y);
+    r->camera_x=r->camera_y=0;r->object_grid_valid=false;
+}
+void ScRendererPan(ScRenderer *r,double dx,double dy) {
+    if(!isfinite(dx) || !isfinite(dy) || (!dx && !dy)) return;
+    double zoom=r->map_zoom>0?r->map_zoom:1;
+    unsigned width=r->world && r->world->active?ScWorldWidth(r->world):120;
+    unsigned height=r->world && r->world->active?ScWorldHeight(r->world):100;
+    int old_x=(int)lround(r->camera_x),old_y=(int)lround(r->camera_y);
+    int base_x=r->scroll_x+r->scroll_adjust_x-old_x;
+    int base_y=r->scroll_y+r->scroll_adjust_y-old_y;
+    /* Clamp to the actual visible world rectangle, never the cartridge's
+     * 25x22-cell bounds. When the map fits inside the view, allow it to be
+     * dragged between both edges rather than losing it in empty overscan. */
+    double ox=r->zoom_hud?56:0,oy=r->zoom_hud?46:0;
+    double left=r->zoom_hud && !r->view.core_x?ox:ox+(-r->view.core_x-ox)/zoom;
+    double top=r->zoom_hud && !r->view.core_y?oy:oy+(-r->view.core_y-oy)/zoom;
+    double right=ox+(r->view.width-r->view.core_x-ox)/zoom;
+    double bottom=oy+(r->view.height-r->view.core_y-oy)/zoom;
+    double min_x=fmin(-left,width*8-right),max_x=fmax(-left,width*8-right);
+    double min_y=fmin(-top,height*8-bottom),max_y=fmax(-top,height*8-bottom);
+    /* A zoom change or loaded native camera may already lie beyond these
+     * viewport bounds. Let the drag bring it back without an initial jump. */
+    min_x=fmin(min_x,base_x+r->camera_x);max_x=fmax(max_x,base_x+r->camera_x);
+    min_y=fmin(min_y,base_y+r->camera_y);max_y=fmax(max_y,base_y+r->camera_y);
+    double x=fmax(min_x,fmin(max_x,base_x+r->camera_x+dx));
+    double y=fmax(min_y,fmin(max_y,base_y+r->camera_y+dy));
+    r->camera_x=x-base_x;r->camera_y=y-base_y;
+    r->scroll_x+=(int)lround(r->camera_x)-old_x;
+    r->scroll_y+=(int)lround(r->camera_y)-old_y;
+    r->object_grid_valid=false;
 }
 void ScRendererBeginMapLoad(ScRenderer *r) {
     if (!r->map_valid || r->map_hold) return;
@@ -1910,7 +1966,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         r->city_input=city_live(r,p,ram) && !r->advisor_frame && !u16(ram,0x379) &&
             !u16(ram,0xd7) && !ram[0x391] && !ram[0xe3]; /* gift picker */
         r->zoom_hud=hud;
-        r->zoom_frame=r->city_input && !r->map_hold && r->map_zoom>0 && fabs(r->map_zoom-1)>1e-9;
+        r->zoom_frame=r->city_input && !r->map_hold && r->map_zoom>0 && (fabs(r->map_zoom-1)>1e-9 || r->camera_x || r->camera_y);
         if(r->zoom_frame) {
             unsigned span=(unsigned)ceil(r->view.width*(double)zoom_step(r)/65536);
             /* Native HUD and menu sampling still addresses the full UI row

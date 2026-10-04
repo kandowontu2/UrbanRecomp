@@ -21,6 +21,8 @@ void ScVehicles_OnPc(unsigned bank, unsigned pc, uint16_t x, uint16_t y,
 
 /* Forget every margin sprite (a state load, a new game). */
 void ScVehicles_Reset(void);
+/* Free host cameras need placements outside the native 256x224 rectangle. */
+void ScVehicles_FullView(bool enabled);
 
 /* The kept sprites the current frame shows, for a renderer that draws them
  * itself: the OAM slot (its tile, attributes and palette are live there),

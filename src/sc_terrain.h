@@ -93,6 +93,10 @@ bool ScTerrainResize(ScTerrainFrame *f,unsigned width,unsigned height);
 bool ScTerrainSpanWidth(ScTerrainFrame *f,unsigned width);
 void ScTerrainDestroy(ScTerrainFrame *f);
 uint32_t ScTerrainPixel(const ScTerrainFrame *f,unsigned x,unsigned y);
+/* Fractional canvas positions sample original CHR, never a resized image.
+ * UI callers continue to use integer native pixels. Fractions are 16.16. */
+uint32_t ScTerrainZoomPixel(const ScTerrainFrame *f,unsigned x,unsigned y,
+    unsigned fraction_x,unsigned fraction_y,int origin_y);
 uint32_t ScNativePixel(const ScTerrainFrame *f,unsigned x,unsigned y);
 ScNativeTile ScTerrainNativeTile(const ScTerrainFrame *f,unsigned y,unsigned layer,unsigned column);
 unsigned ScTerrainNativeObject(const ScTerrainFrame *f,unsigned y,unsigned x);

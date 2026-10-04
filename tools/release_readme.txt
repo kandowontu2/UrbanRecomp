@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 12
+URBAN RECOMP ENHANCED BETA 13
 ===========================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -10,7 +10,13 @@ not replaced. No ROM or personal saves/settings are included.
 Enhanced fork: https://github.com/kandowontu2/UrbanRecomp
 Original project: https://github.com/blackerking/UrbanRecomp
 
-Latest additions: Vulkan presentation/compute, native C simulation kernels,
+Latest addition: sharper Vulkan terrain zoom at the displayed resolution,
+with the HUD, toolbox, menus and mouse mapping kept at their existing scale.
+CPU and unsupported-backend rendering retain their existing zoom path.
+Mouse drag now controls a free host camera directly, preserving zoom and
+stopping immediately when the mouse stops. PAN SPEED adjusts sensitivity.
+
+Also included: Vulkan presentation/compute, native C simulation kernels,
 full 1920x1600 maps, population up to 9,999,999,999,999, whole-building
 Copy/Paste with original-font price/preview, Ctrl-wheel/pinch zoom, threaded
 restored music and continuous middle-button drag pan. Gift menus and F12
@@ -68,7 +74,7 @@ CONTROLS (default keys, change them in the launcher)
 --------
 
 D-pad        Arrow keys
-A / B        S / X        (mouse: right / left button)
+A / B        S / X        (mouse: right Back / left Select in menus)
 X / Y        A / Y
 L / R        Q / W
 Start        Enter
@@ -77,7 +83,7 @@ Select       B
 Tab          fast-forward (hold)
 Escape       Save City during play; Back/Close in menus
 Ctrl+Shift+tilde  reveal hidden test City 3 on the load-city page
-Ctrl         3x scrolling (hold)
+Ctrl         3x keyboard/edge scrolling (hold)
 + / -        zoom the map in the city view
 Ctrl+wheel   zoom (touchpad pinch events also supported)
 Middle mouse hold and drag to pan; pointer is hidden and captured

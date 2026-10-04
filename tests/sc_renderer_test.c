@@ -5,7 +5,29 @@
 #include <string.h>
 #include <stdio.h>
 static void word(uint8_t *data,unsigned at,unsigned value) { data[at]=value; data[at+1]=value>>8; }
+static void free_camera_test(void) {
+    ScRenderer *r=calloc(1,sizeof *r);ScWorld *world=calloc(1,sizeof *world);
+    assert(r && world);world->active=world->huge=world->giant=world->colossal=true;
+    r->world=world;r->view=(ScViewport){730,492,0,0,1,0};r->zoom_hud=true;
+    r->map_zoom=.25;r->scroll_x=r->native_scroll_x=2400;
+    r->scroll_y=r->native_scroll_y=2400;
+    for(unsigned n=0;n<8;++n) ScRendererPan(r,-.125,.375);
+    assert(r->camera_x==-1 && r->camera_y==3 && r->scroll_x==2399 && r->scroll_y==2403);
+    ScRendererPan(r,-191,-99);
+    assert(r->scroll_x==2208 && r->scroll_y==2304 && r->map_zoom==.25);
+    double x=r->camera_x,y=r->camera_y;
+    for(unsigned n=0;n<1000;++n) ScRendererPan(r,0,0);
+    assert(r->camera_x==x && r->camera_y==y);
+    ScRendererPan(r,100000,100000);
+    assert(r->scroll_x==12608 && r->scroll_y==10970); /* full-map viewport bounds */
+    assert(r->native_scroll_x==2400 && r->native_scroll_y==2400 && r->map_zoom==.25);
+    ScRendererResetCamera(r);assert(!r->camera_x && !r->camera_y);
+    assert(r->scroll_x==2400 && r->scroll_y==2400 && r->map_zoom==.25);
+    free(r);free(world);
+    puts("PASS: fractional host camera, no idle drift, preserved zoom/native camera and full 1920x1600 bounds");
+}
 int main(void) {
+    free_camera_test();
     Ppu *p=calloc(1,sizeof(*p)), *before=malloc(sizeof(*p));
     uint8_t *ram=calloc(1,0x20000), *rom=calloc(1,0x80000);
     assert(p && before && ram && rom);

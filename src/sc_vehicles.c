@@ -77,6 +77,8 @@ typedef struct {
 static ScMarginSprite s_live[128];    /* maintained by the hooks */
 static ScMarginSprite s_shown[128];   /* as of the last OAM DMA */
 static uint32_t s_nmis;
+static bool s_full_view;
+void ScVehicles_FullView(bool enabled) {s_full_view=enabled;}
 
 static int diag(void) {
   static int on = -1;
@@ -128,9 +130,9 @@ static void on_place(uint16_t y, uint16_t dp, uint8_t db) {
       !rd16_abs(db, (uint16_t)(0x0a6b + y), &fine_y))
     return;
   const int tx = (int16_t)(uint16_t)(rd16_dp(dp, 0x91) + 2 - view_x) - 2;
-  if (tx < 0x20 || tx >= kMarginCells) return;
+  if (!s_full_view && (tx < 0x20 || tx >= kMarginCells)) return;
   const int ty = (int16_t)(uint16_t)(rd16_dp(dp, 0x94) - view_y);
-  if (ty < -2 || ty >= 0x1d) return;
+  if (!s_full_view && (ty < -2 || ty >= 0x1d)) return;
   r->x = (int16_t)(tx * 8 + (int16_t)fine_x);
   r->y = (int16_t)((ty - 1) * 8 + (int16_t)fine_y);
   r->large = slot_off != 0x01d8;

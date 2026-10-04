@@ -189,8 +189,8 @@ keeps its last valid endpoint/preview while outside the window, over the HUD,
 or outside the map. Re-entry resumes it; releasing outside commits the retained
 plan. Right-click cancels it. Camera/tool changes and opening a modal cancel it.
 
-Hold **Ctrl** for **3x scrolling**, including keyboard panning, right-drag and
-edge scrolling. The extra passes execute only the original scroll routines,
+Hold **Ctrl** for **3x scrolling**, including keyboard panning and
+edge scrolling. Mouse drag sensitivity is set by PAN SPEED and MOUSE SPEED. The extra passes execute only the original scroll routines,
 including terrain staging and object shifts, without advancing city time.
 Native boundary checks still clamp the camera to the current map.
 
@@ -575,17 +575,23 @@ artwork cells individually in the supplied saved city and every cell of
 mature RCI and larger ordinary footprints across all five map sizes.
 
 Hold the middle mouse button over land and drag to pan. Moving right/down
-drags the land right/down, moving the camera in the opposite direction. Motion and the native scroll rate are 3x faster
-at every zoom, with the current zoom and DPI conversion retained. Ctrl uses
-the same scroll rate and does not stack another multiplier. Releasing stops the
-gesture. Middle-button panning hides the pointer and uses centered relative
+drags the land right/down, moving the camera in the opposite direction. The
+host camera applies exact world-pixel displacement each display frame,
+including fractional motion. Stationary holds and releases stop immediately;
+there is no scroll queue or inertia. Zoom is preserved. PAN SPEED and MOUSE
+SPEED adjust sensitivity; the defaults track the drag one-to-one. Ctrl's
+native keyboard scroll boost does not multiply mouse motion.
+Middle-button panning hides the pointer and uses centered relative
 mouse capture, so repeated movements continue beyond the screen edge.
-Right-button panning confines the cursor to the game window. Releasing the button, losing focus, opening F12 or disabling mouse input
+Right-button dragging over land uses the same camera when no clipboard tool
+is active. Releasing the button, losing focus, opening F12 or disabling mouse input
 releases the cursor. Copy/Paste stays selected while panning; construction and
-selection drags can still continue outside the window. Movement goes through the game's ordinary camera and map staging
-routines, without writing camera registers directly or advancing extra game
-frames. Component and CPU mouse replays cover consumed movement, stationary
-holds, off-window re-entry/release, Ctrl overshoot and clipboard coexistence.
+selection drags can still continue outside the window. Movement uses the
+full-world compositor, independent of the cartridge's movement steps and
+camera bounds, without changing guest camera registers or advancing extra
+game frames. Loading another city resets the host view offset. Component and
+Vulkan replays cover fractional movement, stationary holds, preserved zoom,
+off-window release and the far corner of the 1920x1600 map.
 
 Enhanced Beta 11 includes the fifth 1920x1600 size. ROM-backed clipboard tests cover all five sizes,
 complete footprints, reward exclusions, 96 original-routine join comparisons,

@@ -66,6 +66,8 @@ typedef struct ScRenderer {
     bool scroll_repair; /* validate staged city tiles until one complete frame agrees */
     unsigned staged_mismatches;
     int scroll_x, scroll_y, scroll_h, scroll_v, scroll_adjust_x, scroll_adjust_y, scroll_still;
+    int native_scroll_x,native_scroll_y;
+    double camera_x,camera_y; /* host view offset; guest simulation stays untouched */
     bool objects_valid;
     int16_t object_raw[128], object_x[128];
     uint16_t object_attr[128];
@@ -95,7 +97,11 @@ void ScRendererDestroy(ScRenderer *r);
 bool ScRendererDeferTerrain(ScRenderer *r,bool enabled);
 bool ScRendererDeferNativeLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line);
 uint32_t ScRendererPixel(const ScRenderer *r,int x,int y);
+uint32_t ScRendererPresentationPixel(const ScRenderer *r,unsigned x,unsigned y,
+    unsigned width,unsigned height);
 void ScRendererResetHistory(ScRenderer *r);
+void ScRendererPan(ScRenderer *r,double dx,double dy);
+void ScRendererResetCamera(ScRenderer *r);
 /* Only an actual guest city-load entry may freeze the previous terrain. */
 void ScRendererBeginMapLoad(ScRenderer *r);
 /* Called AFTER the stock PPU has drawn a line, BEFORE the guest advances.

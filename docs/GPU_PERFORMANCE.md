@@ -22,6 +22,25 @@ in the executable; shader compilation is offline, so players need no compiler.
 Resource or backend failures retain CPU rendering. Explicit SDL software or
 other renderer selections also retain that fallback.
 
+Terrain zoom now samples original CHR at presentation resolution, up to 4096
+pixels per dimension. This prevents details being discarded into a small
+logical canvas before SDL enlarges it. The logical viewport, mouse transform,
+HUD and menus keep their existing dimensions. Fixed UI still samples native
+pixels with nearest filtering, including the original lower-texel convention
+at half-integer widescreen scales. Immutable neighboring city strips supply
+CHR rows at tile boundaries; extreme zooms that skip a whole strip retain
+their captured row rather than reading another tile. `SC_GPU_SHARP_ZOOM=0`
+selects the old resolution for isolated comparisons. CPU fallback is unchanged.
+The optional GPU validation compares every presented pixel to a fractional
+CPU reference; checkerboard CHR tests cover detail, fractional zoom and seams.
+Saved-city comparisons at 0.25x, 0.5x, 1.125x and 2x matched every GPU pixel
+to that CPU reference, preserved the presented HUD/toolbox exactly, and kept
+the complete saved state unchanged. Four short filled-1920x1600 comparisons
+at X50 with adaptive Tab and restored music showed similar average active
+work: 10.14–11.44 ms at the previous resolution and 10.66–11.08 ms with sharp
+zoom. These short, variable-work samples do not establish a speed improvement;
+occasional long frames remain. Packaged output matched the tested build.
+
 The compositor now handles extended terrain and repaired native city pixels,
 including tile decoding, roofs, live scanline palettes, brightness, windows,
 SNES integer colour math, ranked BG1/BG3 candidates, evaluated objects and
@@ -3460,3 +3479,12 @@ This is a current local smoothness sample, not a matched adaptive speedup
 claim or a promise that every frame meets the deadline. Raw records are
 in `wide-density-focused-adaptive-native-infrastructure` and
 `wide-adaptive-native-infrastructure.json`.
+
+
+Beta 13 mouse-drag replays use a host camera at 1x, 0.25x and 2x zoom,
+including right-button drag and the 1920x1600 far corner. One displacement
+produces one camera change; stationary holds remain fixed, selected zoom and
+native camera/mode registers remain unchanged, and Vulkan output matches
+the CPU reference. Construction after a drag writes the expected world tile.
+Unit checks cover fractional deltas, full viewport bounds, capture/release and
+focus/modal cancellation. Physical desktop mouse feel still needs player testing.

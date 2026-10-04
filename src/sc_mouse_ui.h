@@ -19,17 +19,10 @@ ScMouseUiResult ScMouseUiDialogPoint(ScMouseDialog dialog, uint8_t *ram,
 ScMouseUiResult ScMouseUiPoint(uint8_t *ram, int x, int y,
                               bool select, bool ninth_scenario);
 bool ScMouseUiScenarioScroll(uint8_t *ram, int direction, bool ninth_scenario);
-typedef struct ScMousePan {
-  bool active;
-  double x,y,pending_x,pending_y;
-  int camera_x,camera_y;
-} ScMousePan;
-typedef struct ScMousePanDirection { int x,y; } ScMousePanDirection;
-#define SC_MOUSE_PAN_SPEED 3
-/* Grab-and-drag panning: the land follows the mouse right/down; camera moves left/up.
- * Window motion is converted to guest pixels at 3x speed, then fed
- * through the ordinary scroll routine. Camera feedback consumes the motion
- * only when that routine actually runs. A captured drag may leave the view. */
-ScMousePanDirection ScMousePanUpdate(ScMousePan *pan,bool allowed,bool held,bool on_land,
-    double x,double y,double scale_x,double scale_y,int camera_x,int camera_y);
+typedef struct ScMousePan { bool active; double x,y; } ScMousePan;
+typedef struct ScMousePanDelta { double x,y; } ScMousePanDelta;
+/* Immediate world-pixel displacement: no pad input, inertia or queued motion.
+ * Land follows the drag; a captured gesture may leave the view. */
+ScMousePanDelta ScMousePanUpdate(ScMousePan *pan,bool allowed,bool held,bool on_land,
+    double x,double y,double scale_x,double scale_y);
 #endif

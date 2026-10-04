@@ -13,7 +13,13 @@ StructuredBuffer<uint> native_rows : register(t5, space0);
 StructuredBuffer<uint> resources : register(t6, space0);
 StructuredBuffer<uint> city : register(t7, space0);
 [[vk::image_format("rgba8")]] RWTexture2D<float4> output_image : register(u0, space1);
-cbuffer Dimensions : register(b0, space2) { uint width; uint height; uint stride; uint unused; };
+cbuffer Dimensions : register(b0, space2) {
+ uint width,height,stride,unused;
+ uint output_width,output_height,origin_y,reserved_dimension;
+};
+uint fractional_step(uint fraction,uint step) {
+ return fraction*(step>>16)+((fraction*(step&65535))>>16);
+}
 uint decode(uint p,uint bit) {
  return ((p>>bit)&1)|(((p>>(bit+8))&1)<<1)|(((p>>(bit+16))&1)<<2)|(((p>>(bit+24))&1)<<3);
 }
@@ -35,19 +41,19 @@ uint captured_sub_bg(uint at,uint x) {
  uint ci=decode(planes,(word&0x4000)?sx&7:7-(sx&7));
  return ci?ci+((word>>10)&7)*4:0;
 }
-uint captured_object(uint at,uint x) {
+uint captured_object(uint at,uint x,uint world_y) {
  uint header=rows[at+307];
  if(header==0xffffffff) return 0;
  uint bucket=x/32;
  if(bucket>=city[header]) return 0;
- if(rows[at+9]&524288) bucket+=((rows[at+303]>>8)&255)/32*city[header];
+ if(rows[at+9]&524288) bucket+=((world_y>>8)&255)/32*city[header];
  uint record=city[header+1+bucket*2],count=city[header+2+bucket*2],result=0;
  [loop] for(uint i=0;i<count;++i,record+=6) {
   int dx=int(x)-int(city[record]);uint size=city[record+1];
   if(int(x)<int(city[record+5]) || dx<0 || uint(dx)>=size) continue;
   uint y=city[record+2],attr=city[record+3];
   if(rows[at+9]&524288) {
-   int dy=(int(rows[at+303]<<8)>>16)-int(y);
+   int dy=(int(world_y<<8)>>16)-int(y);
    if(attr&65536) dy&=255;
    if(dy<0 || uint(dy)>=size) continue;
    y=uint(dy);
@@ -61,13 +67,13 @@ uint captured_object(uint at,uint x) {
  }
  return result;
 }
-TerrainTile resolve_tile(TerrainTile t,uint at,uint column) {
+TerrainTile resolve_tile(TerrainTile t,uint at,uint column,uint world_y) {
  if(rows[at+9]&32768) {
   t.base=city_cell(rows[at+304]+column+1);
   t.roof=city_cell(rows[at+305]+column+2);
   t.warning=city_cell(rows[at+306]+column);
  }
- uint snapshot=rows[at+300],chr=rows[at+301],warning_chr=rows[at+302],y=rows[at+303]&7;
+ uint snapshot=rows[at+300],chr=rows[at+301],warning_chr=rows[at+302],y=world_y&7;
  uint base=t.base==0xffffffff?0:resources[t.base&1023]&65535;
  uint roof=t.roof==0xffffffff?0x2300:resources[t.roof&1023]>>16;
  uint owner=t.warning,cell=owner&1023;
@@ -129,17 +135,40 @@ bool window_contains(Row r,uint layer,int x) {
 }
 [numthreads(8,8,1)]
 void main(uint3 id : SV_DispatchThreadID) {
- if(id.x>=width || id.y>=height) return;
- uint c=image[id.y*width+id.x];
+ if(id.x>=output_width || id.y>=output_height) return;
+ uint2 position=uint2((2*id.x+1)*width-1,(2*id.y+1)*height-1);
+ uint2 canvas=position/uint2(2*output_width,2*output_height);
+ uint2 fraction=uint2(output_width==width?0:(position.x%(2*output_width))*65536/(2*output_width),
+     output_height==height?0:(position.y%(2*output_height))*65536/(2*output_height));
+ uint c=image[canvas.y*width+canvas.x];
  if(c==0x01000000 || c==0x02000000 || (c>>24)==3) {
   bool relocated=(c>>24)==3,native_pixel=c==0x02000000 || relocated;
-  uint source_y=relocated?(c>>8)&4095:id.y;
+  uint source_y=relocated?(c>>8)&4095:canvas.y;
+  uint world_y=rows[source_y*311+303];
+  bool sharp=c==0x01000000 && (rows[source_y*311+9]&1081344)==1081344;
+  if(sharp) {
+   uint base_at=source_y*311,step=rows[base_at+308];
+   uint phase=(uint(int(source_y)-int(origin_y))*step)&65535;
+   uint delta=(phase+fractional_step(fraction.y,step))>>16;
+   int target=(int(world_y<<8)>>16)+int(delta);
+   int chr=int(world_y&7)+int(delta);
+   uint original_y=source_y,original_world=world_y;
+   [loop] for(uint next=original_y+1;chr>=8 && next<height && next<=original_y+8;++next) {
+    uint candidate=next*311;
+    if((rows[candidate+9]&1081344)!=1081344) break;
+    int candidate_chr=int(rows[candidate+303]&7)+target-(int(rows[candidate+303]<<8)>>16);
+    if(candidate_chr>=0 && candidate_chr<8) {source_y=next;chr=candidate_chr;break;}
+   }
+   if(chr>=8) {target=int(original_world<<8)>>16;chr=int(original_world&7);}
+   world_y=uint(chr)|((uint(target)&65535)<<8);
+  }
   uint at=source_y*311;Row r;
   r.phase=rows[at];r.core_x=rows[at+1];r.main_mask=rows[at+2];r.sub_mask=rows[at+3];
   r.window_main=rows[at+4];r.window_sub=rows[at+5];r.windows=rows[at+6];
   r.logic=rows[at+7];r.bounds=rows[at+8];r.math=rows[at+9];r.control=rows[at+10];r.fixed_color=rows[at+11];
-  uint source_x=relocated?r.core_x+(c&255):id.x;
-  uint virtual_x=(r.math&1048576)?((source_x*rows[at+308]+rows[at+309])>>16):source_x;
+  uint source_x=relocated?r.core_x+(c&255):canvas.x;
+  uint virtual_x=(r.math&1048576)?((source_x*rows[at+308]+rows[at+309]+
+      (sharp?fractional_step(fraction.x,rows[at+308]):0))>>16):source_x;
   uint x=virtual_x+r.phase;
   TerrainTile t;
   if(unused&1) {
@@ -147,7 +176,7 @@ void main(uint3 id : SV_DispatchThreadID) {
    t.base=t.roof=t.attributes=t.warning=t.expected=t.staged=0;
    if(column>=first && column<first+34) t=tiles[source_y*34+column-first];
   } else t=tiles[source_y*stride+x/8];
-  if(r.math&16384) t=resolve_tile(t,at,x/8);
+  if(r.math&16384) t=resolve_tile(t,at,x/8,world_y);
   uint b=decode(t.base,(t.attributes&(1<<16))?x&7:7-(x&7));
   uint roof=decode(t.roof,(t.attributes&(1<<17))?x&7:7-(x&7));
   uint index=roof?roof+((t.attributes>>8)&127):b?b+(t.attributes&127):0;
@@ -160,7 +189,7 @@ void main(uint3 id : SV_DispatchThreadID) {
   if((native_pixel || !(r.math&1048576)) && local>=0 && local<256 && (native_rows[source_y*202+3]&8))
    overlay.y=(overlay.y&~4095u)|native_object(source_y*202,at,uint(local));
   if((r.math&65536) && (!(r.math&1048576) || !native_pixel) && !((r.math&131072) && local>=0 && local<256)) {
-   overlay.y=captured_object(at,(r.math&1048576)?uint(int(virtual_x)+int(rows[at+310])):source_x)|
+   overlay.y=captured_object(at,(r.math&1048576)?uint(int(virtual_x)+int(rows[at+310])):source_x,world_y)|
     (((r.math&4096) && ((r.math&8192) || local<56))?0x80000000:0);
   }
   if(!relocated && (r.math&1024) && local>=0 && local<256) {
