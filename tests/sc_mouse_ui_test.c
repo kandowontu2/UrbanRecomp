@@ -32,16 +32,16 @@ int main(void) {
   assert(oam[0]==(117|(83<<8)) && !memcmp(oam+1,original+1,sizeof oam-2));
   assert(!memcmp(high,high_before,sizeof high));
   assert(ScMouseUiCursorPlace(r,oam,high,-3,500)==0 && oam[0]==(223<<8));
-  /* Main-menu slot zero is a title light, not the arrow in slot 64. */
+  /* Main-menu arrow remains beside its option; mouse gets a separate hand. */
   put(0x14,3);oam[1]=0x34b9;oam[128]=0x7c2a;oam[129]=0x30c2;
   memcpy(original,oam,sizeof oam);
-  assert(ScMouseUiCursorPlace(r,oam,high,100,87)==64);
-  assert(oam[128]==(100|(87<<8)) && !memcmp(oam,original,128*2));
-  assert(!memcmp(oam+129,original+129,127*2));
+  assert(ScMouseUiCursorPlace(r,oam,high,100,87)==127);
+  assert(oam[254]==(99|(86<<8)) && oam[255]==0x3f9e);
+  assert(!memcmp(oam,original,254*2));
   /* Scenario pins and frame remain intact; its extra mouse hand is private. */
   put(0x14,11);memcpy(original,oam,sizeof oam);
   assert(ScMouseUiCursorPlace(r,oam,high,99,88)==127);
-  assert(oam[254]==(99|(88<<8)) && oam[255]==0x3f9e);
+  assert(oam[254]==(98|(87<<8)) && oam[255]==0x3f9e);
   assert(!memcmp(oam,original,254*2) && (high[31]&192)==128);
   /* No cursor yet: do not reposition an arbitrary native sprite. */
   put(0x14,5);oam[129]=0;oam[255]=0;

@@ -133,6 +133,7 @@ int main(void) {
       assert(g->state.map[3071999]==0xc123 && g->state.map[0]==first && g->before==g->after);
     }
     uint64_t last=0;
+    static uint8_t fixed_classes[2][240*200];
     for(unsigned size=0;size<6;++size)for(unsigned seed=0;seed<(size<2?16:2);++seed) {
         ScMapGenPrng p,q;sc_mapgen_seed(&p,0x5c00,seed,0,0,2,0);q=p;
         sc_mapgen_generate_geographic(&p,&g->state,size);
@@ -142,6 +143,14 @@ int main(void) {
         uint64_t current=hash(g->state.map,cells);assert(current!=last);last=current;
         assert(g->before==g->after && g->after==UINT64_C(0xfacedeed98765432));
         geographic_check(&g->state,seed,size);
+        /* Enlarging the world adds districts; it cannot stretch the existing
+         * interior's river widths, lake shapes or forest patches. Exclude the
+         * outer coast and ignore native cosmetic shoreline/tree variants. */
+        if(size && seed<2)for(unsigned y=24;y<176;++y)for(unsigned x=24;x<216;++x) {
+            unsigned v=g->state.map[y*g->state.width+x],type=!v?0:v<20?1:2;
+            if(size==1)fixed_classes[seed][y*240+x]=(uint8_t)type;
+            else assert(fixed_classes[seed][y*240+x]==type);
+        }
     }
     free(g); free(again);
     puts("PASS: 16 stock fingerprints, 40 deterministic river/forest/coast seeds across all six sizes through 3840x3200, connected water, feature coverage, preview phases, far-bank cells and bounds guards");

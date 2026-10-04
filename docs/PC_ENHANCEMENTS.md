@@ -9,7 +9,10 @@ enhancements. Windows packages are available from
 
 Newly generated maps use connected meandering rivers with tributaries,
 organic lakes and forest districts. Seeds vary between river plains, coasts
-and islands. This applies from 120x100 through 3840x3200; saved cities retain
+and islands. Expanded maps add more watersheds at the original tile scale,
+with narrow rivers, small lakes and forest patches spread throughout the world.
+They do not stretch one 120x100 layout to fill a larger map. This applies from
+120x100 through 3840x3200; saved cities retain
 all their existing terrain. Native shoreline and tree tile rules still apply.
 The original stock generator remains available to developers through
 `SC_MAPGEN_ORIGINAL=1` for Normal maps and unchanged oracle tests.
@@ -20,8 +23,10 @@ preview resolution. It reveals water first, then forest patches over roughly
 BG2 layer, and the preview does not change city zoom or UI scale. NEXT and
 map-number mouse clicks regenerate the preview when released.
 
-Mouse-driven menus display a free hand or arrow at the absolute pointer,
-while the game retains native selections and synthesized pad interaction.
+Startup, map-size, development-speed and saved-city lists show a separate
+native hand whose fingertip aligns with the mouse. The original selection
+arrow stays beside the hovered option. Other menu hands follow the absolute
+pointer while the game retains native selections and synthesized pad interaction.
 Keyboard/gamepad input restores the native jumping cursor; a stationary mouse
 cannot pull it back. Cursor presentation is restored before guest execution,
 so it does not alter simulation or saved OAM. Scenario pins and selection
@@ -29,7 +34,8 @@ frames stay intact, with a separate native hand across the wide canvas.
 
 Validation: deterministic geography checks cover 40 seeds across all six
 sizes, a connected water component spanning opposite edges, feature coverage
-in every quadrant, native tile bounds and preview phases. Stock fingerprints
+in every quadrant, native tile bounds and preview phases. Matching interior
+terrain classes at Big through Mega verify fixed feature scale. Stock fingerprints
 remain exact. Renderer tests cover palette, preview borders, unchanged zoom,
 wide scenario pointers and PPU immutability. Local native-ROM replays verify
 water/forest animation, the largest map preview, menu/name/scenario pointers,

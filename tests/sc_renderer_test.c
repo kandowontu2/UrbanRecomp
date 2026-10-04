@@ -763,7 +763,14 @@ int main(void) {
     r.menu_pointer_active=true;r.menu_pointer_x=280;r.menu_pointer_y=100;
     memcpy(before,p,sizeof *p);
     for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
-    assert(ScRendererPixel(&r,96+280,100)==0xffff0000);
+    assert(ScRendererPixel(&r,96+279,99)==0xffff0000);
+    assert(!memcmp(before,p,sizeof *p));
+    /* Startup/setup lists retain the native option arrow while the hand
+     * follows the mouse with its fingertip at the click hotspot. */
+    word(ram,0x14,3);r.menu_pointer_x=170;r.menu_pointer_y=135;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(ScRendererPixel(&r,96+169,134)==0xffff0000);
+    assert(ScRendererPixel(&r,96+42,124)==0xff123456);
     assert(!memcmp(before,p,sizeof *p));
     ScRendererDestroy(&r); free(p); free(before); free(ram); free(rom);
     puts("PASS: tile flips, overlays, map bounds, native pixels, tall/wide surfaces and PPU immutability");

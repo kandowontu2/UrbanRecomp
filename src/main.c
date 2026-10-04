@@ -1039,7 +1039,8 @@ static void handle_pos_stuff(void) {
     }
     uint16_t mouse_oam[256];uint8_t mouse_high[32];
     bool free_ui_cursor=s_ui_mouse_pointer.active && ScMouseUiPointerScreen(g_ram) &&
-        !(s_custom_video.enabled && ScSelector_OnScreen(g_ram[0x14]));
+        !(s_custom_video.enabled &&
+          (ScMouseUiArrowScreen(g_ram) || ScSelector_OnScreen(g_ram[0x14])));
     if(free_ui_cursor) {
       memcpy(mouse_oam,g_ppu->oam,sizeof mouse_oam);memcpy(mouse_high,g_ppu->highOam,sizeof mouse_high);
       /* Presentation only: menu loops can keep jumping their own cursor.

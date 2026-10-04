@@ -1518,6 +1518,54 @@ static int geo_profile(const int *a,unsigned v) {
     unsigned index=v*8>>16,t=geo_smooth((v*8)&65535);
     return geo_lerp(a[index],a[index+1],t);
 }
+/* Expanded maps add watersheds at cartridge tile scale. Coordinates here
+ * are world cells, never fractions of the complete map: adding land cannot
+ * enlarge river widths, lake diameters or forest patches. */
+static bool geo_fixed_water(unsigned x,unsigned y,unsigned width,unsigned height,
+                            unsigned style,bool vertical,bool coast_side,
+                            uint32_t seed,unsigned rough) {
+    unsigned major=vertical?y:x,minor=vertical?x:y;
+    unsigned spacing=vertical?120:100,channel=minor/spacing;
+    uint32_t channel_seed=geo_hash(seed^((channel+1)*0x632be5abu));
+    int center=(int)spacing/2+(int)(channel_seed%(spacing/3))-(int)spacing/6;
+    center+=((int)geo_noise((uint64_t)major*65536/75,0,1,channel_seed)-32768)*28/65536;
+    unsigned radius=2+(channel_seed>>16)%3;
+    bool water=abs((int)(minor%spacing)-center)<(int)(radius+rough/32768);
+    /* Short, narrow tributaries repeat with independent district seeds and
+     * join the through river. Keep their source within this watershed. */
+    uint32_t branch=geo_hash(channel_seed^((major/100+1)*0x9e3779b9u));
+    unsigned begin=10+(branch>>8)%20,end=begin+40+(branch>>16)%25;
+    unsigned local=major%100;
+    if((branch&3)!=0 && local>=begin && local<=end) {
+        int direction=branch&4?1:-1;
+        int room=direction>0?(int)spacing-8-center:center-8;
+        int span=20+(branch>>24)%30;if(span>room)span=room;
+        int tributary=center+direction*span*(int)(end-local)/(int)(end-begin);
+        water|=abs((int)(minor%spacing)-tributary)<2;
+    }
+    if(style==1 || style==3) {
+        unsigned extent=vertical?width:height;
+        unsigned edge=coast_side?extent-1-minor:minor;
+        unsigned coast=8+geo_noise((uint64_t)major*65536/96,0,1,seed^0x54321u)*12/65536;
+        water|=edge<coast;
+    }
+    if(style==2) {
+        unsigned ex=x<width/2?x:width-1-x,ey=y<height/2?y:height-1-y;
+        water|=ex<4+rough/6554 || ey<4+rough/6554;
+    }
+    /* Independently seeded small lakes, rather than one map-sized ellipse. */
+    uint32_t lake=geo_hash(seed+(x/64)*374761393u+(y/64)*668265263u);
+    if(!water && (lake&1)) {
+        int cx=16+(lake>>1)%32,cy=16+(lake>>6)%32;
+        int rx=4+(lake>>11)%7,ry=4+(lake>>15)%6;
+        int dx=(int)(x%64)-cx,dy=(int)(y%64)-cy;
+        if(abs(dx)<=rx+1 && abs(dy)<=ry+1) {
+            int64_t ellipse=(int64_t)dx*dx*ry*ry+(int64_t)dy*dy*rx*rx;
+            water=ellipse*65536<(int64_t)rx*rx*ry*ry*(48000+rough/2);
+        }
+    }
+    return water;
+}
 void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned size) {
     if(size>5)size=0;
     unsigned width=120u<<size,height=100u<<size,cells=width*height;
@@ -1544,13 +1592,17 @@ void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned si
     uint8_t *classes=malloc(cells);
     /* Allocation failure still produces a playable connected river. */
     for(unsigned y=0;y<height;++y) {
-        unsigned ny=(uint64_t)y*65535/(height-1);
+        unsigned ny=(uint64_t)y*65535/(size?99:height-1);
         for(unsigned x=0;x<width;++x) {
-            unsigned nx=(uint64_t)x*65535/(width-1),major=vertical?ny:nx,minor=vertical?nx:ny;
-            int river_center=geo_profile(river,major);
+            unsigned nx=(uint64_t)x*65535/(size?119:width-1);
             unsigned rough=geo_noise(nx,ny,24,seed^0xabcdefu);
+            bool water;
+            if(size) water=geo_fixed_water(x,y,width,height,style,vertical,coast_side,seed,rough);
+            else {
+            unsigned major=vertical?ny:nx,minor=vertical?nx:ny;
+            int river_center=geo_profile(river,major);
             int river_width=radius+(int)rough/40;
-            bool water=abs((int)minor-river_center)<river_width;
+            water=abs((int)minor-river_center)<river_width;
             /* A tributary runs from an edge into the primary channel. Its
              * interpolated endpoint overlaps the trunk, without isolated dots. */
             if(major<=join) {
@@ -1571,6 +1623,7 @@ void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned si
                 int64_t dx=(int)nx-lakes[i].x,dy=(int)ny-lakes[i].y;
                 water=(dx*dx*65536/(lakes[i].rx*lakes[i].rx)+
                        dy*dy*65536/(lakes[i].ry*lakes[i].ry))<48000+rough/2;
+            }
             }
             unsigned type=0;
             if(water)type=1;

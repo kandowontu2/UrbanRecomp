@@ -24,6 +24,12 @@ bool ScMouseUiScenarioScroll(uint8_t *ram, int direction, bool ninth_scenario);
 /* Mouse owns the displayed cursor until real keyboard/pad input takes over.
  * The game retains its selection state and synthesized pad handling. */
 typedef struct ScMouseUiPointer { bool active; int x,y; } ScMouseUiPointer;
+/* These lists retain the native arrow beside the highlighted option. */
+static inline bool ScMouseUiArrowScreen(const uint8_t *ram) {
+    unsigned mode=ram[0x14]|((unsigned)ram[0x15]<<8);
+    return mode==2 || mode==3 || mode==17 || mode==18;
+}
+enum { SC_MOUSE_HAND_HOT_X=1, SC_MOUSE_HAND_HOT_Y=1 };
 bool ScMouseUiPointerScreen(const uint8_t *ram);
 /* Locate the native hand/arrow without moving map digits, title lights or
  * scenario pins. Returns the changed slot, or -1 when no cursor is ready. */

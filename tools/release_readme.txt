@@ -8,8 +8,10 @@ Saves and settings stay beside the portable EXE; existing installations are
 not replaced. No ROM or personal saves/settings are included.
 
 Local follow-up: connected rivers, tributaries, lakes, coasts/islands and forest
-districts on every size, with staged map-select previews and free mouse
-pointers across menus. Keyboard/gamepad selection still uses native jumps.
+districts on every size, with staged map-select previews. Expanded maps add
+more terrain features at original tile scale instead of stretching them.
+Startup/setup/load lists show a separate native mouse hand and retain the
+arrow beside the hovered option. Keyboard/gamepad uses native selection jumps.
 Also included: cheaper large drag previews, responsive batched construction
 (including the money cheat), and sharp city entry across start/load paths.
 Very large selections still require processing time; they no longer block

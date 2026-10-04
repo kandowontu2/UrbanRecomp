@@ -1,4 +1,5 @@
 #include "sc_renderer.h"
+#include "sc_mouse_ui.h"
 #include "sc_native_ppu.h"
 #include "sc_obj.h"
 #include "snes/ppu.h"
@@ -2106,12 +2107,13 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         city_pointer(r,p,ram);
         /* The selector's OAM starts with map pins, not a cursor. Use its
          * shared native menu hand across the entire expanded canvas. */
-        if(r->menu_pointer_active && ScSelector_OnScreen(ram[0x14]) &&
+        if(r->menu_pointer_active &&
+           (ScMouseUiArrowScreen(ram) || ScSelector_OnScreen(ram[0x14])) &&
            !PPU_forcedBlank(p) && (p->screenEnabled[0]&16))
             for(int y=0;y<16;++y)for(int x=0;x<16;++x) {
                 unsigned ci=sprite_word_pixel(p,0x3f9e,16,x,y);
-                int ax=r->view.core_x+r->menu_pointer_x+x;
-                int ay=r->view.core_y+r->menu_pointer_y+y;
+                int ax=r->view.core_x+r->menu_pointer_x-SC_MOUSE_HAND_HOT_X+x;
+                int ay=r->view.core_y+r->menu_pointer_y-SC_MOUSE_HAND_HOT_Y+y;
                 if(ci && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
                     r->pixels[(size_t)ay*r->view.width+ax]=color(p,ci);
             }

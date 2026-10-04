@@ -226,12 +226,13 @@ void ScMouseUiPointerUpdate(ScMouseUiPointer *p,bool inside,bool moved,bool pres
 int ScMouseUiCursorPlace(const uint8_t *ram,uint16_t *oam,uint8_t *high,int x,int y) {
     int slot=-1;
     unsigned mode=word(ram,0x14);
-    if(mode>=10 && mode<=12) {
+    if(ScMouseUiArrowScreen(ram) || (mode>=10 && mode<=12)) {
         /* Scenario OAM begins with pins, followed by the selection frame.
          * Its unused final slot can show the shared native menu hand without
          * changing either the frame or the scroll inferred from those pins. */
         slot=127;oam[slot*2+1]=0x3f9e;
         high[slot/4]=(high[slot/4]&~(3u<<6))|(2u<<6);
+        x-=SC_MOUSE_HAND_HOT_X;y-=SC_MOUSE_HAND_HOT_Y;
     } else if((oam[1]==0x31ec || oam[1]==0x3f9e) &&
               (oam[0]>>8)<224 && !(high[0]&1))slot=0;
     else for(int i=0;i<128;++i)

@@ -6,12 +6,17 @@
   coastal and island maps, and coherent forest districts on all six map sizes.
   Sample the full map dimensions with a deterministic 32-bit geographic stream.
   Keep native shoreline/tree tiles and preserve existing saved terrain.
+  Larger maps add independently seeded watersheds at the original tile scale;
+  river widths, small lake diameters and forest-patch sizes do not grow with
+  the complete map dimensions.
 - Animate the map-select overview: waterways appear first, followed by forest
   patches. Begin the reveal after the native waiting panel; show the entire
   selected map at the original overview size. Mouse NEXT/digit clicks refresh
   the preview on release without requiring a move to OK.
-- Let the native menu hand/arrow follow mouse motion freely across startup,
-  naming, difficulty, load/save, gifts and city dialogs. Keep native selection,
+- Give startup, map-size, development-speed and saved-city lists a separate
+  native mouse hand with an aligned fingertip. Keep the original selection
+  arrow beside the hovered option. Other menu hands follow freely across
+  naming, difficulty, gifts and city dialogs. Keep native selection,
   D-pad/menu input and keyboard/gamepad jumps. Real pad input takes ownership
   from an idle mouse. Preserve title lights, map digits and scenario pins;
   the scenario selector gains a separate hand that can enter wide margins.
