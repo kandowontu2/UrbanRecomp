@@ -1,6 +1,12 @@
 # Enhanced fork changelog
 
-## Unreleased — local terrain, mouse, placement and city-entry fixes
+## 1.2.0 Enhanced Beta 17 — 2026-10-04
+
+- Restore the original cartridge generator for 120x100, preserving its terrain
+  and random-state results. Extend the same river walks, lake/coast brushes,
+  forest scatter and shoreline fitting across expanded worlds. Increase
+  feature counts and distribute starts across the full dimensions while
+  retaining native brush sizes. Existing saved terrain is preserved.
 
 - Keep the mouse menu hand hidden during the title-screen exit fade, whose
   sprite bank still contains logo graphics. Show it when the menu is ready,
@@ -19,10 +25,9 @@
   headings. Cull outside the viewport and bucket sprites for CPU/GPU rendering.
 - Extend map selection to five editable digits, 00000 through 99999. NEXT
   wraps after 99999; digit arrows work with mouse, keyboard and controller.
-  Each number supplies a deterministic distinct geographic seed on all sizes.
+  Retain the original three-digit seed path; the additional digits extend it.
 - Add native-scale clusters of small islands inside irregular lakes and bays.
-  Fit shore tiles after removing unsupported narrow water gaps to convergence,
-  including those between nearby islands. Existing saved terrain is preserved.
+  Use original water brushes and the native shoreline fitter for their bays.
 - Give the far-right map boundary the same 64-canvas-pixel scrolling slack
   as the other edges, including the largest map and zoomed/centered layouts.
 
@@ -32,22 +37,12 @@
 - Clear the setup-page state on the GO TO MENU return path, restoring the
   main menu instead of DEVELOPMENT SPEED. Align RESUME SAVED CITY with the
   other main-menu choices.
-- Replace regularly spaced parallel river bands with curved reaches at
-  varied angles and lengths, round native-scale brushes and tributaries.
-  Remove narrow water nubs which have no matching native shoreline tile.
 - Render map-selection previews at display resolution with nearest sampling
   and coverage-aware downsampling. Ctrl+wheel zooms toward the mouse; middle
   mouse drags the preview. Click the preview to expand it across the window;
   click again or press Esc to return. Keep the native buttons and hand size,
   bound the preview camera, and cache unchanged textures during idle frames.
 
-- Generate connected meandering rivers and tributaries, irregular lakes,
-  coastal and island maps, and coherent forest districts on all six map sizes.
-  Sample the full map dimensions with a deterministic 32-bit geographic stream.
-  Keep native shoreline/tree tiles and preserve existing saved terrain.
-  Larger maps add independently seeded watersheds at the original tile scale;
-  river widths, small lake diameters and forest-patch sizes do not grow with
-  the complete map dimensions.
 - Animate the map-select overview: waterways appear first, followed by forest
   patches. Begin the reveal after the native waiting panel; show the entire
   selected map at the original overview size. Mouse NEXT/digit clicks refresh

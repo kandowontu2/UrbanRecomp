@@ -7,27 +7,24 @@ enhancements. Windows packages are available from
 
 ## Implemented
 
-Newly generated maps use connected meandering rivers with tributaries,
-organic lakes and forest districts. Seeds vary between river plains, coasts
-and islands. Expanded maps add more watersheds at the original tile scale,
-with narrow rivers, small lakes and forest patches spread throughout the world.
-They do not stretch one 120x100 layout to fill a larger map. This applies from
-120x100 through 3840x3200; saved cities retain
-all their existing terrain. Native shoreline and tree tile rules still apply.
-The original stock generator remains available to developers through
-`SC_MAPGEN_ORIGINAL=1` for Normal maps and unchanged oracle tests.
+120x100 maps use the original cartridge generator, including its river walks,
+lake clusters, coast brushes, forest scatter and shoreline/tree fitting. The
+original three-digit seeding path is preserved; the two added digits extend
+its random state. Normal maps no longer pass through replacement geography.
 
-Expanded river reaches use varied directions, lengths and bends instead of
-equally spaced parallel bands. Round brushes and removal of narrow water
-nubs give the cartridge shoreline tiles a matching edge.
+Expanded maps extend those same native routines across the full world.
+River walks continue through real map bounds, with more starts distributed
+across larger maps. Lake and forest counts scale with area; river widths,
+lake brushes and forest walks retain their original tile sizes. Coordinates
+use the full map dimensions without a repeated grid of completed 120x100
+maps. Small island bays use the original water brushes and shoreline fitter.
+These extensions apply from 240x200 through 3840x3200. Existing saves keep
+their terrain; the fix changes newly generated maps.
 
-Small island clusters appear inside irregular lakes and bays throughout larger
-maps, with native-scale island diameters. Shore fitting removes narrow water
-gaps until every interior boundary has a supported cartridge shoreline tile.
 Map selection now offers five editable digits, 00000 through 99999. All five
 up/down arrow pairs support mouse and keyboard/controller navigation; NEXT
-advances the whole number and wraps after 99999. Numbers choose deterministic
-geographic seeds for each size.
+advances the whole number and wraps after 99999. The cartridge's original
+seeding also depends on the previous map selection.
 
 Expanded maps add a visual vehicle fleet by 120x100 districts: Big supports
 up to 4 extra vehicles of each kind, Huge 16, Giant 64, Colossal 256 and Mega
@@ -71,8 +68,8 @@ cannot pull it back. Cursor presentation is restored before guest execution,
 so it does not alter simulation or saved OAM. Scenario pins and selection
 frames stay intact, with a separate native hand across the wide canvas.
 
-Validation: deterministic geography checks cover 40 seeds across all six
-sizes, a connected water component spanning opposite edges, feature coverage
+Validation: native generation checks cover 40 seeds across all six
+sizes, long connected waterways reaching multiple edges, feature coverage
 in every quadrant, native tile bounds and preview phases. Matching interior
 terrain classes at Big through Mega verify fixed feature scale. Stock fingerprints
 remain exact. Renderer tests cover palette, preview borders, unchanged zoom,
@@ -83,7 +80,10 @@ private scratch saves.
 
 Additional validation covers all 100,000 number keys, deterministic numbered
 samples, all five arrow pairs in the live menu, 99999-to-00000 NEXT wrapping,
-island components and supported shoreline masks. Fleet tests cover every
+island components and native tile vocabulary. Sixteen captured stock terrain
+fingerprints and final random states remain unchanged. A live 120x100 menu
+replay also matches all 12,000 terrain words against the ROM interpreter.
+Fleet tests cover every
 expanded size, infrastructure removal, paused positions and viewport culling.
 Native-ROM Mega replays verify up to 1,024 vehicles of each kind and thousands
 of visible sprite pieces across zoom levels, with CPU/GPU pixel parity. Dedicated
@@ -662,7 +662,7 @@ Zoom reveals more land when reducing scale and keeps the complete native HUD
 visible at the upper limit. Geometry checks cover DPI, centered views, bounds
 and pointer mapping. Hardware touchpad behavior has not been verified locally.
 
-The local zoom follow-up allows terrain spanning up to 65536 native pixels
+Enhanced Beta 17 allows terrain spanning up to 65536 native pixels
 across the view, twice the previous limit, separately from the canvas size.
 This can show the entire 3840x3200 map in the default widescreen view and
 Fit to Screen. HUD, toolbox, overview maps and menus retain their

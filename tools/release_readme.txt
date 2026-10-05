@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 16 - LOCAL TITLE CURSOR FIX
+URBAN RECOMP ENHANCED BETA 17 - TERRAIN, PREVIEWS AND CURSOR FIXES
 ======================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -10,13 +10,13 @@ not replaced. No ROM or personal saves/settings are included.
 The mouse hand waits for menu graphics during the title-screen exit fade,
 preventing a corrupted logo tile from appearing at the pointer after a click.
 
-Local follow-up: connected rivers, tributaries, lakes, coasts/islands and forest
-districts on every size, with staged map-select previews. Expanded maps add
-more terrain features at original tile scale instead of stretching them.
-Rivers use curved reaches with varied headings instead of parallel bands,
-and narrow water nubs are removed before native shoreline fitting.
-Small island clusters now appear inside irregular lakes and bays; narrow water
-gaps are cleaned until native shore tiles fit. Five map-number digits offer
+Beta 17 restores the original cartridge terrain generator for 120x100.
+Expanded maps extend its actual river walks, lake/coast brushes, forest
+scatter and shoreline fitting across the full world, adding more features
+while keeping their original tile sizes. Rivers continue across map bounds;
+completed 120x100 map images are not tiled. Small island bays use original
+water brushes and shoreline artwork. Saved terrain is preserved.
+Five map-number digits offer
 00000 through 99999, with mouse/pad arrows and NEXT wrapping after 99999.
 The far-right edge now has the same extra panning space as the other borders.
 Larger maps add trains, aircraft, ships and helicopters by 120x100 districts,
@@ -34,7 +34,7 @@ arrow beside the hovered option. Keyboard/gamepad uses native selection jumps.
 Also included: cheaper large drag previews, responsive batched construction
 (including the money cheat), and sharp city entry across start/load paths.
 Very large selections still require processing time; they no longer block
-window events throughout placement. This build has not been published.
+window events throughout placement.
 
 Enhanced fork: https://github.com/kandowontu2/UrbanRecomp
 Original project: https://github.com/blackerking/UrbanRecomp

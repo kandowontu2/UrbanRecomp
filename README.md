@@ -33,14 +33,19 @@ the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) an
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 16 is one portable Windows EXE; run it and select your own clean US ROM.
+Beta 17 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution
-path. Native C simulation kernels retain compatibility fallbacks. Beta 16
+path. Native C simulation kernels retain compatibility fallbacks. Beta 17
 distributes development across city districts at Normal
 speed as well; its time allowance keeps development work bounded per frame.
 See the enhancement notes for current behavior and performance limits.
+Beta 17 restores original 120x100 terrain and extends its generator to larger
+maps at native feature scale. It also adds map numbers 00000–99999,
+sharp previews with zoom and drag panning, larger vehicle fleets, responsive
+large construction, and zoom-out sufficient to show the complete 3840x3200
+map. It also fixes title-click cursor corruption and tool-window backdrops.
 Enhanced releases are prereleases; see
 [features, controls, save compatibility and testing limits](docs/PC_ENHANCEMENTS.md).
 
