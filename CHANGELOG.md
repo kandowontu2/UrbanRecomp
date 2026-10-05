@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Keep the display-resolution map preview visible while NEXT is held, map
+  numbers are dirty and the selector enters or exits. Latch the actual panel
+  before scanout instead of exposing the coarse native preview when the
+  screen state changes. Use nearest sampling throughout the map panel even
+  when optional display smoothing is enabled.
 - Publish setup-menu glyphs at the frame boundary after their matching sprite
   list is assembled. Main menu, map size and development speed no longer show
   a frame combining the previous list's positions with the next page's text.

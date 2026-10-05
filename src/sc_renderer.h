@@ -36,6 +36,7 @@ typedef struct ScRenderer {
     int16_t object_grid_x[128];
     ScVehicleSprite object_grid_vehicles[SC_VEHICLE_SPRITES];
     ScMapPreview map_preview;
+    bool map_preview_frame; /* visible panel latched before scanout */
     uint32_t preview_colors[38];
     unsigned map_number;
     ScViewport view;
@@ -137,3 +138,5 @@ void ScRendererClipboardRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,
 /* Restore the live HUD hand above host-added COPY/PASTE labels. */
 void ScRendererHudPointer(ScRenderer *r,const Ppu *ppu);
 uint32_t ScRendererHandPixel(const Ppu *ppu,int x,int y);
+/* Distinguish the visible map panel from waiting/name pages during setup. */
+bool ScRendererMapPreviewVisible(const Ppu *ppu,const uint8_t *ram);

@@ -14,6 +14,9 @@ remains water-free with every style and size.
 Map-number arrows allow repeated clicks across all five digits without
 regeneration until the mouse leaves their shared boundary. Five digits
 use the original font, No. label and beveled counter from screen entry.
+The display-resolution preview stays sharp while NEXT is held, during
+number editing, generation and setup transitions. The visible map panel
+uses nearest sampling even when optional display smoothing is enabled.
 Main menu, map size and development speed publish their new lettering
 and sprite positions together, eliminating the one-frame text flash.
 Large successful zone fills use fused native construction loops. Costs,

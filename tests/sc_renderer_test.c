@@ -796,8 +796,10 @@ int main(void) {
     memset(p,0,sizeof *p);memset(ram,0,0x20000);ScRendererResetHistory(&r);
     assert(ScRendererResize(&r,(ScViewport){448,224,96,0,1,0}));
     for(int i=0;i<32;++i)p->brightnessMult[i]=(i<<3)|(i>>2);
-    p->inidisp=15;p->bgmode=1;p->screenEnabled[0]=2;p->bgXsc[1]=0x50;
-    for(unsigned i=0;i<1024;++i)p->vram[0x5000+i]=7<<10;
+    p->inidisp=15;p->bgmode=1;p->screenEnabled[0]=2;p->bgXsc[1]=0x44;p->bgXsc[2]=0x50;
+    for(unsigned i=0;i<1024;++i)p->vram[0x4400+i]=7<<10;
+    p->vram[0x4400+19*32+25]=(7<<10)|0x58;
+    p->vram[0x4400+20*32+23]=(7<<10)|0x55;
     p->cgram[123]=31<<5;p->cgram[125]=31<<10;p->cgram[120]=31;
     rom[0x1148e]=11;rom[0x1148f]=13;rom[0x114a2]=8;rom[0x114a6]=13;word(ram,0x14,5);
     r.map_preview.active=1;r.map_preview.cells[0]=1;r.map_preview.reveal[0]=10;
@@ -816,6 +818,27 @@ int main(void) {
     r.map_preview.frame=90;
     for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
     assert(ScRendererPixel(&r,96+49,88)==0xffff0000);
+    assert(!memcmp(before,p,sizeof *p));
+    /* Dirty arrows/NEXT and setup-state transitions keep the actual visible
+     * map, never reverting to the low-resolution native preview. */
+    for(unsigned mode=4;mode<=7;++mode)for(unsigned dirty=0;dirty<2;++dirty) {
+        word(ram,0x14,mode);word(ram,0xb31,dirty?0x80:0);
+        assert(ScRendererMapPreviewVisible(p,ram));
+        for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+        assert(r.map_preview_frame && ScRendererPixel(&r,96+49,88)==0xffff0000);
+    }
+    word(ram,0x14,5);word(ram,0xb31,0);
+    p->bgXsc[2]=0x54; /* The name page shares stale counter tiles. */
+    assert(!ScRendererMapPreviewVisible(p,ram));
+    assert(r.map_preview_frame); /* Vblank DMA cannot change the rendered frame's gate. */
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(!r.map_preview_frame && ScRendererPixel(&r,96+49,88)==0xff123456);
+    p->bgXsc[2]=0x50;
+    p->vram[0x4400+19*32+25]=0; /* PLEASE WAIT machine page. */
+    assert(!ScRendererMapPreviewVisible(p,ram));
+    p->vram[0x4400+19*32+25]=(7<<10)|0x58;
+    assert(!ScRendererMapPreviewVisible(p,NULL) && !ScRendererMapPreviewVisible(NULL,ram));
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
     assert(!memcmp(before,p,sizeof *p));
     uint32_t counter[40*16];
     for(int y=0;y<16;++y)for(int x=0;x<40;++x)

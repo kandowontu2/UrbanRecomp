@@ -1039,6 +1039,7 @@ static void handle_pos_stuff(void) {
     bool startingVblank = false;
     if(s_rom_is_us && snes->vPos==1) {
       unsigned screen=ram_w(0x14);
+      s_custom_renderer.map_preview_frame=ScRendererMapPreviewVisible(g_ppu,g_ram);
       /* COP 2 builds the next list before OAM DMA displays it. Match the
        * live list before publishing glyphs at the first visible scanline. */
       if(screen==2 || screen==3 || screen==18)
@@ -8273,8 +8274,7 @@ static ScRect map_selection_preview_rect(ScViewport v,int dw,int dh) {
 }
 static void draw_map_selection_preview(SDL_Renderer *renderer,ScViewport v) {
   ScMapPreview *p=&s_custom_renderer.map_preview;
-  if(!p->active || !p->source || (ram_w(0x14)!=5 && ram_w(0x14)!=6) ||
-      ram_w(0xb31) || !(g_ppu->screenEnabled[0]&2))return;
+  if(!p->active || !p->source || !s_custom_renderer.map_preview_frame)return;
   double sx=(double)s_destination.w/v.width,sy=(double)s_destination.h/v.height;
   int dw,dh;SDL_GetRendererOutputSize(renderer,&dw,&dh);
   ScRect rect=map_selection_preview_rect(v,dw,dh);
@@ -8315,7 +8315,7 @@ static void draw_map_selection_preview(SDL_Renderer *renderer,ScViewport v) {
   SDL_RenderCopy(renderer,s_preview_texture,NULL,&rect);
   /* Redraw the fixed-size hand above the detailed preview only. The native
    * buttons, frame and cursor elsewhere keep their original composition. */
-  if(s_ui_mouse_pointer.active && !s_middle_pan.active) {
+  if(s_ui_mouse_pointer.active && ScMouseUiPointerScreen(g_ram) && !s_middle_pan.active) {
     SDL_Rect clip={(int)rect.x,(int)rect.y,(int)ceil(rect.w),(int)ceil(rect.h)};
     SDL_RenderSetClipRect(renderer,&clip);
     for(int y=0;y<16;++y)for(int x=0;x<16;++x) {
@@ -12589,6 +12589,10 @@ int main(int argc, char **argv) {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     ScRect dest = SC_RECT(s_destination.x, s_destination.y, s_destination.w, s_destination.h);
+    /* The map panel stays pixel-sharp even when the launcher's optional
+     * smoothing is enabled. Its detailed overlay covers regeneration too. */
+    if(present_texture==texture)
+      snesrecomp_sdl_set_texture_linear(texture,s_linear_filter && !s_custom_renderer.map_preview_frame);
     bool hide_city_setup=s_city_present_pending && g_ram[0x14]==0;
     bool _cok = hide_city_setup || (SDL_RenderCopy(renderer, present_texture, NULL, &dest) SC_SDL_OK);
     if(!hide_city_setup)draw_map_selection_preview(renderer,s_custom_video.enabled?s_custom_renderer.view:viewport);

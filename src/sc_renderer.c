@@ -2027,9 +2027,21 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
 }
 /* Same 120x100 view and color table as 02:899b/8b34. Show the entire
  * expanded city, instead of its first 120x100 corner. Keep UI at native scale. */
+bool ScRendererMapPreviewVisible(const Ppu *p,const uint8_t *ram) {
+    if(!p || !ram)return false;
+    unsigned mode=u16(ram,0x14);
+    /* $14 changes before the visible panel's DMA. Its original counter
+     * cells and MAP SELECT text page identify the picture actually shown,
+     * including the entry/exit frames and dirty-number edits. */
+    return mode>=4 && mode<=7 && (p->screenEnabled[0]&2) &&
+        PPU_bgTilemapAdr(p,2)==0x5000 &&
+        (bg_word(p,1,200,152)&1023)==0x58 &&
+        (bg_word(p,1,184,160)&1023)==0x55;
+}
 static void map_preview_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
-    if(!r->map_preview.active || (u16(ram,0x14)!=5 && u16(ram,0x14)!=6) ||
-        y<88 || y>=188 || !(p->screenEnabled[0]&2))return;
+    (void)ram;
+    if(!r->map_preview.active || !r->map_preview_frame ||
+        y<88 || y>=188)return;
     uint32_t *row=r->pixels+(size_t)(y+r->view.core_y)*r->view.width;
     unsigned palette=((bg_word(p,1,48,y+1)>>10)&7)*16;
     if(y==88)for(unsigned cell=0;cell<38;++cell)
@@ -2050,11 +2062,8 @@ uint32_t ScRendererHandPixel(const Ppu *p,int x,int y) {
     return ci?color(p,ci):0;
 }
 static void map_number_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
-    unsigned mode=u16(ram,0x14);
-    bool opening=mode==4 && (bg_word(p,1,200,152)&1023)==0x58 &&
-        (bg_word(p,1,184,160)&1023)==0x55;
-    if((mode!=5 && mode!=6 && !opening) ||
-       y<136 || y>=192 || !(p->screenEnabled[0]&2))return;
+    (void)ram;
+    if(!r->map_preview_frame || y<136 || y>=192)return;
     uint32_t *row=r->pixels+(size_t)(y+r->view.core_y)*r->view.width;
     uint32_t paper=color(p,bg_sample(p,1,176,136,NULL));
     if(y<174)for(int x=176;x<232;++x)row[r->view.core_x+x]=paper;
@@ -2098,6 +2107,7 @@ static void map_number_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
 void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const uint32_t *native) {
     if (!r->pixels || !p || !ram || !native || line<0 || line>=224) return;
     if (line==0) {
+        r->map_preview_frame=ScRendererMapPreviewVisible(p,ram);
         r->staged_mismatches=0;
         r->terrain.deferred=0;r->terrain.snapshots=0;
         r->terrain.city_words=0;memset(r->city_cache,0,sizeof r->city_cache);r->city_cache_next=0;

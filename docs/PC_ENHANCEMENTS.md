@@ -58,6 +58,10 @@ NEXT regenerates on release; map-number clicks regenerate once the pointer
 leaves the shared five-digit arrow area. All five digits appear from entry,
 using the original font, counter cells and No. label. Ctrl+wheel zooms around
 the center of the city view or preview, keeping the HUD at its existing size.
+The display-resolution preview remains in place during pending NEXT/number
+edits and selector entry/exit frames. The visible panel is identified before
+scanout so a changed screen state cannot expose the coarse native preview.
+Optional display smoothing is overridden with nearest sampling on this panel.
 Hold middle mouse to drag the preview; stationary input does not move it.
 Click inside the preview to open
 an expanded view across the window; click again or press Esc to return to
