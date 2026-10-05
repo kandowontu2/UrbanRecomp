@@ -17,7 +17,7 @@ The enhanced fork is maintained by [kandowontu2](https://github.com/kandowontu2/
   snesrecomp's complete third-party attribution and color-model licenses are
   included in the bundled `licenses` directory.
 - **SDL contributors, Sam Lantinga:** SDL, used for windowing, input, audio and
-  shared Vulkan presentation/compute.
+  shared Vulkan presentation/compute, with Metal presentation on macOS.
 - **Omar Cornut and Dear ImGui contributors:** launcher UI.
 - **Sean Barrett:** stb libraries. **Guillaume Vareille:** tinyfiledialogs.
 - **Łukasz Dziedzic:** Lato. **The Noto Project Authors:** Noto fonts and flags.
@@ -29,6 +29,7 @@ The exact required notices and license texts are in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the bundled `licenses` directory.
 The single-file distribution includes these files internally; run
 `UrbanRecomp.exe --portable-docs` to open them.
+Mac app bundles include the same notices in `Contents/Resources`.
 
 ## Community research and behavior references
 

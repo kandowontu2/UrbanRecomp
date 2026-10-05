@@ -44,6 +44,8 @@ interpreter from the release executable. Register and save-state layouts,
 memory access order and device clocks remain compatible. The independent
 interpreter is available only in explicit reference builds for testing.
 See [native execution and verification](docs/NATIVE_EXECUTION.md).
+For universal Mac app packaging and save locations, see the
+[macOS build notes](docs/MACOS_BUILD.md).
 Beta 18
 distributes development across city districts at Normal
 speed as well; its time allowance keeps development work bounded per frame.
