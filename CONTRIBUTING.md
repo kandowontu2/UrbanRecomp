@@ -36,7 +36,11 @@ Its generated `src/program_gen/` files stay local too. When present, CMake's
 `SC_PROGRAM=ON` links them through `ScProgramRuntime`. Keep `SC_AOT=OFF` for
 the enhanced host: the older AOT/fiber execution path uses a different ABI
 and skips required game hooks. This native tier preserves live bus operands,
-register widths and original instruction boundaries. `SC_PROGRAM_REFERENCE=1`
+register widths and original instruction boundaries. Default builds also use
+`SC_INTERPRETER_REFERENCE=OFF`: they link the register/save ABI without the
+65816 decoder and require the complete generated ROM tier. To build the
+independent oracle explicitly, use `SC_INTERPRETER_REFERENCE=ON`.
+In that reference build, `SC_PROGRAM_REFERENCE=1`
 runs the preceding instruction execution path for matched checks;
 `SC_PROGRAM_CONTROL_REFERENCE=1` also restores the original IRQ/NMI/WAI/STP
 control path. The generator includes the verified 56-entry city-tool dispatch
@@ -45,6 +49,14 @@ Compile and run
 `UrbanRecompProgramTest` with the same ROM to compare every generated site
 against the original CPU. Details and limits are in
 [GPU_PERFORMANCE.md](docs/GPU_PERFORMANCE.md).
+
+Every ROM byte has a compiled per-address action, covering indirect targets
+outside the compact hot-path graph. Optional verified regional profiles use
+the same native path; repeat `--regional-rom REGION /path/to/cartridge.sfc`
+with `eu`, `fr`, `de` or `jp` when generating. US enhancements retain their
+separate fingerprint guards. Unsupported code modifications are diagnosed;
+native builds never interpret an uncovered address. See
+[native execution and verification](docs/NATIVE_EXECUTION.md).
 
 World-hook ownership is generated from host source by
 `tools/compile_world_layout.py`; CMake refreshes it when its source changes.

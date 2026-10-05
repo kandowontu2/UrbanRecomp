@@ -3186,7 +3186,7 @@ unsigned ScWorldGuestKernelStep(ScWorld *w,Interp816 *c,uint8_t *r,
         unsigned program_pc=c->pc,program_bank=c->k;
         unsigned program=ScProgramStep(c);
         if(!program && kernel_interpreter_profile && program_bank==3) ++kernel_interpreter_ops[program_pc];
-        cycles+=program?program:interp816_runOpcode(c);
+        cycles+=program?program:ScProgramExecute(c);
     }
     c->mem=saved_mem;c->read=saved_read;c->write=saved_write;
     c->read_word=saved_read_word;c->write_word=saved_write_word;

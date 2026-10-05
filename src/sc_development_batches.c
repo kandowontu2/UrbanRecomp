@@ -1,6 +1,7 @@
 #include "sc_development_batches.h"
 #include "sc_world_guest.h"
 #include "sc_math.h"
+#include "sc_program.h"
 #include "snes/interp816.h"
 #include <stdlib.h>
 #include <string.h>
@@ -180,7 +181,7 @@ static bool attempt(ScDevelopmentBatches *b,unsigned cell,unsigned (*fallback)(I
         if(!cost) {
             ScWorldGuestBeginPrepared(&b->guest,w,c,b->rom,0x80000);
             if(fallback)cost=fallback(c);
-            if(!cost)cost=interp816_runOpcode(c);
+            if(!cost)cost=ScProgramExecute(c);
         }
     }
     return false;

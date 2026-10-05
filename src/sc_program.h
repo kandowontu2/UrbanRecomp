@@ -8,8 +8,16 @@ typedef struct Interp816 Interp816;
  * NOP patch has explicit C variants; other patched/RAM code yields before
  * mutating state. Host hooks and beam events run between C edges. */
 void ScProgramEnable(bool clean_us);
+/* Select a generated, fingerprint-verified cartridge profile. US native host
+ * enhancements stay separately gated; regional stock code uses compiled C. */
+bool ScProgramSelectRom(uint32_t fingerprint);
 bool ScProgramAvailable(const Interp816 *cpu);
+bool ScProgramBlockAvailable(const Interp816 *cpu);
 unsigned ScProgramStep(Interp816 *cpu);
+/* Common instruction/control entry for private construction and simulation
+ * CPUs as well as the host. Keeps the independent interpreter only as the
+ * disabled/unsupported reference path while migration coverage is checked. */
+unsigned ScProgramExecute(Interp816 *cpu);
 /* Retire pending NMI/IRQ or idle WAI/STP control with the existing CPU ABI.
  * Zero leaves all CPU/bus state unchanged, including masked-IRQ WAI wakeup
  * that needs an opcode edge. The host advances devices after a nonzero cost. */

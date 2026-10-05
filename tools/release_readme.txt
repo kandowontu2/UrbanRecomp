@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 18 - SHARP PREVIEWS AND TERRAIN STYLES
+URBAN RECOMP ENHANCED BETA 19 - NATIVE GAME EXECUTION
 =============================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -6,6 +6,12 @@ The runtime, assets, documentation, credits and all 19 restored songs are
 embedded. They unpack into a versioned private cache under LOCALAPPDATA.
 Saves and settings stay beside the portable EXE; existing installations are
 not replaced. No ROM or personal saves/settings are included.
+
+The game CPU now executes compiled C without a 65816 interpreter in the
+release executable. Save/register layouts and device timing are preserved.
+Budgets, reports, construction, hidden-city generation, save/load and large
+city work were checked against the original CPU. NATIVE_EXECUTION.md and
+GPU_PERFORMANCE.md contain build controls, validation and performance limits.
 
 F12 LAND GENERATION offers Native (default), Procedural (the earlier
 generator), Islands, Lakes, Rivers and Fractal. The saved choice applies

@@ -11,15 +11,15 @@ For a MinGW/SDL3 build, pass --build-dir <CMake-build-folder> and
 --runtime-dir <MinGW-bin-folder>. Both SDL backends are detected from the
 build folder. A SHA-256 file is written alongside the ZIP.
 
-SC_AOT=OFF matters: src/gen is compiled from the ROM, and a public binary must
-not carry it. This script refuses an executable that still carries the AOT
-tier (its generated function names).
+SC_AOT=OFF keeps the older CpuState AOT tier out of this enhanced host.
+The compatible program_gen native tier is the production execution path.
+This script refuses the legacy AOT tier and interpreter reference builds.
 
 The package holds the executable, SDL, the compiler runtime DLLs it
 needs, the launcher assets, the Sylt data, the translation builder, the
 licences and a short readme.
-Nothing derived from a ROM goes in: no src/gen, no translation files, no save
-states.
+No ROM images, generated source files, cartridge graphics, translation files
+or personal saved states are bundled.
 """
 import argparse
 import glob
@@ -61,8 +61,11 @@ def main():
     if not os.path.isfile(cache_path):
         cache_path = os.path.join(os.path.dirname(build), "CMakeCache.txt")
     with open(cache_path, encoding="utf-8") as f:
-        if "SC_AOT:BOOL=OFF" not in f.read():
+        cache = f.read()
+        if "SC_AOT:BOOL=OFF" not in cache:
             sys.exit("public packages require a CMake build with SC_AOT=OFF")
+        if "SC_INTERPRETER_REFERENCE:BOOL=OFF" not in cache:
+            sys.exit("public packages require SC_INTERPRETER_REFERENCE=OFF")
     sdl = next((n for n in ("SDL3.dll", "SDL2.dll") if os.path.isfile(os.path.join(build, n))), None)
     if not sdl:
         sys.exit("missing SDL runtime in " + build)
@@ -81,6 +84,7 @@ def main():
         (os.path.join(ROOT, "CHANGELOG.md"), "CHANGELOG.md"),
         (os.path.join(ROOT, "docs", "PC_ENHANCEMENTS.md"), "PC_ENHANCEMENTS.md"),
         (os.path.join(ROOT, "docs", "GPU_PERFORMANCE.md"), "GPU_PERFORMANCE.md"),
+        (os.path.join(ROOT, "docs", "NATIVE_EXECUTION.md"), "NATIVE_EXECUTION.md"),
         (os.path.join(ROOT, "tools", "start_release.cmd"), "Start-UrbanRecomp.cmd"),
         (os.path.join(ROOT, "snesrecomp", "LICENSE"), "licenses/snesrecomp-LICENSE.txt"),
         (os.path.join(ROOT, "snesrecomp", "THIRD_PARTY_ATTRIBUTION.md"), "licenses/snesrecomp-THIRD_PARTY_ATTRIBUTION.md"),

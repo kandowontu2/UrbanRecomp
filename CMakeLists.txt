@@ -50,23 +50,16 @@ else()
     set(SC_HAVE_LAUNCHER OFF)
 endif()
 
-# Phase-1 bring-up (see docs/AOT_LLE.md and src/main.c): the game runs entirely on
-# the shared LLE interpreter tier (standalone interp816 over the device
-# models), NOT the AOT/CpuState hybrid runtime. `bash tools/regen.sh` already
-# produces real AOT-eligible banks under src/gen/ -- proving the recompiler
-# pipeline works end to end against the ROM -- but that generated C targets
-# the CpuState ABI (cpu_state.c/common_cpu_infra.c/interp_bridge.c), which
-# this executable does not link yet. Wiring that hybrid tier in is the
-# documented next phase (see docs/AOT_LLE.md); until then src/gen/*.c is
-# intentionally left out of this target so the build doesn't silently
-# mismatch ABIs.
+# The enhanced host uses program_gen's compatible native C ABI. The older
+# src/gen AOT/CpuState ABI belongs to separate opt-in probe targets and must
+# not bypass the enhanced host's per-edge game hooks and device timing.
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/gen)
     file(GLOB SC_GEN_PROBE ${CMAKE_SOURCE_DIR}/src/gen/*.c)
     if(SC_GEN_PROBE)
         message(STATUS
             "UrbanRecomp: src/gen has ${SC_GEN_PROBE} generated "
-            "AOT bank(s) from tools/regen.sh, not yet linked -- Phase 1 is "
-            "interpreter-only. See CMakeLists.txt / docs/AOT_LLE.md.")
+            "legacy AOT bank(s) for opt-in probes; the enhanced host uses "
+            "program_gen native execution. See docs/NATIVE_EXECUTION.md.")
     endif()
 endif()
 
@@ -155,6 +148,9 @@ target_include_directories(ScProgramRuntime PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
 if(SC_PROGRAM_SOURCES)
     target_compile_definitions(ScProgramRuntime PRIVATE SC_PROGRAM_TIER)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/src/program_gen/sc_program_cold.h")
+        target_compile_definitions(ScProgramRuntime PRIVATE SC_PROGRAM_FULL_ROM)
+    endif()
     if(EXISTS "${CMAKE_SOURCE_DIR}/src/program_gen/sc_program_bank00_blocks_0.c")
         target_compile_definitions(ScProgramRuntime PRIVATE SC_PROGRAM_BLOCK_TIER)
     endif()
@@ -163,6 +159,21 @@ function(sc_configure_native_program target)
     target_link_libraries(${target} PRIVATE ScProgramRuntime)
 endfunction()
 sc_configure_native_program(UrbanRecomp)
+option(SC_INTERPRETER_REFERENCE "Link the 65816 decoder for independent migration controls" OFF)
+if(NOT SC_INTERPRETER_REFERENCE)
+    if(NOT SC_PROGRAM_SOURCES OR NOT EXISTS "${CMAKE_SOURCE_DIR}/src/program_gen/sc_program_cold.h")
+        message(FATAL_ERROR "Native execution requires generated program code. Run tools/compile_native_program.py with your verified US ROM, or explicitly select SC_INTERPRETER_REFERENCE=ON for an oracle build.")
+    endif()
+    get_target_property(SC_NATIVE_APP_SOURCES UrbanRecomp SOURCES)
+    list(FILTER SC_NATIVE_APP_SOURCES EXCLUDE REGEX "/interp816\\.c$")
+    set_property(TARGET UrbanRecomp PROPERTY SOURCES ${SC_NATIVE_APP_SOURCES})
+    target_sources(UrbanRecomp PRIVATE src/sc_cpu_state.c)
+    target_compile_definitions(UrbanRecomp PRIVATE SC_NATIVE_ONLY=1)
+endif()
+if(SC_INTERPRETER_REFERENCE AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC AND NOT APPLE)
+    target_sources(UrbanRecomp PRIVATE src/sc_interpreter_guard.c)
+    target_link_options(UrbanRecomp PRIVATE "-Wl,--wrap=interp816_runOpcode")
+endif()
 
 # Let the compiler optimize the native simulation, map helpers and device
 # scheduler together. This must be a target property: a cache variable alone
@@ -747,6 +758,25 @@ if(SC_PROGRAM_SOURCES)
     else()
         target_compile_options(UrbanRecompProgramTest PRIVATE -UNDEBUG)
     endif()
+endif()
+
+add_library(ScCpuStateOracle OBJECT EXCLUDE_FROM_ALL
+    ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
+target_include_directories(ScCpuStateOracle PRIVATE ${SNESRECOMP_ROOT}/runner/src)
+target_compile_definitions(ScCpuStateOracle PRIVATE
+    interp816_init=ScCpuOracleInit interp816_free=ScCpuOracleFree
+    interp816_reset=ScCpuOracleReset interp816_saveload=ScCpuOracleSaveLoad
+    interp816_setFlags=ScCpuOracleSetFlags interp816_getFlags=ScCpuOracleGetFlags
+    interp816_set_brk_hook_enabled=ScCpuOracleBrkHook
+    interp816_runOpcode=ScCpuOracleRun interp816_insns_total=ScCpuOracleInstructions
+    interp816_cycles_total=ScCpuOracleCycles g_interp816_cur_pc=ScCpuOracleCurrentPc)
+add_executable(UrbanRecompCpuStateTest EXCLUDE_FROM_ALL
+    tests/sc_cpu_state_test.c src/sc_cpu_state.c $<TARGET_OBJECTS:ScCpuStateOracle>)
+target_include_directories(UrbanRecompCpuStateTest PRIVATE ${SNESRECOMP_ROOT}/runner/src)
+if(MSVC)
+    target_compile_options(UrbanRecompCpuStateTest PRIVATE /UNDEBUG)
+else()
+    target_compile_options(UrbanRecompCpuStateTest PRIVATE -UNDEBUG)
 endif()
 
 add_executable(UrbanRecompPowerRefreshTest EXCLUDE_FROM_ALL

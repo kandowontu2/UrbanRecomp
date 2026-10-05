@@ -1,5 +1,48 @@
 # Vulkan and native C performance work
 
+## Beta 19 native CPU migration — 2026-10-05
+
+The release executable now links the register/save ABI without the 65816
+instruction decoder. The production Ninja link includes `sc_cpu_state.c`
+and excludes `interp816.c`; its symbol table has no `interp816_doOpcode`.
+The retained historical `interp816_runOpcode` symbol only diagnoses missing
+native coverage and exits with status 86. Independent reference builds retain
+the original decoder. Both production and reference negative guard probes
+were checked. This migration concerns the game CPU; SPC audio execution and
+the SNES device models are unchanged.
+
+All five verified profiles passed 67,108,864 independent CPU/bus/cycle
+comparisons each: 524,288 ROM entry addresses over 128 state patterns.
+Additional checks cover 98,304 interrupt/idle states per profile, 26,100
+ROM-mirror edges per profile, architectural BRK vectors, 301,747 US connected
+spans retiring 2,596,760 edges, and the explicit NOP and construction RTL
+variants. Register lifecycle, flags and serialization match the original ABI.
+
+Deterministic boot, setup, 50x/Tab city, hidden-city generation, budgets,
+reports, gift inventory, drag panning with placement, Copy, save and reload
+replays matched all 52,058,240 saved-state bytes and displayed pixels against
+Beta 18. The save replay also matched SRAM and expanded-world sidecars.
+Regional startup/menu replays match the independent CPU. Japan additionally
+requires the US-addressed helper substitutions to be disabled in the old
+control; the release now guards those helpers by fingerprint, fixing that
+old startup corruption. PC enhancements still require the verified US ROM.
+
+Native construction, actual zone growth/power gating at all six map sizes,
+distributed batches and the connected test city's services, census and SRAM
+trailer checks pass. The default time-bounded 50x development path with a
+fixed six-frame Tab cohort completed 2,501,354 extra attempts in a 1920x1600
+replay. A separate money-cheat replay committed 299,547 residential placements
+on 3840x3200. Both ran without interpreter calls, and Vulkan terrain validation
+reported no pixel mismatches against its CPU reference.
+
+These checks establish execution compatibility and removal of the decoder.
+They do not establish a new general FPS or speedup: Beta 18 already compiled
+the common hot paths, and replay timings include pacing, validation overhead
+and competing test workloads. Default development remains time-bounded, so
+timed workloads are not used as deterministic state comparisons.
+
+See [native execution and reference build controls](NATIVE_EXECUTION.md).
+
 Enhanced Beta 11 contains work toward steady 60 FPS on a filled Fit to Screen
 view at X50 development. That goal is not yet achieved. Tests use the owner's
 verified US ROM and isolated copies of their city; ROMs and saves are excluded

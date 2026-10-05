@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 1.2.0 Enhanced Beta 19 — 2026-10-05
+
+- Remove the 65816 interpreter from the release executable. Execute all
+  verified ROM entry points through compiled per-address C while retaining
+  connected hot paths, original CPU flags, memory callback order, instruction
+  clocks, interrupts and register/save-state layouts.
+- Include complete native profiles for the USA, Europe, France, Germany and
+  Japan cartridges. PC gameplay enhancements remain guarded to the US ROM.
+- Guard the US map-generator, decompressor and classifier helper addresses
+  against foreign cartridges, fixing Japanese startup corruption caused by
+  coincidentally matching addresses.
+- Route construction, hidden test-city field initialization, development
+  batches and world helpers through native execution, including the private
+  construction bus's money-display return variant.
+- Keep the original decoder in explicitly selected reference builds for
+  independent comparisons. Diagnose uncovered code rather than silently
+  interpreting it, and reject reference builds in release packaging.
+- Preserve embedded restored music, runtime files, assets, credits and
+  licenses in the single EXE. ROMs and personal saves remain external.
+
 ## 1.2.0 Enhanced Beta 18 — 2026-10-04
 
 - Keep the display-resolution map preview visible while NEXT is held, map

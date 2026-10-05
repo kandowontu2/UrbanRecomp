@@ -1,19 +1,10 @@
 /* main.c -- UrbanRecomp desktop host.
  *
- * Phase-1 bring-up: drives the ROM entirely through the shared runner's
- * standalone 65816 interpreter (interp816) over the real device models
- * (snes.c/ppu.c/apu.c/dma.c/cart.c), exactly the "LLE-first" correctness
- * baseline snesrecomp/docs/LLE_FIRST_ANALYSIS.md describes as authoritative
- * for every game before any AOT bank is layered on top. No game-specific
- * addresses or scheduler knowledge are required for this milestone: the
- * host runs a fixed number of accurate H/V master-clock ticks per video
- * frame and pauses, the same frame-boundary technique snesrecomp's own
- * game-neutral reference driver (snesrecomp/cosim/ref_driver.c) uses.
- *
- * Wiring the AOT/CpuState hybrid tier (common_cpu_infra.c's SnesInit /
- * RtlRegisterGame contract, interp_bridge.c's compiled<->interpreted
- * bouncing) is the documented next step once the game's own scheduler idiom
- * is understood well enough to declare it safely -- see README.md.
+ * Generated native C and high-level simulation helpers run over the original
+ * device models and register/save ABI. The default target omits the 65816
+ * interpreter; SC_INTERPRETER_REFERENCE explicitly links the independent
+ * oracle for migration controls. Game hooks and beam/APU events remain
+ * observable at original instruction boundaries. See NATIVE_EXECUTION.md.
  */
 #include <stdio.h>
 #include <math.h>
@@ -4259,7 +4250,7 @@ static bool run_one_frame(void) {
      * pair bounds the generation exactly. The decompressor at 00:90dd keeps a
      * plain holdoff -- it has no equivalent end marker and is short. */
     if (cpu->k == 0x03 && cpu->pc == 0xd862) s_gen_trigger_hits++;
-    if (cpu->k == 0x02 && (cpu->pc == 0x8b36 || cpu->pc == 0x89b4))
+    if (s_rom_is_us && cpu->k == 0x02 && (cpu->pc == 0x8b36 || cpu->pc == 0x89b4))
       sc_classifier_hook(cpu);
     if (cpu->k <= 0x01 && s_ws_vehicles && ScVehicles_WantsPc(cpu->k, cpu->pc))
       ScVehicles_OnPc(cpu->k, cpu->pc, cpu->x, cpu->y, cpu->dp, cpu->db);
@@ -4268,7 +4259,7 @@ static bool run_one_frame(void) {
      * which reads as a shiver (src/sc_titlesign.c). */
     if (cpu->k == 0x00 && cpu->pc == 0x80c0)
       ScTitleSign_Snapshot(g_ram, sc_bus_rom_read, NULL);
-    if (cpu->k == 0x00 && (cpu->pc == 0x90dd || cpu->pc == 0x90ee ||
+    if (s_rom_is_us && cpu->k == 0x00 && (cpu->pc == 0x90dd || cpu->pc == 0x90ee ||
                            cpu->pc == 0x9108))
       sc_decomp_hook(cpu);
 
@@ -4311,7 +4302,7 @@ static bool run_one_frame(void) {
      * By the time execution reaches f1ed the caller has already seeded and
      * pre-stepped the PRNG (03:d84d through the d862 loop), so $59/$5b ARE the
      * starting point and there is no seeding to redo. */
-    if (cpu->k == 0x01 && cpu->pc == 0xf1ed) {
+    if (s_rom_is_us && cpu->k == 0x01 && cpu->pc == 0xf1ed) {
       static int fast = -1;
       if (fast < 0) {
         const char *e = getenv("SC_MAPGEN_FAST");
@@ -5141,10 +5132,10 @@ static bool run_one_frame(void) {
       ScWorldGuestBeginPrepared(&s_world_guest,&s_world,cpu,g_snes->cart->rom,g_snes->cart->romSize);
       if(s_bank_profile)++s_native_bind_fallback;
     }
-    if(!fast_cycles && native_simulation && s_rom_fnv==SC_ROM_FNV_US && !interrupt_work)
+    if(!fast_cycles && native_simulation && !interrupt_work)
       fast_cycles=ScProgramStep(cpu);
-    if(!fast_cycles && native_simulation && s_rom_fnv==SC_ROM_FNV_US)
-      fast_cycles=ScProgramControlStep(cpu);
+    if(!fast_cycles && native_simulation)
+      fast_cycles=ScProgramExecute(cpu);
     if(s_bank_profile && !fast_cycles) {
       ++s_interpreter_bank_ops[cpu->k];
       if(cpu->k==s_bank_page_sel) {
@@ -10317,10 +10308,9 @@ int main(int argc, char **argv) {
    * dispatch table, every cfg directive. Point it at another region and it
    * would execute US code offsets over foreign bytes -- silently, and wrongly.
    *
-   * The default path is safe today because it reports bounces=0, i.e. it is
-   * pure interpreter; only SC_FIBER actually enters compiled bodies. So the
-   * guard refuses SC_FIBER on a non-US image rather than refusing to run at
-   * all, which keeps every region playable on the interpreter.
+   * Native profiles are selected by the verified fingerprint. The older
+   * SC_FIBER tier remains US-only and uses a separate ABI; it must never
+   * enter US AOT bodies on a foreign cartridge.
    *
    * FNV-1a over the whole file. US = 0xec01686a; E/F/G/J are 0xb76b1a0d,
    * 0xe1f99069, 0xaeca7623, 0xccb8c347. */
@@ -10332,7 +10322,14 @@ int main(int argc, char **argv) {
                      : region == 0x09 ? "Germany" : "unknown";
     s_rom_is_us = (fp == 0xec01686au);
     s_rom_fnv = fp;
-    ScProgramEnable(s_rom_is_us);
+    bool compiled_rom=ScProgramSelectRom(fp);
+#ifdef SC_NATIVE_ONLY
+    if(!compiled_rom) {
+      fprintf(stderr,"No compiled native profile for cartridge fingerprint %08x. "
+          "Generate its verified regional profile before running this native-only build.\n",fp);
+      return 1;
+    }
+#endif
     ScMapView_SetRomIsUs(s_rom_is_us);
     ScMapView_SetWorld(&s_world);
     fprintf(stderr, "rom: %s  region=%s (%02x)  fnv=%08x%s\n",
@@ -12863,6 +12860,8 @@ int main(int argc, char **argv) {
         (unsigned long long)ScProgramCalls(),(unsigned long long)ScProgramCycles());
     fprintf(stderr,"[program control] edges=%llu\n",
         (unsigned long long)ScProgramControlCalls());
+    fprintf(stderr,"[whole-executable interpreter] instructions=%llu guest-clocks=%llu\n",
+        (unsigned long long)interp816_insns_total(),(unsigned long long)interp816_cycles_total());
     fprintf(stderr,"[program lane] entries=%llu edges=%llu\n",
         (unsigned long long)s_program_lane_entries,(unsigned long long)s_program_lane_edges);
     fprintf(stderr,"[program blocks] entries=%llu edges=%llu\n",

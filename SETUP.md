@@ -52,6 +52,7 @@ will very likely not boot correctly.
 
 ```bash
 bash tools/regen.sh --no-tests
+python tools/compile_native_program.py --rom /path/to/your/us.sfc
 ```
 
 **Windows** (from a "Developer Command Prompt for VS 2022", or any shell

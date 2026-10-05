@@ -33,11 +33,16 @@ the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) an
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 18 is one portable Windows EXE; run it and select your own clean US ROM.
+Beta 19 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution
-path. Native C simulation kernels retain compatibility fallbacks. Beta 18
+path. Beta 19 executes the game through compiled C and removes the 65816
+interpreter from the release executable. Register and save-state layouts,
+memory access order and device clocks remain compatible. The independent
+interpreter is available only in explicit reference builds for testing.
+See [native execution and verification](docs/NATIVE_EXECUTION.md).
+Beta 18
 distributes development across city districts at Normal
 speed as well; its time allowance keeps development work bounded per frame.
 See the enhancement notes for current behavior and performance limits.
@@ -82,7 +87,10 @@ Enhanced Windows releases run compatible ROM-generated C alongside connected
 native C simulation routines over snesrecomp's PPU, APU, DMA and cartridge
 device models. The host retains original H/V clocks, interrupts and bus order;
 Vulkan shares presentation and compute for supported graphics and derived
-city fields. Unsupported execution/layouts retain compatibility fallback.
+city fields. Derived-field and graphics failures retain CPU fallbacks.
+Game instructions use compiled per-address C, including complete verified
+regional profiles; uncovered code modifications produce a diagnostic rather
+than being interpreted. PC enhancements still require the verified US ROM.
 Generated game code and the player's ROM remain private build inputs.
 
 The earlier interpreter and optional AOT/fiber bring-up are documented in

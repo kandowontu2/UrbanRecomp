@@ -13,7 +13,11 @@ ROOT=Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(ROOT/'snesrecomp/recompiler'))
 from snes65816 import decode_insn
 
-def generate(rom_path,output):
+def write_generated(path,text):
+    if not path.exists() or path.read_text()!=text:
+        path.write_text(text)
+
+def generate(rom_path,output,regional_roms=()):
     rom=rom_path.read_bytes()
     fingerprint=2166136261
     for b in rom: fingerprint=((fingerprint^b)*16777619)&0xffffffff
@@ -33,8 +37,10 @@ static void interp816_setFlags(Interp816 *cpu,uint8_t val);
     cases=re.findall(r'    case 0x([0-9a-f]{2}): \{(.*?)\n    \}',source,re.S)
     assert len(cases)==256,len(cases)
     bodies={int(op,16):re.sub(r'\n      break;\s*$','',body).replace('interp816_','sc_program_') for op,body in cases}
+    # The historical BRK marker exits the opcode switch early. Its native C
+    # action must return its cost, not break out of the PC switch and fall off.
+    bodies[0]=bodies[0].replace('        break;','        return cpu->cyclesUsed;')
     # BRK's historical bridge callback is outside this native program tier.
-    bodies.pop(0)
     cycles=[int(v) for v in re.search(r'cyclesPerOpcode\[256\] = \{(.*?)\};',source,re.S).group(1).replace('\n','').split(',') if v.strip()]
     assert len(cycles)==256
     roots={int(bank,16)*65536+int(pc,16) for bank,pc in re.findall(r'void bank_([0-9a-f]{2})_([0-9a-f]{4})\(', (ROOT/'recomp/funcs.h').read_text())}
@@ -115,7 +121,7 @@ static void interp816_setFlags(Interp816 *cpu,uint8_t val);
  * See THIRD_PARTY_ATTRIBUTION.md. ROM content and generated code stay local.
  */
 '''
-    (output/'sc_program_helpers.h').write_text(banner+'#pragma once\n#include "snes/interp816.h"\n'+helpers)
+    write_generated(output/'sc_program_helpers.h',banner+'#pragma once\n#include "snes/interp816.h"\n'+helpers)
     # Membership, rather than another instruction fetch, admits a connected
     # host lane. The C action still validates the live opcode on its real bus.
     masks=[]
@@ -125,7 +131,7 @@ static void interp816_setFlags(Interp816 *cpu,uint8_t val);
             if pc>>16==bank:
                 bit=(pc&65535)-0x8000;bits[bit>>3]|=1<<(bit&7)
         masks.append('{'+','.join(str(v) for v in bits)+'}')
-    (output/'sc_program_sites.h').write_text(banner+'#pragma once\nstatic const unsigned char sc_program_sites[6][4096]={\n'+',\n'.join(masks)+'\n};\n')
+    write_generated(output/'sc_program_sites.h',banner+'#pragma once\nstatic const unsigned char sc_program_sites[6][4096]={\n'+',\n'.join(masks)+'\n};\n')
     counts={}
     for bank in range(6):
         grouped=collections.defaultdict(list)
@@ -134,7 +140,7 @@ static void interp816_setFlags(Interp816 *cpu,uint8_t val);
         counts[f'{bank:02x}']=sum(map(len,grouped.values()))
         lines=[banner,'#include "sc_program.h"\n#include "sc_program_helpers.h"',
             'extern uint32_t g_interp816_cur_pc;',f'unsigned ScProgramBank{bank:02x}(Interp816 *cpu) {{',
-            '    switch(cpu->pc) {']
+            '    switch(cpu->pc|0x8000) {']
         for op,addresses in sorted(grouped.items()):
             lines += [f'    case 0x{pc:04x}:' for pc in sorted(addresses)]
             lines += ['    {','      uint32_t address=((uint32_t)cpu->k<<16)|cpu->pc;',
@@ -142,14 +148,22 @@ static void interp816_setFlags(Interp816 *cpu,uint8_t val);
                       '      cpu->cyclesUsed=0;cpu->pc++;',
                       '      uint8_t live=cpu->read(cpu->mem,address);']
             if bank==0 and any(pc in patch_sites for pc in addresses):
-                lines += ['      if(live==0xea && address>=0xc0fb && address<=0xc0fe) {',
+                lines += ['      if(live==0xea && (address&0x7fff)>=0x40fb && (address&0x7fff)<=0x40fe) {',
                           '        g_interp816_cur_pc=address;cpu->cyclesUsed=2;return 2;','      }']
+            if bank==0 and 0x842e in addresses:
+                # Private construction buses replace the money-HUD entry with
+                # RTL. Compile this exact host variant; preserve real stack
+                # reads and clocks instead of admitting a generic decoder.
+                lines += ['      if(address==0x00842e && live==0x6b) {',
+                          '        g_interp816_cur_pc=address;',
+                          f'        cpu->cyclesUsed={cycles[0x6b]};',bodies[0x6b],
+                          '        return cpu->cyclesUsed;','      }']
             lines += [f'      if(live!=0x{op:02x}) {{cpu->pc--;cpu->cyclesUsed=prior_cycles;return 0;}}',
                       '      g_interp816_cur_pc=address;',
                       f'      cpu->cyclesUsed={cycles[op]};',bodies[op],
                       '      return cpu->cyclesUsed;','    }']
         lines += ['    default:return 0;','    }','}']
-        (output/f'sc_program_bank{bank:02x}.c').write_text('\n'.join(lines)+'\n')
+        write_generated(output/f'sc_program_bank{bank:02x}.c','\n'.join(lines)+'\n')
     # Direct C control flow in the UI/driver banks. Keep translation units
     # bounded, and dispatch by PC only on page entry or an unexpected target.
     # Every edge still prepares host state and retires on the real event clock.
@@ -190,6 +204,11 @@ static void interp816_setFlags(Interp816 *cpu,uint8_t val);
                             '        if(!ScProgramFlowRetire(flow,cpu,2,true)) return;',
                             f'        if(cpu->k==0 && cpu->pc==0x{pc+1:04x}) goto pc_{pc+1:04x};',
                             '        return;','      }']
+                    if bank==0 and pc==0x842e:
+                        lines += ['      if(live==0x6b) {',
+                            '        g_interp816_cur_pc=address;',
+                            f'        cpu->cyclesUsed={cycles[0x6b]};',bodies[0x6b],
+                            '        ScProgramFlowRetire(flow,cpu,cpu->cyclesUsed,true);return;','      }']
                     lines += [f'      if(live!=0x{op:02x}) {{cpu->pc--;cpu->cyclesUsed=prior_cycles;',
                         '        unsigned cost=flow->fallback(flow->context,cpu);',
                         '        ScProgramFlowRetire(flow,cpu,cost?cost:1,false);return;}',
@@ -213,19 +232,81 @@ static void interp816_setFlags(Interp816 *cpu,uint8_t val);
                               for target in sorted(targets) if target in entries]
                     lines += ['      return;','    }']
                 lines += ['}']
-            (output/f'sc_program_bank{bank:02x}_blocks_{chunk}.c').write_text('\n'.join(lines)+'\n')
+            write_generated(output/f'sc_program_bank{bank:02x}_blocks_{chunk}.c','\n'.join(lines)+'\n')
+    # Cover every ROM byte as a constant per-address C action, including
+    # indirect targets not discovered by the hot-path reachability analysis.
+    # This cold tier has no runtime opcode dispatch and never interprets RAM.
+    # Hot connected blocks remain compact and keep their existing dispatch.
+    known={'eu':0xb76b1a0d,'fr':0xe1f99069,'de':0xaeca7623,'jp':0xccb8c347}
+    profiles=[('us',0xec01686a,rom,sites)]
+    for region,path in sorted(regional_roms):
+        if region not in known or any(region==p[0] for p in profiles):
+            raise ValueError('Unknown or duplicate region: '+region)
+        data=Path(path).read_bytes();fp=2166136261
+        for byte in data:fp=((fp^byte)*16777619)&0xffffffff
+        if len(data)!=0x80000 or fp!=known[region]:
+            raise ValueError('Requires the verified clean '+region+' cartridge')
+        profiles.append((region,fp,data,{}))
+    cold_header=[banner,'#pragma once']
+    for region,fp,data,excluded in profiles:
+        prefix='ScProgramCold'+('' if region=='us' else region.title())+'Bank'
+        cold_header += [f'unsigned {prefix}{bank:02x}(Interp816 *);' for bank in range(16)]
+    cold_header += ['static inline int ScProgramRomProfile(uint32_t fingerprint) {',
+                   '    switch(fingerprint) {',
+                   *[f'    case 0x{fp:08x}u:return {profile};' for profile,(_,fp,_,_) in enumerate(profiles)],
+                   '    }','    return -1;','}',
+                   'static inline unsigned ScProgramCold(Interp816 *cpu,unsigned profile) {',
+                   '    switch((profile<<4)|(cpu->k&15)) {']
+    for profile,(region,fp,data,excluded) in enumerate(profiles):
+        prefix='ScProgramCold'+('' if region=='us' else region.title())+'Bank'
+        cold_header += [f'    case {profile*16+bank}:return {prefix}{bank:02x}(cpu);' for bank in range(16)]
+    cold_header += ['    }','    return 0;','}']
+    write_generated(output/'sc_program_cold.h','\n'.join(cold_header)+'\n')
+    cold_count=0
+    def emit_cold_bank(data,excluded,region,bank):
+        grouped=collections.defaultdict(list)
+        for local in range(0x8000,0x10000):
+            if bank*65536+local not in excluded:
+                grouped[data[bank*32768+local-0x8000]].append(local)
+        prefix='ScProgramCold'+('' if region=='us' else region.title())+'Bank'
+        lines=[banner,'#include "sc_program.h"\n#include "sc_program_helpers.h"',
+               'extern uint32_t g_interp816_cur_pc;',
+               f'unsigned {prefix}{bank:02x}(Interp816 *cpu) {{',
+               '    switch(cpu->pc|0x8000) {']
+        for op,addresses in sorted(grouped.items()):
+            lines += [f'    case 0x{pc:04x}:' for pc in addresses]
+            lines += ['    {','      uint32_t address=((uint32_t)cpu->k<<16)|cpu->pc;',
+                      '      uint8_t prior_cycles=cpu->cyclesUsed;',
+                      '      cpu->cyclesUsed=0;cpu->pc++;',
+                      '      uint8_t live=cpu->read(cpu->mem,address);',
+                      f'      if(live!=0x{op:02x}) {{cpu->pc--;cpu->cyclesUsed=prior_cycles;return 0;}}',
+                      '      g_interp816_cur_pc=address;',f'      cpu->cyclesUsed={cycles[op]};',
+                      bodies[op],'      return cpu->cyclesUsed;','    }']
+        lines += ['    default:return 0;','    }','}']
+        suffix='' if region=='us' else region+'_'
+        write_generated(output/f'sc_program_bank{suffix}{bank:02x}_cold.c','\n'.join(lines)+'\n')
+        return sum(map(len,grouped.values()))
+    for region,fp,data,excluded in profiles:
+        for bank in range(16):
+            count=emit_cold_bank(data,excluded,region,bank)
+            if region=='us':cold_count+=count
     manifest={'format':1,'rom_fnv':'ec01686a','semantic_source_sha256':hashlib.sha256(source.encode()).hexdigest(),
               'roots':len(roots),'width_states':len(seen),'sites':len(sites),'banks':counts,
               'direct_c_block_pages':block_pages,
+              'cold_rom_sites':cold_count,'total_rom_sites':len(sites)+cold_count,
+              'regional_profiles':{region:{'fnv':f'{fp:08x}','rom_sites':524288} for region,fp,_,_ in profiles},
               'indirect_dispatch_tables':indirect_tables,
               'inline_argument_bytes':{f'{target:06x}':skip for target,skip in inline_arguments.items()},
-              'live_patch_variants':{'00:c0fb..c0fe':'verified view-cursor STA replaced with four native NOP edges'},
+              'live_patch_variants':{'00:c0fb..c0fe':'verified view-cursor STA replaced with four native NOP edges',
+                                     '00:842e':'private construction money-HUD entry replaced with native RTL'},
               'note':'Live widths/operands/bus accesses are retained; reachability controls coverage only. No opcode decoder executes inside emitted C edges.'}
-    (output/'manifest.json').write_text(json.dumps(manifest,indent=2))
+    write_generated(output/'manifest.json',json.dumps(manifest,indent=2))
     print(json.dumps(manifest))
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rom',type=Path,required=True)
     parser.add_argument('--out',type=Path,default=ROOT/'src/program_gen')
-    args=parser.parse_args();generate(args.rom,args.out)
+    parser.add_argument('--regional-rom',nargs=2,action='append',default=[],metavar=('REGION','ROM'),
+                        help='Also compile a verified eu/fr/de/jp cartridge; repeat for each region')
+    args=parser.parse_args();generate(args.rom,args.out,args.regional_rom)

@@ -13,7 +13,8 @@ typedef struct {Access trace[64];unsigned count,seed;bool word;Interp816 *cpu;
     Access *history;unsigned history_count;} Bus;
 static uint8_t read_bus(void *ctx,uint32_t address) {
     Bus *b=ctx;unsigned bank=(address>>16)&0x7f,p=address&65535;
-    unsigned value=p>=0x8000 && bank<16?rom[bank*32768+p-0x8000]:
+    unsigned value=(address>>16)!=0x7e && (address>>16)!=0x7f &&
+        (p>=0x8000 || (bank>=0x40 && bank<0x70))?rom[(bank&15)*32768+(p&32767)]:
         ((address*73u)^(address>>8)^(b->seed*197u))&255;
     for(unsigned i=b->history_count;i;--i) if(b->history[i-1].address==address) {
         value=b->history[i-1].value;break;
@@ -47,7 +48,7 @@ static Interp816 initial(unsigned bank,unsigned pc,unsigned sample,Bus *bus) {
     if(c.xf) {c.x&=255;c.y&=255;}
     c.dp=(uint16_t)(sample%4==0?0:sample%4==1?0xff:sample%4==2?0x1fff:0xffff);
     c.sp=c.e?(sample&1?0x100:0x1ff):(sample&1?0xffff:0);
-    c.brkHookEnabled=true;c.cyclesUsed=233;return c;
+    c.brkHookEnabled=(sample&128)==0;c.cyclesUsed=233;return c;
 }
 static unsigned check(unsigned bank,unsigned pc,unsigned sample) {
     Bus a={0},b={0};a.seed=b.seed=sample;a.word=b.word=(sample&32)!=0;
@@ -155,7 +156,7 @@ static unsigned check_flow(unsigned bank,unsigned pc,unsigned sample,unsigned mo
     assert(!memcmp(&actual,&o.oracle,offsetof(Interp816,cyclesUsed)+sizeof actual.cyclesUsed));
     return count;
 }
-static unsigned check_control(void) {
+static unsigned check_control(uint32_t fingerprint) {
     unsigned checked=0;
     for(unsigned flags=0;flags<256;++flags) for(unsigned pending=0;pending<4;++pending)
     for(unsigned state=0;state<4;++state) for(unsigned emulation=0;emulation<2;++emulation)
@@ -187,25 +188,39 @@ static unsigned check_control(void) {
                 !memcmp(&actual,&reference,offsetof(Interp816,cyclesUsed)+sizeof actual.cyclesUsed) &&
                 a.count==b.count && !memcmp(a.trace,b.trace,a.count*sizeof *a.trace));
         }
+        /* Private CPUs use the same combined control/instruction entry. In
+         * particular, masked IRQ must wake WAI and execute the next opcode,
+         * rather than returning an idle edge or losing the pending IRQ. */
+        Bus ea={0},eb={0};ea.seed=eb.seed=flags;ea.word=eb.word=word==2;
+        Interp816 execute=old,oracle=old;
+        execute.mem=&ea;oracle.mem=&eb;ea.cpu=&execute;eb.cpu=&oracle;
+        if(execute.k==0x7e) execute.k=oracle.k=1;
+        g_interp816_cur_pc=0x123456;
+        unsigned execution=ScProgramExecute(&execute);site=g_interp816_cur_pc;
+        g_interp816_cur_pc=0x123456;
+        unsigned original=interp816_runOpcode(&oracle);execute.mem=&eb;
+        assert(execution==original && site==g_interp816_cur_pc &&
+            !memcmp(&execute,&oracle,offsetof(Interp816,cyclesUsed)+sizeof execute.cyclesUsed) &&
+            ea.count==eb.count && !memcmp(ea.trace,eb.trace,ea.count*sizeof *ea.trace));
         ++checked;
     }
     ScProgramEnable(false);Bus bus={0};Interp816 c=initial(1,0xa591,0,&bus);c.nmiWanted=true;
     Interp816 before=c;assert(!ScProgramControlStep(&c) && !memcmp(&c,&before,sizeof c) && !bus.count);
-    ScProgramEnable(true);return checked;
+    assert(ScProgramSelectRom(fingerprint));return checked;
 }
 int main(int argc,char **argv) {
     assert(argc==2);FILE *f=fopen(argv[1],"rb");assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);
     uint32_t hash=2166136261u;for(unsigned i=0;i<sizeof rom;++i)hash=(hash^rom[i])*16777619u;
-    assert(hash==0xec01686a);ScProgramEnable(true);
+    assert(ScProgramSelectRom(hash));
     unsigned sites=0;uint64_t edges=0,fallbacks=0;
-    for(unsigned bank=0;bank<6;++bank) for(unsigned pc=0x8000;pc<=0xffff;++pc) {
+    for(unsigned bank=0;bank<16;++bank) for(unsigned pc=0x8000;pc<=0xffff;++pc) {
         if(!check(bank,pc,0)) {++fallbacks;continue;}
         ++sites;++edges;
         for(unsigned sample=1;sample<128;++sample) {assert(check(bank,pc,sample));++edges;}
     }
-    assert(sites==33091 && edges==(uint64_t)sites*128);
-    printf("Program control: %u exact IRQ/NMI/WAI/STP and immutable-decline states\n",check_control());
+    assert(sites==524288 && edges==(uint64_t)sites*128);
+    printf("Program control: %u exact IRQ/NMI/WAI/STP and immutable-decline states\n",check_control(hash));
     for(unsigned sample=0;sample<128;++sample) for(unsigned kind=0;kind<7;++kind) {
         Bus bus={0};Interp816 c=initial(0,0x930d,sample,&bus);
         if(kind==0)c.nmiWanted=true;
@@ -216,18 +231,46 @@ int main(int argc,char **argv) {
         if(kind==5)c.pc=0x100;
         if(kind==6)ScProgramEnable(false);
         Interp816 before=c;assert(!ScProgramStep(&c));assert(!memcmp(&c,&before,sizeof c));assert(!bus.count);
-        ScProgramEnable(true);++fallbacks;
+        assert(ScProgramSelectRom(hash));++fallbacks;
     }
-    unsigned original=rom[0x130d];rom[0x130d]=0xea;
+    unsigned original=rom[0x130d];rom[0x130d]=original==0xea?0xff:0xea;
     Bus bus={0};Interp816 c=initial(0,0x930d,0,&bus),before=c;bus.cpu=&c;
     assert(!ScProgramStep(&c));assert(!memcmp(&c,&before,sizeof c));assert(bus.count==1);
     rom[0x130d]=(uint8_t)original;++fallbacks;
     printf("Program C: %u ROM sites, %llu exact CPU/bus/cycle edges, %llu immutable fallbacks\n",
         sites,(unsigned long long)edges,(unsigned long long)fallbacks);
+    unsigned aliases=0;
+    const unsigned mirror_banks[]={0x10,0x80,0x90,0x40,0xc0,0x70,0xf0};
+    for(unsigned i=0;i<sizeof mirror_banks/sizeof *mirror_banks;++i)
+        for(unsigned pc=0x8000;pc<=0xffff;pc+=113)for(unsigned sample=0;sample<128;sample+=13) {
+            assert(check(mirror_banks[i],pc,sample));++aliases;
+            if((mirror_banks[i]&127)>=0x40 && (mirror_banks[i]&127)<0x70) {
+                assert(check(mirror_banks[i],pc&32767,sample));++aliases;
+            }
+        }
+    printf("Program ROM mirrors: %u exact upper-bank and low-ROM-window CPU/bus/cycle edges\n",aliases);
+    unsigned architectural_brk=0;
+    for(unsigned bank=0;bank<16;++bank)for(unsigned pc=0x8000;pc<=0xffff;++pc)
+        if(!rom[bank*32768+pc-0x8000]) {
+            for(unsigned sample=128;sample<256;++sample) {assert(check(bank,pc,sample));++architectural_brk;}
+            break;
+        }
+    printf("Program BRK vectors: %u exact native/emulation signature, stack and vector cases\n",architectural_brk);
+    if(hash!=0xec01686a) {
+        printf("Regional program %08x: every ROM byte executes compiled C with exact CPU/bus/cycles\n",hash);
+        return 0;
+    }
+    uint8_t money_entry=rom[0x42e];rom[0x42e]=0x6b;
+    for(unsigned sample=0;sample<128;++sample) {
+        assert(check(0,0x842e,sample));
+        assert(check_flow(0,0x842e,sample,0,1)==1);
+    }
+    rom[0x42e]=money_entry;
+    puts("Program construction HUD variant: 128 exact RTL edges and connected spans");
     uint64_t connected=0;unsigned spans=0;
     for(unsigned bank=0;bank<2;++bank) for(unsigned pc=0x8000;pc<=0xffff;++pc) {
         Bus b={0};Interp816 probe=initial(bank,pc,0,&b);
-        if(!ScProgramAvailable(&probe)) continue;
+        if(!ScProgramBlockAvailable(&probe)) continue;
         for(unsigned sample=0;sample<128;sample+=7) {
             unsigned count=check_flow(bank,pc,sample,0,16);
             assert(count);connected+=count;++spans;

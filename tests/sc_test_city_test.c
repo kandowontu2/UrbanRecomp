@@ -1,5 +1,6 @@
 #include "sc_test_city.h"
 #include "sc_sram.h"
+#include "sc_program.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -8,6 +9,7 @@ static ScWorld world,loaded;
 static uint8_t ram[0x20000],rom[0x80000],sram[0x8000],original[0x8000];
 int main(int argc,char **argv) {
     assert(argc==3);FILE *f=fopen(argv[1],"rb");assert(f);assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);
+    assert(ScProgramSelectRom(0xec01686a));
     ScPopulation p,q;ScTestCityStats stats;
     assert(ScTestCityGenerate(&world,&p,ram,rom,sizeof rom,&stats));
     assert(ScWorldWidth(&world)==1920 && ScWorldHeight(&world)==1600);

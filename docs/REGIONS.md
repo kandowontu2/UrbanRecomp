@@ -27,7 +27,16 @@ What *is* shared is data: banks `04`-`08` are largely identical across regions
 are the code and they genuinely differ. J is closest to U and is the sensible
 first target for any per-region recompilation.
 
-## The interpreter runs every region unchanged
+## Native execution preserves all five verified regions
+
+Enhanced Beta 19 includes complete compiled per-address profiles for all
+five fingerprints above. Each profile covers all 524,288 ROM bytes and
+retains ROM aliases, live operands, flags, cycles and memory callback order.
+The enhanced gameplay hooks remain US-only. Generate optional regional
+profiles with `tools/compile_native_program.py --regional-rom REGION ROM`;
+see [native execution](NATIVE_EXECUTION.md) for build and validation details.
+
+## Historical interpreter qualification
 
 All five pass `--qualify 600` with essentially identical counters (592 logic
 changes, 174 video changes; G differs by one frame of audio). The interpreter

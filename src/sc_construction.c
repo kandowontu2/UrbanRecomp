@@ -222,7 +222,7 @@ static bool build_after(void *context,Interp816 *cpu,unsigned clocks) {
   return ++job->batch_operations<job->batch_limit;
 }
 static unsigned build_fallback(void *context,Interp816 *cpu) {
-  (void)context;return interp816_runOpcode(cpu);
+  (void)context;return ScProgramExecute(cpu);
 }
 bool ScConstructionStep(ScBuildWork *job,unsigned max_operations) {
   if(!job || job->done)return true;
@@ -273,7 +273,8 @@ bool ScConstructionStep(ScBuildWork *job,unsigned max_operations) {
         unsigned fast=job->reference || !b->world?0:ScTileLookupStep(b->world,cpu,b->ram,rom,size,budget);
         if(!fast && !job->reference && b->world && cpu->k==3)fast=ScWorldGuestBatchStep(b->world,cpu,b->ram,rom,size,budget);
         if(fast) operations+=fast/2;
-        else interp816_runOpcode(cpu);
+        else if(job->reference) interp816_runOpcode(cpu);
+        else ScProgramExecute(cpu);
       }
       if(++operations>=max_operations) return false;
     }
@@ -488,7 +489,7 @@ bool ScConstructionPrimeFields(uint8_t *ram,const uint8_t *rom,size_t size) {
     unsigned steps=0;
     while(c->pc!=0x7000 || c->k!=3) {
       if(++steps>20000000 || b->fault || c->stopped || c->waiting){ok=false;break;}
-      interp816_runOpcode(c);
+      ScProgramExecute(c);
     }
     ok=ok && c->sp==0x1fff && c->dp==0x1e00;
   }

@@ -3,6 +3,7 @@
 #include "sc_development_batches.h"
 #include "sc_population.h"
 #include "sc_world_guest.h"
+#include "sc_program.h"
 #include "snes/interp816.h"
 #ifdef NDEBUG
 #undef NDEBUG
@@ -443,6 +444,7 @@ int main(int argc,char **argv) {
     assert(argc==2);
     FILE *f=fopen(argv[1],"rb"); assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom); fclose(f);
+    assert(ScProgramSelectRom(0xec01686a));
     if(getenv("SC_BATCH_TEST_ONLY")) {distributed_batches();return 0;}
     if(!getenv("SC_SPEED_TEST_ONLY")) {
         native_helpers();native_house_candidates();native_house_mutations();native_batches();
