@@ -4319,12 +4319,17 @@ static bool run_one_frame(void) {
         pr.s1 = (uint16_t)(g_ram[0x5b] | (g_ram[0x5c] << 8));
         pr.t  = (uint16_t)(g_ram[0x5d] | (g_ram[0x5e] << 8));
         unsigned number=g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000;
+        /* Preserve the cartridge's original three-digit seed path. The two
+         * added digits extend its PRNG, rather than replace its terrain. */
+        if(number>=1000) {
+          uint32_t key=sc_mapgen_number_key(number/1000);
+          pr.s0^=(uint16_t)key;pr.s1^=(uint16_t)(key>>16);
+        }
         if (s_large_maps && !s_journey_arming && s_rom_fnv==SC_ROM_FNV_US) {
-          ScWorldGenerateNumbered(&s_world,s_large_maps,number);ScWorldMirror(&s_world,g_ram);
+          ScWorldGenerateSeeded(&s_world,s_large_maps,&pr);ScWorldMirror(&s_world,g_ram);
         } else {
           ScWorldReset(&s_world);
-          if(getenv("SC_MAPGEN_ORIGINAL"))sc_mapgen_generate(&pr,&gs);
-          else sc_mapgen_generate_numbered(&gs,0,number);
+          sc_mapgen_generate(&pr,&gs);
           s_world.journey=s_journey_arming;
         }
         /* The map is at $7F0200 -- bank 7F, so 0x10200 into WRAM. */

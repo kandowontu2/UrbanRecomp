@@ -143,8 +143,9 @@ uint16_t sc_mapgen_rand_min2(ScMapGenPrng *p, uint16_t n);
  * four edges. Taken by 86/256 of seeds instead of the feature chain. */
 void sc_mapgen_framed_map(ScMapGenPrng *p, ScMapGenState *st);
 
-/* Geographic generator used by new cities; the stock entry stays available
- * as a cartridge oracle. Size is 0..5 (120x100 through 3840x3200). */
+/* Original generator at size 0; larger sizes repeat its native water brushes,
+ * river walks, lakes, forests and fitting passes over the extended bounds.
+ * Size is 0..5 (120x100 through 3840x3200). */
 void sc_mapgen_generate_geographic(ScMapGenPrng *p, ScMapGenState *st, unsigned size);
 /* Fixed native preview, independent of city dimensions and zoom. Waterways
  * grow first, then forest patches; frame 90 is the exact completed overview. */

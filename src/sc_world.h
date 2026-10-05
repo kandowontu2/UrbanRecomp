@@ -65,6 +65,8 @@ void ScWorldGenerateGiant(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateMega(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateColossal(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateNumbered(ScWorld *world,unsigned size,unsigned number);
+/* Expanded size 1..5; consume and return the caller's native random stream. */
+void ScWorldGenerateSeeded(ScWorld *world,unsigned size,ScMapGenPrng *prng);
 bool ScWorldBounds(int x, int y);
 uint16_t ScWorldCell(const ScWorld *world, int x, int y);
 bool ScWorldPutCell(ScWorld *world, int x, int y, uint16_t tile);
