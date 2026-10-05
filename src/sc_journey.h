@@ -7,6 +7,8 @@ unsigned ScJourneyExpand(ScWorld *world,uint8_t *ram,uint64_t population);
 /* Native 16-pixel menu lettering, assembled from the player's live ROM font. */
 void ScJourneyMenuInit(const uint8_t *rom,size_t size);
 void ScJourneyMenuFont(uint16_t *vram);
+/* Publish glyphs only when the displayed sprite list belongs to this page. */
+bool ScJourneyMenuPresent(uint16_t *vram,const uint16_t *oam,bool saved);
 void ScJourneyMenuFrame(uint16_t *vram,unsigned map_base);
 bool ScJourneyMenuRead(uint32_t address,unsigned screen,uint8_t *value);
 unsigned ScJourneyMenuY(bool saved,unsigned selection);

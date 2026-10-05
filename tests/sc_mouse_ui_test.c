@@ -100,11 +100,15 @@ int main(void) {
   put(0x14,5);
   assert(point(210,96) && word(0xb2d)==0);
   put(0xb31,0x81); assert(point(210,120) && word(0xb2d)==1 && word(0xb31)==0x80);
-  assert(point(218,180) && word(0xb2d)==2);
-  assert(point(202,189) && word(0xb2d)==7);
-  assert(point(195,180) && word(0xb2d)==8);
-  assert(point(185,189) && word(0xb2d)==11);
-  assert(!point(183,180));
+  assert(point(226,180) && word(0xb2d)==2);
+  assert(point(210,189) && word(0xb2d)==7);
+  assert(point(203,180) && word(0xb2d)==8);
+  assert(point(193,189) && word(0xb2d)==11);
+  assert(!point(191,180));
+  assert(ScMouseUiMapNumberArrows(192,176) && ScMouseUiMapNumberArrows(231,191));
+  assert(ScMouseUiMapNumberArrows(208,184)); /* crossing digit/row boundaries */
+  assert(!ScMouseUiMapNumberArrows(191,180) && !ScMouseUiMapNumberArrows(232,180));
+  assert(!ScMouseUiMapNumberArrows(200,175) && !ScMouseUiMapNumberArrows(200,192));
   put(0x14,7);
   assert(point(41,112) && word(0x4a)==0 && word(0x4c)==0);
   assert(point(201,113) && word(0x4a)==10 && word(0x4c)==0); /* CLR */

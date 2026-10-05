@@ -288,6 +288,33 @@ int main(int argc,char **argv) {
     else assert(!memcmp(ram,before,sizeof ram) && !memcmp(&world,&world_before,sizeof world));
   }
   putenv("SC_CONSTRUCTION_REFERENCE=0");
+  /* Preserve auto-bulldoze costs, blocked/water sites and transport joins
+   * across coordinate seams, with and without the money cheat. */
+  for(unsigned tool=5;tool<=7;++tool)for(unsigned cheat=0;cheat<2;++cheat) {
+    unsigned reference_cost=0;
+    for(unsigned reference=0;reference<2;++reference) {
+      reset(1000000);ram[0x425]=cheat?2:0;put(0x195,1);
+      ScWorldReset(&world);world.active=world.huge=world.giant=world.colossal=world.mega=true;
+      for(int y=250;y<272;++y)for(int x=250;x<273;++x)
+        ScWorldPutCell(&world,x,y,((x+y)%7)?0:20+((x*3+y)%24));
+      for(int x=249;x<273;++x)ScWorldPutCell(&world,x,249,0x32);
+      for(int y=250;y<273;++y)ScWorldPutCell(&world,249,y,0x52);
+      for(int y=252;y<265;++y)ScWorldPutCell(&world,255,y,0x62);
+      ScWorldPutCell(&world,258,258,1);ScWorldPutCell(&world,264,261,0x80);
+      assert(ScConstructionPlanWorld(&plan,&world,tool,250,250,271,271));
+      putenv(reference?"SC_CONSTRUCTION_REFERENCE=1":"SC_CONSTRUCTION_REFERENCE=0");
+      assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
+      if(!reference) {reference_cost=cost;memcpy(before,ram,sizeof ram);world_before=world;}
+      else assert(cost==reference_cost && !memcmp(ram,before,sizeof ram) && !memcmp(&world,&world_before,sizeof world));
+    }
+  }
+  puts("PASS: bulk R/C/I trees, wire removal, blocked sites and neighbouring transport match original ROM");
+  putenv("SC_CONSTRUCTION_REFERENCE=0");
+  /* Restore the completed free-zone fixture for cancellation/cheat tests. */
+  reset(20000);ram[0x425]=2;ScWorldReset(&world);world.active=world.huge=world.giant=world.colossal=world.mega=true;
+  assert(ScConstructionPlanWorld(&plan,&world,5,255,255,552,552));
+  assert(ScConstructionCommitWorld(ram,&world,rom,sizeof rom,&plan,&cost)==SC_BUILD_OK);
+  world_before=world;memcpy(before,ram,sizeof ram);
   job=ScConstructionBegin(ram,&world,rom,sizeof rom,&plan);assert(job);
   assert(!ScConstructionStep(job,37));ScConstructionFree(job);
   assert(!memcmp(ram,before,sizeof ram) && !memcmp(&world,&world_before,sizeof world));

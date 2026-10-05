@@ -30,6 +30,25 @@ static void free_camera_test(void) {
     ScRendererPan(r,100000,100000);
     assert(r->scroll_x==28224 && r->scroll_y==24026);
     assert(r->map_zoom==.25 && r->native_scroll_x==2400 && r->native_scroll_y==2400);
+    /* Ctrl-wheel keeps the world at the screen center stationary, including
+     * very distant zooms, overscan and a fractional camera. */
+    for(unsigned layout=0;layout<2;++layout) {
+        r->view=(ScViewport){730,492,layout?237:0,layout?134:0,1,0};
+        ScRendererResetCamera(r);r->map_zoom=.25;ScRendererPan(r,.125,.375);
+        double start_x=r->camera_x,start_y=r->camera_y;
+        double cx=365-r->view.core_x-56,cy=246-r->view.core_y-46;
+        double center_x=r->scroll_x-lround(r->camera_x)+r->camera_x+cx*4;
+        double center_y=r->scroll_y-lround(r->camera_y)+r->camera_y+cy*4;
+        const double z[]={.015625,1.3,4,.25};
+        for(unsigned i=0;i<4;++i) {
+            ScRendererZoom(r,z[i]);
+            double inverse=floor(65536/z[i]+.5)/65536;
+            assert(fabs(r->scroll_x+cx*inverse-center_x)<.51);
+            assert(fabs(r->scroll_y+cy*inverse-center_y)<.51);
+            assert(r->native_scroll_x==2400 && r->native_scroll_y==2400);
+        }
+        assert(fabs(r->camera_x-start_x)<1e-7 && fabs(r->camera_y-start_y)<1e-7);
+    }
     /* At every zoom, the far-right/bottom map edge can move a full 64
      * canvas pixels inside the viewport, including centered Fit layouts. */
     const double zooms[]={1,.25,.015625,448.0/65536};
@@ -797,6 +816,15 @@ int main(void) {
     r.map_preview.frame=90;
     for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
     assert(ScRendererPixel(&r,96+49,88)==0xffff0000);
+    assert(!memcmp(before,p,sizeof *p));
+    uint32_t counter[40*16];
+    for(int y=0;y<16;++y)for(int x=0;x<40;++x)
+        counter[y*40+x]=ScRendererPixel(&r,96+192+x,152+y);
+    r.map_preview.active=0;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    for(int y=0;y<16;++y)for(int x=0;x<40;++x)
+        assert(counter[y*40+x]==ScRendererPixel(&r,96+192+x,152+y));
+    assert(counter[0]!=0xff123456); /* five columns before preview is ready */
     assert(!memcmp(before,p,sizeof *p));
     /* Scenario mouse hand spans wide margins without moving native pins.
      * The guest keeps its original card selection and all OAM bytes. */

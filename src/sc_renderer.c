@@ -1185,6 +1185,19 @@ void ScRendererResetCamera(ScRenderer *r) {
     r->scroll_x-=(int)lround(r->camera_x);r->scroll_y-=(int)lround(r->camera_y);
     r->camera_x=r->camera_y=0;r->object_grid_valid=false;
 }
+void ScRendererZoom(ScRenderer *r,double zoom) {
+    if(!isfinite(zoom) || zoom<=0)return;
+    unsigned old_step=zoom_step(r);
+    int old_x=(int)lround(r->camera_x),old_y=(int)lround(r->camera_y);
+    r->map_zoom=zoom;
+    double delta=((double)old_step-zoom_step(r))/65536;
+    double x=r->view.width*.5-r->view.core_x-(r->zoom_hud?56:0);
+    double y=r->view.height*.5-r->view.core_y-(r->zoom_hud?46:0);
+    r->camera_x+=x*delta;r->camera_y+=y*delta;
+    r->scroll_x+=(int)lround(r->camera_x)-old_x;
+    r->scroll_y+=(int)lround(r->camera_y)-old_y;
+    r->object_grid_valid=false;
+}
 void ScRendererPan(ScRenderer *r,double dx,double dy) {
     if(!isfinite(dx) || !isfinite(dy) || (!dx && !dy)) return;
     double zoom=r->map_zoom>0?r->map_zoom:1;
@@ -2037,24 +2050,40 @@ uint32_t ScRendererHandPixel(const Ppu *p,int x,int y) {
     return ci?color(p,ci):0;
 }
 static void map_number_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
-    if(!r->map_preview.active || (u16(ram,0x14)!=5 && u16(ram,0x14)!=6) ||
-       y<140 || y>=192 || !(p->screenEnabled[0]&2))return;
+    unsigned mode=u16(ram,0x14);
+    bool opening=mode==4 && (bg_word(p,1,200,152)&1023)==0x58 &&
+        (bg_word(p,1,184,160)&1023)==0x55;
+    if((mode!=5 && mode!=6 && !opening) ||
+       y<136 || y>=192 || !(p->screenEnabled[0]&2))return;
     uint32_t *row=r->pixels+(size_t)(y+r->view.core_y)*r->view.width;
-    uint32_t paper=color(p,bg_sample(p,1,176,136,NULL)),black=color(p,0);
-    if(y<174)for(int x=176;x<240;++x)row[r->view.core_x+x]=paper;
+    uint32_t paper=color(p,bg_sample(p,1,176,136,NULL));
+    if(y<174)for(int x=176;x<232;++x)row[r->view.core_x+x]=paper;
+    /* Reuse the native No. label and beveled counter cells, with two extra
+     * columns. This layout is visible during generation too, not just after
+     * the host preview is ready. */
+    if(y>=152 && y<168) {
+        for(int x=176;x<192;++x)
+            row[r->view.core_x+x]=color(p,bg_sample(p,1,x+8,y+1,NULL));
+        for(int x=SC_MAP_NUMBER_X;x<SC_MAP_NUMBER_X+SC_MAP_NUMBER_WIDTH;++x)
+            row[r->view.core_x+x]=color(p,bg_sample(p,1,200+(x&7),y+1,NULL));
+    }
     /* Native 8x8 digit graphics, fixed UI scale; five editable places fit
      * between the preview frame and the right side of the original panel. */
     if(y>=156 && y<164)for(unsigned i=0,place=10000;i<5;++i,place/=10)
         for(int x=0;x<8;++x) {
             unsigned ink=sprite_word_pixel(p,0x940+r->map_number/place%10,8,x,y-156);
-            row[r->view.core_x+184+i*8+x]=ink?color(p,ink):black;
+            if(ink)row[r->view.core_x+SC_MAP_NUMBER_X+i*8+x]=color(p,ink);
         }
-    if(y>=140 && y<148)for(unsigned i=0;i<7;++i)for(int x=0;x<8;++x) {
-        bool ink=i==1?(y==144 && x>=2 && x<=5):
-            sprite_word_pixel(p,0x940+(i?9:0),8,x,y-140)!=0;
-        if(ink)row[r->view.core_x+180+i*8+x]=black;
+    /* The original range uses its compact BG lettering, not the white OBJ
+     * counter digits. Copy its zero, tilde and nine glyphs without scaling. */
+    if(y>=144 && y<152) {
+        for(int x=0;x<5;++x)row[r->view.core_x+184+x]=color(p,bg_sample(p,1,192+x,y+1,NULL));
+        for(int x=0;x<8;++x)row[r->view.core_x+192+x]=color(p,bg_sample(p,1,208+x,y+1,NULL));
+        for(int i=0;i<5;++i)for(int x=0;x<5;++x)
+            row[r->view.core_x+203+i*5+x]=color(p,bg_sample(p,1,216+x,y+1,NULL));
     }
-    if(y>=176)for(int x=184;x<224;++x)
+    if(y>=176)for(int x=176;x<232;++x)row[r->view.core_x+x]=paper;
+    if(y>=176)for(int x=SC_MAP_NUMBER_X;x<SC_MAP_NUMBER_X+SC_MAP_NUMBER_WIDTH;++x)
         row[r->view.core_x+x]=color(p,bg_sample(p,1,216+(x&7),y+1,NULL));
     for(int slot=0;slot<=127;slot+=127) {
         if(p->oam[slot*2+1]!=0x3f9e)continue;

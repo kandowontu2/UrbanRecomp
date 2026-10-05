@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* Keep failures in the test log instead of a Windows CRT assertion dialog. */
+#undef assert
+#define assert(condition) do {if(!(condition)) {fprintf(stderr,"FAIL %s:%d: %s\n",__FILE__,__LINE__,#condition);fflush(stderr);exit(1);}} while(0)
 
 static uint64_t hash(const uint16_t *map,unsigned cells) {
     uint64_t h=UINT64_C(14695981039346656037);
@@ -91,6 +94,7 @@ static int compare_keys(const void *a,const void *b) {
     uint32_t x=*(const uint32_t *)a,y=*(const uint32_t *)b;return (x>y)-(x<y);
 }
 int main(void) {
+    setvbuf(stdout,NULL,_IONBF,0);
     uint32_t *keys=malloc(100000*sizeof *keys);assert(keys);
     for(unsigned n=0;n<100000;++n)keys[n]=sc_mapgen_number_key(n);
     qsort(keys,100000,sizeof *keys,compare_keys);
@@ -213,6 +217,24 @@ int main(void) {
         sc_mapgen_generate_numbered(&g->state,0,numbers[i]);sc_mapgen_generate_numbered(again,0,numbers[i]);
         assert(!memcmp(g->state.map,again->map,12000*2));
         uint64_t current=hash(g->state.map,12000);assert(current!=last);last=current;
+    }
+    /* Each opt-in style remains deterministic and valid at every selectable
+     * size; the default's cartridge fingerprints above are unchanged. */
+    for(unsigned size=0;size<6;++size)for(unsigned style=1;style<SC_TERRAIN_STYLES;++style) {
+        ScMapGenPrng p={0x1234,0xabcd,0},q=p;
+        sc_mapgen_generate_style(&p,&g->state,size,style);
+        sc_mapgen_generate_style(&q,again,size,style);
+        unsigned cells=g->state.width*g->state.height,land=0,water=0,shore=0;
+        assert(g->state.width==(120u<<size) && g->state.height==(100u<<size));
+        assert(!memcmp(g->state.map,again->map,cells*2) && !memcmp(&p,&q,sizeof p));
+        for(unsigned i=0;i<cells;++i) {
+            unsigned tile=g->state.map[i];assert(tile<=0x25);
+            land+=!tile || tile>=20;water+=tile>0 && tile<20;shore+=tile>=4 && tile<20;
+        }
+        assert(land && water && shore && g->before==g->after);
+        sc_mapgen_apply_number(&g->state,31337);
+        for(unsigned i=0;i<cells;++i)assert(!g->state.map[i] || g->state.map[i]>=20);
+        printf("PASS: style %u size %u, %u land, %u water, %u shore cells\n",style,size,land,water,shore);
     }
     /* A narrow river between the old point samples remains visible in both
      * the native overview and the sharper display-sized preview. */

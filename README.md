@@ -68,6 +68,15 @@ left to investigate, with the evidence already gathered for each.
 
 ## How it runs
 
+The current local build also offers F12 LAND GENERATION styles: Native,
+Procedural (the earlier generator), Islands, Lakes, Rivers and Fractal.
+Native remains the default; the choice applies to newly generated maps.
+Five-digit map-number editing waits until the mouse leaves the arrow area
+before regenerating. Ctrl+wheel zooms around the view's center, and fused
+native construction loops accelerate large successful rectangle fills.
+Setup-menu lettering changes together with its sprite list to avoid flashes
+of mismatched text between pages.
+
 Enhanced Windows releases run compatible ROM-generated C alongside connected
 native C simulation routines over snesrecomp's PPU, APU, DMA and cartridge
 device models. The host retains original H/V clocks, interrupts and bus order;

@@ -27,6 +27,7 @@ static void write_bus(void *ctx,uint32_t a,uint8_t v) {
     if(bank==0x7e || bank==0x7f) ram[a-0x7e0000]=v;else if(p<0x2000) ram[p]=v;
 }
 static void menu_test(void) {
+    uint16_t visible[256];memset(visible,0xff,sizeof visible);
     ScJourneyMenuInit(rom,sizeof rom);
     for(unsigned i=0;i<0x8000;++i) vram[i]=(uint16_t)(i*197+57);
     memcpy(font,vram,sizeof font);ScJourneyMenuFont(vram);
@@ -58,6 +59,8 @@ static void menu_test(void) {
         }
         /* Longest line is 136px: centered at x128, with its final Y at188. */
         assert(ram[0x2000+4*11]==60 && ram[0x2000+4*19]==188);
+        memcpy(visible+58,ram+0x2000,27*4);
+        assert(ScJourneyMenuPresent(vram,visible,saved!=0));
         interp816_free(c);
     }
     /* Dispatch changes the screen first; the native menu emitter then runs
@@ -69,6 +72,11 @@ static void menu_test(void) {
         assert(!ScJourneyMenuRead(0x03d34c,fades[i],&value));
     }
     ScMapSizeMenuSet(true);assert(ScMapSizeMenuActive());
+    /* The next page's font must not replace the old displayed list during
+     * the frame between its assembly in WRAM and the native OAM upload. */
+    memcpy(font,vram,sizeof font);
+    assert(!ScJourneyMenuPresent(vram,visible,true));
+    assert(!memcmp(font,vram,sizeof font));
     for(unsigned i=0;i<0x8000;++i) vram[i]=(uint16_t)(i*197+57);
     memcpy(font,vram,sizeof font);ScJourneyMenuFont(vram);
     /* MAP SIZE uses four sprites; the next pair is the native tall 1 and 2. */
@@ -87,7 +95,12 @@ static void menu_test(void) {
     uint8_t wrap;assert(ScJourneyMenuRead(0x03d34c,3,&wrap) && wrap==7);
     assert(ScJourneyMenuRead(0x03d359,3,&wrap) && wrap==6);
     assert(ScJourneyMenuY(false,6)==199);
+    memcpy(visible+58,ram+0x2000,30*4);
+    assert(ScJourneyMenuPresent(vram,visible,false));
     interp816_free(c);ScDevelopmentMenuSet(true);
+    memcpy(font,vram,sizeof font);
+    assert(!ScJourneyMenuPresent(vram,visible,false));
+    assert(!memcmp(font,vram,sizeof font));
     assert(!ScMapSizeMenuActive() && ScDevelopmentMenuActive());
     assert(ScJourneyMenuRead(0x03d34c,3,&wrap) && wrap==7);
     assert(ScJourneyMenuRead(0x03d359,3,&wrap) && wrap==6);
@@ -102,6 +115,11 @@ static void menu_test(void) {
     for(unsigned row=1;row<=6;++row) for(unsigned j=0;j<(row<=3?1:2);++j,++sprite)
         assert(ram[0x2001+4*sprite]==ScJourneyMenuY(false,row));
     assert(ScJourneyMenuY(false,6)==199);
+    memcpy(visible+58,ram+0x2000,18*4);
+    assert(ScJourneyMenuPresent(vram,visible,false));
+    visible[58]^=1;memcpy(font,vram,sizeof font);
+    assert(!ScJourneyMenuPresent(vram,visible,false));
+    assert(!memcmp(font,vram,sizeof font));
     interp816_free(c);ScMapSizeMenuSet(false);assert(!ScDevelopmentMenuActive());
 
 }

@@ -72,6 +72,9 @@ bool ScMouseUiBudgetLive(const uint8_t *r) {
   return (mode==0 || mode==0x8000) && word(r,0x3e) &&
       word(r,0x1fb)==2 && r[0xe3]==1 && r[0xc3]==1 && !r[0x391];
 }
+bool ScMouseUiMapNumberArrows(int x,int y) {
+  return box(x,y,SC_MAP_NUMBER_X,SC_MAP_NUMBER_Y,SC_MAP_NUMBER_WIDTH,SC_MAP_NUMBER_HEIGHT);
+}
 ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
                               bool select, bool ninth) {
   ScMouseUiResult result = {true, false};
@@ -119,8 +122,8 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
     if (box(x, y, 192, 88, 32, 16)) choice = 0;
     if (box(x, y, 192, 112, 32, 16)) choice = 1;
     for (int digit = 0; digit < 5; ++digit) {
-      if (box(x, y, 216 - digit * 8, 176, 8, 8)) choice = 2 + digit * 2;
-      if (box(x, y, 216 - digit * 8, 184, 8, 8)) choice = 3 + digit * 2;
+      if (box(x, y, SC_MAP_NUMBER_X+32-digit*8, SC_MAP_NUMBER_Y, 8, 8)) choice = 2 + digit * 2;
+      if (box(x, y, SC_MAP_NUMBER_X+32-digit*8, SC_MAP_NUMBER_Y+8, 8, 8)) choice = 3 + digit * 2;
     }
     if (choice >= 0) {
       result.hit = true;

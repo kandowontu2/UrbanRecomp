@@ -1560,6 +1560,334 @@ void sc_mapgen_generate_geographic(ScMapGenPrng *p,ScMapGenState *st,unsigned si
     sc_mapgen_feature_scatter(p,st);
 }
 
+/* Alternate procedural terrain retained from Enhanced Beta 16. */
+static uint32_t geo_next(uint32_t *s) { *s+=0x9e3779b9u;return geo_hash(*s); }
+static int geo_lerp(int a,int b,unsigned t) {
+    return a+(int)(((int64_t)(b-a)*t)/65536);
+}
+static unsigned geo_smooth(unsigned t) {
+    return (unsigned)(((uint64_t)t*t*(196608u-2*t))>>32);
+}
+static unsigned geo_noise(unsigned x,unsigned y,unsigned frequency,uint32_t seed) {
+    unsigned ax=x*frequency,ay=y*frequency,ix=ax>>16,iy=ay>>16;
+    unsigned tx=geo_smooth(ax&65535),ty=geo_smooth(ay&65535);
+    int a=geo_hash(seed+ix*374761393u+iy*668265263u)>>16;
+    int b=geo_hash(seed+(ix+1)*374761393u+iy*668265263u)>>16;
+    int c=geo_hash(seed+ix*374761393u+(iy+1)*668265263u)>>16;
+    int d=geo_hash(seed+(ix+1)*374761393u+(iy+1)*668265263u)>>16;
+    return geo_lerp(geo_lerp(a,b,tx),geo_lerp(c,d,tx),ty);
+}
+static int geo_profile(const int *a,unsigned v) {
+    unsigned index=v*8>>16,t=geo_smooth((v*8)&65535);
+    return geo_lerp(a[index],a[index+1],t);
+}
+/* Expanded maps add watersheds at cartridge tile scale. Coordinates here
+ * are world cells, never fractions of the complete map: adding land cannot
+ * enlarge river widths, lake diameters or forest patches. */
+static bool geo_fixed_water(unsigned x,unsigned y,unsigned width,unsigned height,
+                            unsigned style,bool vertical,bool coast_side,
+                            uint32_t seed,unsigned rough) {
+    unsigned major=vertical?y:x,minor=vertical?x:y;
+    bool water=false;
+    if(style==1 || style==3) {
+        unsigned extent=vertical?width:height;
+        unsigned edge=coast_side?extent-1-minor:minor;
+        unsigned coast=8+geo_noise((uint64_t)major*65536/96,0,1,seed^0x54321u)*12/65536;
+        water|=edge<coast;
+    }
+    if(style==2) {
+        unsigned ex=x<width/2?x:width-1-x,ey=y<height/2?y:height-1-y;
+        water|=ex<4+rough/6554 || ey<4+rough/6554;
+    }
+    /* Independently seeded small lakes, rather than one map-sized ellipse. */
+    uint32_t lake=geo_hash(seed+(x/64)*374761393u+(y/64)*668265263u);
+    if(!water && (lake&1)) {
+        int cx=16+(lake>>1)%32,cy=16+(lake>>6)%32;
+        int rx=4+(lake>>11)%7,ry=4+(lake>>15)%6;
+        int dx=(int)(x%64)-cx,dy=(int)(y%64)-cy;
+        if(abs(dx)<=rx+1 && abs(dy)<=ry+1) {
+            int64_t ellipse=(int64_t)dx*dx*ry*ry+(int64_t)dy*dy*rx*rx;
+            water=ellipse*65536<(int64_t)rx*rx*ry*ry*(48000+rough/2);
+        }
+    }
+    return water;
+}
+static void geo_disc(uint8_t *classes,unsigned width,unsigned height,int x,int y,int radius) {
+    for(int dy=-radius;dy<=radius;++dy)for(int dx=-radius;dx<=radius;++dx) {
+        int px=x+dx,py=y+dy;
+        if(dx*dx+dy*dy<=radius*radius && px>=0 && py>=0 && px<(int)width && py<(int)height)
+            classes[py*width+px]=1;
+    }
+}
+/* Curved reaches use native-sized round brushes. Independent headings,
+ * bends and lengths replace the old equally spaced, parallel river bands. */
+static void geo_reach(uint8_t *classes,unsigned width,unsigned height,
+                      int ax,int ay,int bx,int by,uint32_t seed,int radius) {
+    int dx=bx-ax,dy=by-ay,length=abs(dx)+abs(dy);
+    if(!length)return;
+    int bend_limit=length/2;if(bend_limit>140)bend_limit=140;
+    int bend1=(int)(geo_hash(seed)%(2*bend_limit+1))-bend_limit;
+    int bend2=(int)(geo_hash(seed+1)%(2*bend_limit+1))-bend_limit;
+    int cx=ax+dx/3-dy*bend1/length,cy=ay+dy/3+dx*bend1/length;
+    int ex=ax+2*dx/3-dy*bend2/length,ey=ay+2*dy/3+dx*bend2/length;
+    for(int i=0;i<=length*2;++i) {
+        double t=(double)i/(length*2),u=1-t;
+        int x=(int)(u*u*u*ax+3*u*u*t*cx+3*u*t*t*ex+t*t*t*bx+.5);
+        int y=(int)(u*u*u*ay+3*u*u*t*cy+3*u*t*t*ey+t*t*t*by+.5);
+        geo_disc(classes,width,height,x,y,radius);
+    }
+}
+static void geo_rivers(uint8_t *classes,unsigned width,unsigned height,uint32_t seed,bool vertical) {
+    /* One connected crossing supplies a dependable river for every seed. */
+    unsigned extent=vertical?height:width;
+    int previous=60;
+    for(unsigned major=0;major<=extent+32;major+=32) {
+        int center=60+((int)geo_noise((uint64_t)major*65536/96,0,1,seed^0x193a5u)-32768)*80/65536;
+        if(major)geo_reach(classes,width,height,vertical?previous:(int)major-32,
+            vertical?(int)major-32:previous,vertical?center:(int)major,
+            vertical?(int)major:center,geo_hash(seed+major),4);
+        previous=center;
+    }
+    for(unsigned gy=0;gy<(height+179)/180;++gy)for(unsigned gx=0;gx<(width+199)/200;++gx) {
+        uint32_t rng=geo_hash(seed^gx*374761393u^gy*668265263u);
+        unsigned count=1+geo_next(&rng)%3;
+        for(unsigned k=0;k<count;++k) {
+            int ax=gx*200+geo_next(&rng)%200,ay=gy*180+geo_next(&rng)%180;
+            int dx=(int)(geo_next(&rng)%281)-140,dy=(int)(geo_next(&rng)%281)-140;
+            if(abs(dx)+abs(dy)<90)dy+=dy<0?-90:90;
+            int bx=ax+dx,by=ay+dy;
+            uint32_t reach=geo_next(&rng);int radius=3+geo_next(&rng)%3;
+            geo_reach(classes,width,height,ax,ay,bx,by,reach,radius);
+            if(reach&1)geo_disc(classes,width,height,ax,ay,6+(reach>>8)%5);
+            /* Short tributaries meet this reach, rather than running as a
+             * second parallel line for the whole length of the map. */
+            int length=abs(dx)+abs(dy);
+            if(reach&2)geo_reach(classes,width,height,ax,ay,ax-dy*70/length,
+                ay+dx*70/length,reach^0x58d3u,3);
+        }
+    }
+}
+/* Native-sized island groups sit in irregular bays/lakes, rather than making
+ * the complete enlarged map one giant island with a thin perimeter moat. */
+static void geo_islands(uint8_t *classes,unsigned width,unsigned height,uint32_t seed,unsigned style) {
+    for(unsigned gy=0;gy<(height+159)/160;++gy)for(unsigned gx=0;gx<(width+179)/180;++gx) {
+        uint32_t rng=geo_hash(seed^0xa7c913u^gx*374761393u^gy*668265263u);
+        if(geo_next(&rng)%(style==2?2:7))continue;
+        int cx=gx*180+50+geo_next(&rng)%80,cy=gy*160+45+geo_next(&rng)%70;
+        int rx=25+geo_next(&rng)%16,ry=22+geo_next(&rng)%14;
+        if(width==120) {cx=88;cy=50;rx=25;ry=29;}
+        for(int dy=-ry-4;dy<=ry+4;++dy)for(int dx=-rx-4;dx<=rx+4;++dx) {
+            int x=cx+dx,y=cy+dy;if(x<0 || y<0 || x>=(int)width || y>=(int)height)continue;
+            unsigned rough=geo_noise((unsigned)(x+64)*2048,(unsigned)(y+64)*2048,1,rng);
+            if(((int64_t)dx*dx*ry*ry+(int64_t)dy*dy*rx*rx)*65536<
+               (int64_t)rx*rx*ry*ry*(54000+rough/3))classes[y*width+x]=1;
+        }
+        unsigned count=2+geo_next(&rng)%4;
+        for(unsigned k=0;k<count;++k) {
+            int ix=cx+(int)(geo_next(&rng)%(rx+1))-rx/2;
+            int iy=cy+(int)(geo_next(&rng)%(ry+1))-ry/2;
+            int radius=3+geo_next(&rng)%6;
+            for(int dy=-radius;dy<=radius;++dy)for(int dx=-radius;dx<=radius;++dx) {
+                int x=ix+dx,y=iy+dy;
+                if(x<1 || y<1 || x+1>=(int)width || y+1>=(int)height)continue;
+                if(dx*dx+dy*dy<=radius*radius)classes[y*width+x]=(geo_hash(rng+x/4+y/4*374761393u)&3)?0:2;
+            }
+        }
+    }
+}
+static void generate_geographic_seed(ScMapGenState *st,unsigned size,uint32_t seed) {
+    if(size>5)size=0;
+    unsigned width=120u<<size,height=100u<<size,cells=width*height;
+    st->width=width;st->height=height;
+    memset(st->map,0,sizeof st->map);
+    uint32_t rng=seed;
+    unsigned style=geo_next(&rng)%4,vertical=geo_next(&rng)&1,coast_side=geo_next(&rng)&1;
+    int river[9],branch[9],coast[9];
+    int center=21000+geo_next(&rng)%23000;
+    for(unsigned i=0;i<9;++i) {
+        river[i]=center+(int)(geo_next(&rng)%18000)-9000;
+        branch[i]=8000+(int)(geo_next(&rng)%7000)+i*4500;
+        coast[i]=7000+(int)(geo_next(&rng)%6000);
+    }
+    unsigned radius=1700+geo_next(&rng)%1600,join=26000+geo_next(&rng)%17000;
+    struct { int x,y,rx,ry; } lakes[4];
+    unsigned lake_count=1+geo_next(&rng)%4;
+    for(unsigned i=0;i<lake_count;++i) {
+        lakes[i].x=7000+geo_next(&rng)%51500;lakes[i].y=7000+geo_next(&rng)%51500;
+        lakes[i].rx=2600+geo_next(&rng)%3800;lakes[i].ry=2200+geo_next(&rng)%3700;
+    }
+    unsigned forest_threshold=36000+geo_next(&rng)%8000;
+    uint8_t *classes=malloc(cells);
+    /* Allocation failure still produces a playable connected river. */
+    for(unsigned y=0;y<height;++y) {
+        unsigned ny=(uint64_t)y*65535/(size?99:height-1);
+        for(unsigned x=0;x<width;++x) {
+            unsigned nx=(uint64_t)x*65535/(size?119:width-1);
+            unsigned rough=geo_noise(nx,ny,24,seed^0xabcdefu);
+            bool water;
+            if(size) water=geo_fixed_water(x,y,width,height,style,vertical,coast_side,seed,rough);
+            else {
+            unsigned major=vertical?ny:nx,minor=vertical?nx:ny;
+            int river_center=geo_profile(river,major);
+            int river_width=radius+(int)rough/40;
+            water=abs((int)minor-river_center)<river_width;
+            /* A tributary runs from an edge into the primary channel. Its
+             * interpolated endpoint overlaps the trunk, without isolated dots. */
+            if(major<=join) {
+                unsigned t=(uint64_t)major*65535/join;
+                int tributary=geo_lerp(geo_profile(branch,major),geo_profile(river,join),t);
+                water|=abs((int)minor-tributary)<(int)(radius*2/3+rough/80);
+            }
+            if(style==1 || style==3) {
+                int edge=coast_side?65535-(int)minor:(int)minor;
+                water|=edge<geo_profile(coast,major)+(int)rough/32;
+            }
+            if(style==2) {
+                /* An island with irregular coasts and a through river. */
+                int edge_x=nx<32768?nx:65535-nx,edge_y=ny<32768?ny:65535-ny;
+                water|=edge_x<3700+(int)rough/22 || edge_y<3700+(int)rough/22;
+            }
+            for(unsigned i=0;i<lake_count && !water;++i) {
+                int64_t dx=(int)nx-lakes[i].x,dy=(int)ny-lakes[i].y;
+                water=(dx*dx*65536/(lakes[i].rx*lakes[i].rx)+
+                       dy*dy*65536/(lakes[i].ry*lakes[i].ry))<48000+rough/2;
+            }
+            }
+            unsigned type=0;
+            if(water)type=1;
+            else {
+                unsigned forest=(geo_noise(nx,ny,7,seed^0x7654321u)*3+
+                    geo_noise(nx,ny,29,seed^0x1234567u))/4;
+                if(forest>forest_threshold)type=2;
+            }
+            unsigned at=y*width+x;
+            st->map[at]=type==1?1:type==2?0x18:0;
+            if(classes)classes[at]=type;
+        }
+    }
+    if(classes) {
+        geo_islands(classes,width,height,seed,style);
+        if(size)geo_rivers(classes,width,height,seed,vertical);
+        /* A one-cell water spur cannot be represented by the cartridge's
+         * shoreline tiles (opposite/three land edges map to open water).
+         * Prune these nubs before fitting the coast, using a stable snapshot. */
+        for(;;) {
+            unsigned changed=0;
+            for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
+                unsigned at=y*width+x;st->map[at]=classes[at];
+                if(classes[at]!=1 || !x || !y || x+1==width || y+1==height)continue;
+                unsigned mask=(classes[at-1]!=1)|((classes[at+width]!=1)<<1)|
+                    ((classes[at+1]!=1)<<2)|((classes[at-width]!=1)<<3);
+                if(mask==5 || mask==10 || mask==7 || mask==11 || mask==13 || mask==14 || mask==15) {
+                    st->map[at]=0;++changed;
+                }
+            }
+            for(unsigned at=0;at<cells;++at)classes[at]=(uint8_t)st->map[at];
+            if(!changed)break;
+        }
+        static const uint8_t shore[16]={1,7,10,9,8,1,11,1,5,4,1,1,6,1,1,1};
+        static const uint8_t trees[16]={0,0,0,0x16,0,0,0x14,0x15,0,0x1c,0,0x19,0x1a,0x1b,0x17,0x18};
+        const int dx[4]={-1,0,1,0},dy[4]={0,1,0,-1};
+        for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
+            unsigned at=y*width+x,type=classes[at],mask=0;
+            if(!type)continue;
+            for(int d=3;d>=0;--d) {
+                int px=x+dx[d],py=y+dy[d];
+                unsigned other=px>=0 && py>=0 && px<(int)width && py<(int)height?classes[py*width+px]:0;
+                mask=(mask<<1)|(type==1?other!=1:other==2);
+            }
+            unsigned tile=type==1?shore[mask]:trees[mask];
+            unsigned variant=geo_hash(seed^at)&1;
+            if(type==1 && tile!=1)tile+=variant*8;
+            if(type==2 && tile)tile+=variant*9;
+            st->map[at]=tile;
+        }
+        free(classes);
+    }
+    g_sc_mapgen_cur=st;
+}
+void sc_mapgen_generate_alternate(ScMapGenPrng *p,ScMapGenState *st,unsigned size) {
+    uint32_t seed=(uint32_t)sc_mapgen_prng_step(p)<<16;
+    seed|=sc_mapgen_prng_step(p);generate_geographic_seed(st,size,seed);
+}
+/* New styles compose terrain in cell space. Their characteristic feature
+ * widths stay fixed as the world grows; only the number of features grows. */
+static void style_water_edges(ScMapGenState *st) {
+    unsigned w=map_width(st),h=map_height(st);
+    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
+        unsigned i=y*w+x;if(st->map[i]!=1)continue;
+        if((x && !st->map[i-1]) || (x+1<w && !st->map[i+1]) ||
+           (y && !st->map[i-w]) || (y+1<h && !st->map[i+w]))st->map[i]=3;
+    }
+}
+void sc_mapgen_generate_style(ScMapGenPrng *p,ScMapGenState *st,unsigned size,unsigned style) {
+    if(style==SC_TERRAIN_PROCEDURAL) {sc_mapgen_generate_alternate(p,st,size);return;}
+    if(style<SC_TERRAIN_ISLANDS || style>=SC_TERRAIN_STYLES) {
+        sc_mapgen_generate_geographic(p,st,size);return;
+    }
+    if(size>5)size=5;
+    st->width=120u<<size;st->height=100u<<size;
+    unsigned w=st->width,h=st->height,cells=w*h;
+    memset(st->map,0,sizeof st->map);g_sc_mapgen_cur=st;
+    if(style==SC_TERRAIN_ISLANDS) {
+        for(unsigned i=0;i<cells;++i)st->map[i]=1;
+        unsigned islands=cells/1200+1;
+        for(unsigned i=0;i<islands;++i) {
+            int cx=12+native_coordinate(p,st,w-25),cy=12+native_coordinate(p,st,h-25);
+            int radius=7+sc_mapgen_rand_below(p,9);
+            uint32_t seed=((uint32_t)sc_mapgen_prng_step(p)<<16)|sc_mapgen_prng_step(p);
+            /* Overlapping, jittered land discs make unequal island chains. */
+            for(unsigned lobe=0;lobe<3;++lobe) {
+                int lx=cx+(int)sc_mapgen_rand_below(p,radius*2)-radius;
+                int ly=cy+(int)sc_mapgen_rand_below(p,radius*2)-radius;
+                int r=radius-(int)lobe*2;
+                for(int dy=-r;dy<=r;++dy)for(int dx=-r;dx<=r;++dx)
+                    if(map_bounds(st,lx+dx,ly+dy) &&
+                       dx*dx+dy*dy<=r*r+(int)(geo_hash(seed+(dx+r)/3+(dy+r)/3*31337)%13))
+                        sc_mapgen_write_cell(st,lx+dx,ly+dy,0);
+            }
+        }
+        style_water_edges(st);
+    } else if(style==SC_TERRAIN_LAKES) {
+        sc_mapgen_feature_clusters(p,st);sc_mapgen_feature_clusters(p,st);
+    } else if(style==SC_TERRAIN_RIVERS) {
+        unsigned rivers=2u<<size;
+        for(unsigned i=0;i<rivers;++i) {
+            if(!i)sc_mapgen_feature_centre(p,st);
+            else {
+                st->x0=st->cur_x=native_coordinate(p,st,w-9);
+                st->y0=st->cur_y=native_coordinate(p,st,h-9);
+            }
+            sc_mapgen_feature_path(p,st);
+        }
+    } else {
+        /* Fractional Brownian terrain: four noise octaves produce nested
+         * bays, peninsulas and islands. Samples use world-cell distances. */
+        uint32_t seed=((uint32_t)sc_mapgen_prng_step(p)<<16)|sc_mapgen_prng_step(p);
+        unsigned level=29000+sc_mapgen_rand_below(p,6000);
+        for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
+            unsigned nx=(uint64_t)x*65536/96,ny=(uint64_t)y*65536/96;
+            unsigned height=(geo_noise(nx,ny,1,seed)*8+geo_noise(nx,ny,2,seed^0x51c17u)*4+
+                geo_noise(nx,ny,4,seed^0xbadbeefu)*2+geo_noise(nx,ny,8,seed^0x7654321u))/15;
+            st->map[y*w+x]=height<level?1:0;
+        }
+        /* A few-cell smoothing removes single-cell flecks the shoreline
+         * tiles cannot represent, without enlarging landforms with the map. */
+        uint8_t *water=malloc(cells);
+        if(water) {
+            for(unsigned i=0;i<cells;++i)water[i]=(uint8_t)st->map[i];
+            for(unsigned y=1;y+1<h;++y)for(unsigned x=1;x+1<w;++x) {
+                unsigned n=0;
+                for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)n+=water[(y+dy)*w+x+dx];
+                st->map[y*w+x]=n>=5?1:0;
+            }
+            free(water);
+        }
+        style_water_edges(st);
+    }
+    sc_mapgen_shoreline(p,st);sc_mapgen_feature_scatter(p,st);
+}
+
 uint32_t sc_mapgen_number_key(unsigned number) {return geo_hash((number%100000)^0x51c17a9u);}
 unsigned sc_mapgen_number_digit(unsigned number,unsigned digit,int direction) {
     static const unsigned place[]={1,10,100,1000,10000};number%=100000;

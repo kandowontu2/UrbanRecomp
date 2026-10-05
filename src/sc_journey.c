@@ -62,6 +62,7 @@ unsigned ScJourneyExpand(ScWorld *w,uint8_t *r,uint64_t population) {
 enum {MENU_ADDRESS=0xfb4c,MENU_POINTER=0xa182,MENU_SPRITES=32,
       SETUP_TITLE_Y=90,SETUP_OPTION_Y=114,SETUP_SPACING=17};
 static uint8_t menu[140],pairs[MENU_SPRITES][2];
+static uint8_t positions[MENU_SPRITES][2];
 static unsigned menu_size,sprite_count;
 static bool size_menu,speed_menu;
 static const uint8_t *menu_rom;
@@ -96,6 +97,9 @@ static void build_menu(void) {
             for(unsigned j=0;j<letters;j+=2) {
                 unsigned k=sprite_count++,t=tile(k),xb=(x-136)&255;
                 pairs[k][0]=(uint8_t)s[j];pairs[k][1]=(uint8_t)(j+1<letters?s[j+1]:' ');
+                positions[k][0]=(uint8_t)x;
+                positions[k][1]=(uint8_t)((speed_menu || size_menu)?
+                    (row?SETUP_OPTION_Y+SETUP_SPACING*(row-1):SETUP_TITLE_Y):112+24*row);
                 if(k%8==0) {flags_at=menu_size;menu_size+=2;flags=0;}
                 flags|=(2+(xb+136>=256))<<(2*(k%8));
                 menu[flags_at]=(uint8_t)flags;menu[flags_at+1]=(uint8_t)(flags>>8);
@@ -122,6 +126,19 @@ void ScJourneyMenuFont(uint16_t *vram) {
         memcpy(vram+dst*16,vram+src*16,32);
         memcpy(vram+(dst+16)*16,vram+(src+16)*16,32);
     }
+}
+bool ScJourneyMenuPresent(uint16_t *vram,const uint16_t *oam,bool saved) {
+    if(!vram || !oam || !sprite_count) return false;
+    unsigned dy=!size_menu && !speed_menu && saved?12:0;
+    for(unsigned first=0;first+sprite_count<=128;++first) {
+        unsigned k=0;
+        for(;k<sprite_count;++k) {
+            unsigned xy=positions[k][0]|((positions[k][1]+dy)<<8);
+            if(oam[2*(first+k)]!=xy || (oam[2*(first+k)+1]&511)!=tile(k)) break;
+        }
+        if(k==sprite_count) {ScJourneyMenuFont(vram);return true;}
+    }
+    return false;
 }
 unsigned ScSavedCityMenuY(unsigned slot) {return 132+32*slot;}
 void ScSavedCityMenuFont(uint16_t *vram,uint16_t *oam,uint8_t *high,

@@ -137,6 +137,7 @@ static bool s_measure_custom_frame;
 static double s_custom_frame_ms;
 static double s_perf_custom_ms,s_perf_native_ms;
 static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge, 3 960x800, 4 1920x1600, 5 3840x3200 */
+static int s_terrain_style;
 static bool s_journey_arming;
 static unsigned s_journey_menu_selection;
 static unsigned s_loading_slot;
@@ -146,7 +147,7 @@ static uint64_t s_preview_started;
 static unsigned s_map_number_high;
 static bool s_map_number_dirty;
 static bool s_preview_expanded,s_preview_complete,s_preview_left_down,s_preview_click_owned,s_preview_input_blocked;
-static double s_preview_anchor_x=.5,s_preview_anchor_y=.5,s_preview_cursor_x,s_preview_cursor_y;
+static double s_preview_cursor_x,s_preview_cursor_y;
 static bool s_city_present_pending,s_city_fade_started,s_city_black_seen;
 static bool s_test_revealed,s_test_load_pending,s_test_generate_pending,s_test_saving,s_test_swap;
 static bool s_test_menu_pending;
@@ -1038,6 +1039,10 @@ static void handle_pos_stuff(void) {
     bool startingVblank = false;
     if(s_rom_is_us && snes->vPos==1) {
       unsigned screen=ram_w(0x14);
+      /* COP 2 builds the next list before OAM DMA displays it. Match the
+       * live list before publishing glyphs at the first visible scanline. */
+      if(screen==2 || screen==3 || screen==18)
+        ScJourneyMenuPresent(g_ppu->vram,g_ppu->oam,ram_w(0x44)!=0);
       if(screen==2 || screen==3 || screen==17 || screen==18)
         ScJourneyMenuFrame(g_ppu->vram,PPU_bgTilemapAdr(g_ppu,2));
       ScSavedCityMenuFont(g_ppu->vram,g_ppu->oam,g_ppu->highOam,
@@ -4313,7 +4318,7 @@ static bool run_one_frame(void) {
       }
       if (!fast && !s_large_maps) {ScWorldReset(&s_world);s_world.journey=s_journey_arming;}
       unsigned number=g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000;
-      if (fast || s_large_maps || number==31337) {
+      if (fast || s_large_maps || s_terrain_style || number==31337) {
         static ScMapGenState gs;
         ScMapGenPrng pr;
         pr.s0 = (uint16_t)(g_ram[0x59] | (g_ram[0x5a] << 8));
@@ -4326,11 +4331,12 @@ static bool run_one_frame(void) {
           pr.s0^=(uint16_t)key;pr.s1^=(uint16_t)(key>>16);
         }
         if (s_large_maps && !s_journey_arming && s_rom_fnv==SC_ROM_FNV_US) {
-          ScWorldGenerateSeeded(&s_world,s_large_maps,&pr);
+          ScWorldGenerateStyled(&s_world,s_large_maps,&pr,s_terrain_style);
           ScWorldApplyMapNumber(&s_world,number);ScWorldMirror(&s_world,g_ram);
         } else {
           ScWorldReset(&s_world);
-          sc_mapgen_generate(&pr,&gs);
+          if(s_terrain_style)sc_mapgen_generate_style(&pr,&gs,0,s_terrain_style);
+          else sc_mapgen_generate(&pr,&gs);
           sc_mapgen_apply_number(&gs,number);
           s_world.journey=s_journey_arming;
         }
@@ -4486,7 +4492,6 @@ static bool run_one_frame(void) {
       /* Extend the real five-choice menu and its native hand sprite. */
       if(cpu->k==2 && cpu->pc==0xbcd6) {
         ram_set_w(0x25d,136);
-        ScJourneyMenuFont(g_ppu->vram);
         ScJourneyMenuFrame(g_ppu->vram,PPU_bgTilemapAdr(g_ppu,2));
       }
       if(cpu->k==2 && cpu->pc==0xbcfe) {
@@ -4606,7 +4611,7 @@ static bool run_one_frame(void) {
       }
       if(cpu->pc==0xd7dd && ram_w(0xb2d)>=2) {
         unsigned choice=ram_w(0xb2d);
-        ram_set_w(0x2000,220-(choice-2)/2*8+((178+(choice&1)*8)<<8));
+      ram_set_w(0x2000,SC_MAP_NUMBER_X+36-(choice-2)/2*8+((178+(choice&1)*8)<<8));
         ram_set_w(0x2002,0x3f9e);g_ram[0x2200]=2;cpu->pc=0xd7fc;
       }
     }
@@ -4910,9 +4915,7 @@ static bool run_one_frame(void) {
       if(cpu->pc==0xc63c && s_world.test_city)ram_set_w(0x38,0);
       if(cpu->pc==0xc633 && s_practice_size_pending) {
         ScMapGenPrng pr={ram_w(0x59),ram_w(0x5b),ram_w(0x5d)};
-        if(s_large_maps==5) ScWorldGenerateMega(&s_world,&pr); else if(s_large_maps==4) ScWorldGenerateColossal(&s_world,&pr); else if(s_large_maps==3) ScWorldGenerateGiant(&s_world,&pr);
-        else if(s_large_maps==2) ScWorldGenerateHuge(&s_world,&pr);
-        else if(s_large_maps==1) ScWorldGenerate(&s_world,&pr);
+        if(s_large_maps)ScWorldGenerateStyled(&s_world,s_large_maps,&pr,s_terrain_style);
         if(s_world.active) {
           ScWorldMirror(&s_world,g_ram);
           ram_set_w(0x1c5,ScWorldWidth(&s_world)-25);ram_set_w(0x1c9,ScWorldHeight(&s_world)-22);
@@ -8115,6 +8118,13 @@ static void save_large_map_setting(void) {
   fprintf(stderr,"new city map size: %s\n",s_large_maps==5?"3840x3200":s_large_maps==4?"1920x1600":s_large_maps==3?"960x800":s_large_maps==2?"480x400":s_large_maps?"240x200":"120x100");
 }
 static void menu_action_fit_screen(void) {s_fit_screen_requested=true;}
+static void save_terrain_setting(void) {
+  ScSettings settings;
+  if(ScSettingsLoad(&settings,kScSettingsPath)) {
+    settings.terrain_style=s_terrain_style;
+    if(!ScSettingsSave(&settings,kScSettingsPath))fprintf(stderr,"settings: could not save terrain style\n");
+  }
+}
 
 static void setting_adjust(SettingDesc *d,int direction) {
   switch (d->kind) {
@@ -8137,6 +8147,11 @@ static void setting_adjust(SettingDesc *d,int direction) {
     }
   }
   if (d->field==&s_large_maps) save_large_map_setting();
+  if (d->field==&s_terrain_style)save_terrain_setting();
+  if(d->field==&s_terrain_style && s_rom_is_us && ram_w(0x14)==5 &&
+      s_custom_renderer.map_preview.active) {
+    s_map_number_dirty=true;ram_set_w(0xb31,0x80);s_map_mouse_refresh_pending=true;
+  }
   if(getenv("SC_SETTINGS_DIAG") && d->field)
     fprintf(stderr,"[settings] %s value %d direction %d\n",d->label,
         d->kind==kSettingCycle?*(int *)d->field:(int)setting_get(d),direction);
@@ -8591,6 +8606,8 @@ static void menu_trigger_monster(void) { if (disaster_triggers_armed("monster"))
  * no separate plugin/registration system needed. Adding a new toggle or
  * action means adding one row here -- render_settings_menu() below never
  * needs to change. */
+static const int kTerrainStyles[]={0,1,2,3,4,5};
+static const char *const kTerrainStyleNames[]={"NATIVE","PROCEDURAL","ISLANDS","LAKES","RIVERS","FRACTAL"};
 static SettingDesc s_settings[] = {
   /* Labels are kept short enough that the longest one plus its ON/OFF
    * value still fits the menu box at the current font size -- see
@@ -8599,6 +8616,8 @@ static SettingDesc s_settings[] = {
   { "FIT TO SCREEN",         kSettingAction, NULL, 0, menu_action_fit_screen, NULL, 0 },
   { "GPU TERRAIN",           kSettingBool, &s_gpu_terrain_enabled, 0, NULL, NULL, 0 },
   { "MOUSE CURSOR",          kSettingBool, &s_mouse_enabled,       0,    NULL, NULL, 0 },
+  { "LAND GENERATION",       kSettingCycle, &s_terrain_style, 0, NULL,
+    kTerrainStyles, SC_TERRAIN_STYLES, kTerrainStyleNames },
   { "DEVELOPMENT SPEED",     kSettingCycle, &s_development_override, 0, NULL,
     kDevelopmentSpeeds, 8, kDevelopmentSpeedNames },
   { "FAST TICKS",            kSettingBool, &s_fast_ticks,          0,    NULL, NULL, 0 },
@@ -10930,6 +10949,9 @@ int main(int argc, char **argv) {
   }
   { const char *large=getenv("SC_LARGE_MAPS");
     s_large_maps=large?atoi(large):s_launch_settings.large_maps; if(s_large_maps<0 || s_large_maps>5) s_large_maps=0; }
+  {const char *style=getenv("SC_TERRAIN_STYLE");
+    s_terrain_style=style?atoi(style):s_launch_settings.terrain_style;
+    if(s_terrain_style<0 || s_terrain_style>=SC_TERRAIN_STYLES)s_terrain_style=0;}
   s_custom_renderer.world=&s_world;
   s_custom_renderer.sylt = s_ninth_scenario;   /* its pin and mark */
   if (!ScRendererResize(&s_custom_renderer,
@@ -11303,7 +11325,7 @@ int main(int argc, char **argv) {
         double amount=ev.wheel.y;
 #endif
         if(ev.wheel.direction==SDL_MOUSEWHEEL_FLIPPED)amount=-amount;
-        double x=s_preview_anchor_x,y=s_preview_anchor_y;
+        double x=.5,y=.5;
         if(isfinite(amount))sc_mapgen_preview_zoom(&s_custom_renderer.map_preview,
             pow(1.25,fmax(-32,fmin(32,amount))),x,y);
         if(getenv("SC_MAP_PREVIEW_DIAG"))fprintf(stderr,"[map preview] zoom %.4f center %.1f,%.1f\n",
@@ -11555,6 +11577,7 @@ int main(int argc, char **argv) {
       ScViewport current=s_custom_video.enabled?s_custom_renderer.view:
           ScVideoViewport(&s_custom_video,zoom_w,zoom_h);
       if(ScVideoZoom(&s_custom_video,current,zoom_w,zoom_h,zoom_factor)) {
+        ScRendererZoom(&s_custom_renderer,s_custom_video.map_zoom);
         if(s_ws_extra) {
           s_ws_extra=0;s_host_map=false;s_video_w=kVideoWidth;s_video_pitch=kVideoWidth*4;
           PpuSetExtraSpace(g_ppu,0);PpuBeginDrawing(g_ppu,s_video_pixels,(size_t)s_video_pitch,s_render_flags);
@@ -11708,8 +11731,6 @@ int main(int argc, char **argv) {
       bool preview_hit=focused && px>=preview_rect.x && px<preview_rect.x+preview_rect.w &&
           py>=preview_rect.y && py<preview_rect.y+preview_rect.h;
       s_preview_cursor_x=px;s_preview_cursor_y=py;
-      s_preview_anchor_x=preview_hit?(px-preview_rect.x)/preview_rect.w:.5;
-      s_preview_anchor_y=preview_hit?(py-preview_rect.y)/preview_rect.h:.5;
       if(!preview_live)s_preview_expanded=false;
       bool preview_left=mouse_raw_left;
       if(preview_live && preview_left && !s_preview_left_down && (preview_hit || s_preview_expanded)) {
@@ -12045,13 +12066,21 @@ int main(int argc, char **argv) {
         s_map_mouse_accept_pending = true;
     }
     {
-      static bool map_mouse_was_down;
-      /* NEXT and map-number arrows normally defer generation until the pad
-       * reaches OK. A released mouse click should rebuild the preview now,
-       * while retaining the native selection and confirmation path. */
-      if(s_rom_is_us && g_ram[0x14]==5 && g_ram[0xb31] &&
-         map_mouse_was_down && !mouse_raw_left)s_map_mouse_refresh_pending=true;
-      map_mouse_was_down=mouse_raw_left && g_ram[0x14]==5;
+      static bool map_mouse_was_down,number_mouse_editing;
+      bool map=s_rom_is_us && ram_w(0x14)==5;
+      bool arrows=map && mouse_target_valid &&
+          ScMouseUiMapNumberArrows(mouse_target_x,mouse_target_y);
+      if(arrows && mouse_raw_left)number_mouse_editing=true;
+      /* Keep editing across releases and between digit pairs. Generate once
+       * the pointer leaves their shared boundary, or OK is explicitly used. */
+      if(number_mouse_editing && !arrows) {
+        if(map && ram_w(0xb31))s_map_mouse_refresh_pending=true;
+        number_mouse_editing=false;
+      }
+      if(map && ram_w(0xb31) && ram_w(0xb2d)==0 &&
+          map_mouse_was_down && !mouse_raw_left)s_map_mouse_refresh_pending=true;
+      map_mouse_was_down=map && mouse_raw_left;
+      if(!map)number_mouse_editing=false;
     }
     if (g_ram[0x14] != 5) {
       s_map_mouse_accept_pending = false; s_map_mouse_refresh_pending = false;

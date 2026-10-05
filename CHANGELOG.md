@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Publish setup-menu glyphs at the frame boundary after their matching sprite
+  list is assembled. Main menu, map size and development speed no longer show
+  a frame combining the previous list's positions with the next page's text.
+- Add F12 LAND GENERATION choices: Native (default), the earlier Procedural
+  generator, Islands, Lakes, Rivers and Fractal. Remember the selected style
+  for newly generated terrain; preserve loaded cities and the dry-map 31337
+  exception. New styles retain fixed feature sizes across expanded maps.
+- Keep map-number edits pending across mouse clicks and digit-arrow pairs;
+  regenerate once the pointer leaves their shared boundary. NEXT and OK
+  retain their explicit refresh/confirmation behavior.
+- Display all five map digits throughout screen entry and generation, using
+  the original No. label, beveled counter cells and compact range lettering.
+- Keep Ctrl+wheel zoom centered on the view in both the city and map preview.
+- Fuse validated construction footprint writes, common R/C/I site scans and
+  neighbours requiring no transport join. Large successful rectangle fills
+  retain original costs, cheats, terrain restrictions, joins and atomic commit.
 - Use the cartridge's X button for Back on the map-size and development-speed
   pages, matching the remaining city setup screens. Escape also sends Back.
 - Let Enter and the normal confirmation control close full-screen reports and

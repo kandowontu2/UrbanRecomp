@@ -7,6 +7,13 @@ enhancements. Windows packages are available from
 
 ## Implemented
 
+F12 LAND GENERATION selects Native (default), Procedural (the earlier
+replacement generator), Islands, Lakes, Rivers or Fractal. The remembered
+choice applies to new terrain, including regeneration on the preview screen.
+Loaded cities retain their terrain. Fractal uses several noise octaves and
+shoreline fitting; Islands starts with water and builds scattered landforms.
+All styles support every size and the water-free map-number 31337 exception.
+
 120x100 maps use the original cartridge generator, including its river walks,
 lake clusters, coast brushes, forest scatter and shoreline/tree fitting. The
 original three-digit seeding path is preserved; the two added digits extend
@@ -46,10 +53,13 @@ The map-select preview keeps its original 120x100 box while drawing at the
 display's pixel resolution. Coverage-aware sampling preserves thin rivers
 between the old single-tile samples. It reveals water first, then forest patches over roughly
 1.5 seconds after the waiting panel. Its palette comes from the live native
-BG2 layer, and the preview does not change city zoom or UI scale. NEXT and
-map-number mouse clicks regenerate the preview when released.
-Ctrl+wheel zooms the preview toward the mouse. Hold middle mouse to drag the
-preview; stationary input does not move it. Click inside the preview to open
+BG2 layer, and the preview does not change city zoom or UI scale.
+NEXT regenerates on release; map-number clicks regenerate once the pointer
+leaves the shared five-digit arrow area. All five digits appear from entry,
+using the original font, counter cells and No. label. Ctrl+wheel zooms around
+the center of the city view or preview, keeping the HUD at its existing size.
+Hold middle mouse to drag the preview; stationary input does not move it.
+Click inside the preview to open
 an expanded view across the window; click again or press Esc to return to
 map selection. The expanded view shows the complete generated terrain and
 keeps the mouse hand at its ordinary UI size. Zoom and pan affect only this

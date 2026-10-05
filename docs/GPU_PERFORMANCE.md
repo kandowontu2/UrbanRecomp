@@ -3488,3 +3488,16 @@ native camera/mode registers remain unchanged, and Vulkan output matches
 the CPU reference. Construction after a drag writes the expected world tile.
 Unit checks cover fractional deltas, full viewport bounds, capture/release and
 focus/modal cancellation. Physical desktop mouse feel still needs player testing.
+
+The 2026-10-04 local construction update fuses original footprint writes,
+common R/C/I site scans and neighbours that require no transport junction.
+The independent ROM oracle matches complete RAM, world tiles and costs for
+all build tools, money-cheat states, trees, removable wires, blocked sites
+and nearby roads/rails. A 10,000-zone free fill takes 94 ms in the C path
+versus 565 ms in the ROM reference in one local run. The 3840x3200 live
+rectangle replay commits all 299,547 free placements at zero cost in
+4,784 ms, compared with the prior 26,184 ms. Window input remains serviced
+through bounded slices; the transaction publishes once complete. These
+measurements concern construction, not a guarantee of 60 FPS during the
+subsequent simulation of the newly populated world. Private records are
+`construction-all-final.log` and `city-speed/bulk-mega-free-residential`.

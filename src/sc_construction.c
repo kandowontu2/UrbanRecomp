@@ -90,6 +90,89 @@ struct ScBuildWork {
   bool placing,done,fault,reference;
   unsigned batch_operations,batch_limit;
 };
+/* 01:bcaf..bcc2 writes one already-validated footprint cell. Fuse its three
+ * helpers instead of dispatching each 65816 instruction for every cell in a
+ * large fill. Site validation, footprint patterns, joins and charging still
+ * run through the cartridge. The private stack's popped bytes are discarded
+ * at Finish; its live pattern pointer and stack depth remain untouched. */
+static bool build_footprint(ScBuildWork *job) {
+  BuildBus *b=job->bus;Interp816 *c=job->cpu;uint8_t *r=b->ram;
+  if(!b->world || c->k!=1 || c->pc!=0xbcaf || c->mf || c->xf || c->dp || c->d)
+    return false;
+  unsigned i=word(r,0x217),pointer=word(r,(uint16_t)(c->sp+1));
+  unsigned address=(((unsigned)c->db<<16)+pointer+i*2)&0xffffff;
+  unsigned tile=read_bus(b,address)|(read_bus(b,(address+1)&0xffffff)<<8);
+  unsigned dx=read_bus(b,0x018072+i),dy=read_bus(b,0x018096+i);
+  unsigned x=(word(r,0x205)+dx)&65535,y=(word(r,0x207)+dy)&65535;
+  unsigned sx=(word(r,0x211)+dx)&65535,sy=(word(r,0x213)+dy)&65535;
+  put(r,0x215,tile);put(r,0x219,x);put(r,0x21b,y);put(r,0x21d,sx);put(r,0x21f,sy);
+  unsigned at=2*(y*ScWorldWidth(b->world)+x);
+  b->world->bank_anchor[1]=ScWorldContains(b->world,x,y)?at:UINT32_MAX;
+  ScWorldPutCell(b->world,x,y,tile);
+  unsigned column=((word(r,0x139)>>3)+sx)&65535;
+  if(column>=32)column-=32;
+  put(r,0x79,column);
+  unsigned row=((word(r,0x137)>>3)+sy)&65535;
+  if(row>=32)row-=32;
+  b->multiplicand=(uint8_t)row;b->product=b->multiplicand*32;
+  r[0xb1]=r[0xb3];
+  unsigned sum=b->product+column;
+  unsigned offset=(sum*2)&65535,lookup=0x02cf2d+((tile*2)&65535);
+  unsigned graphic=read_bus(b,lookup)|(read_bus(b,lookup+1)<<8);
+  put(r,0x2840+offset,graphic);
+  c->a=graphic;c->x=offset;c->y=(uint16_t)(i*2);
+  c->c=(tile&0x8000)!=0;c->v=((~(b->product^column)&(b->product^sum))&0x8000)!=0;
+  c->n=(offset&0x8000)!=0;c->z=!offset;c->pc=0xbcc2;
+  memset(&b->guest,0,sizeof b->guest);
+  return true;
+}
+/* Common R/C/I sites contain only land, trees or removable wire. Collapse
+ * the successful scan, leaving the final cell to the original classifier so
+ * its scratch registers/flags and any failure path retain native semantics. */
+static bool build_zone_scan(ScBuildWork *job) {
+  BuildBus *b=job->bus;Interp816 *c=job->cpu;uint8_t *r=b->ram;
+  unsigned tool=word(r,0x20d),last=word(r,0x20f),trees=0,wires=0;
+  if(!b->world || c->k!=1 || c->pc!=0xb928 || c->mf || c->xf || c->dp || c->d ||
+      tool<5 || tool>7 || last!=8)return false;
+  int x0=word(r,0x205),y0=word(r,0x207);
+  for(unsigned i=0;i<=last;++i) {
+    int x=x0+b->rom[0x8072+i],y=y0+b->rom[0x8096+i];
+    if(!ScWorldContains(b->world,x,y))return false;
+    unsigned tile=ScWorldCell(b->world,x,y)&1023;
+    if(tile && (!(word(r,0x195)&1) ||
+        !((tile>=4 && tile<0x2e) || (tile>=0x62 && tile<0x6d))))return false;
+    if(i) {trees+=tile!=0;wires+=tile>=0x62;}
+  }
+  put(r,0x227,word(r,0x227)+trees);put(r,0x225,word(r,0x225)+wires);put(r,0x20f,0);
+  int x=x0+b->rom[0x8072],y=y0+b->rom[0x8096];
+  unsigned offset=2*(y*ScWorldWidth(b->world)+x);
+  b->world->bank_anchor[1]=offset;put(r,0x79,y*ScWorldWidth(b->world));
+  c->a=ScWorldCell(b->world,x,y)&1023;c->x=(uint16_t)offset;
+  unsigned low_y=y0&255,dy=b->rom[0x8096];
+  c->v=((~(low_y^dy)&(low_y^(low_y+dy)))&128)!=0;
+  c->z=!c->a;c->n=false;c->c=offset>65535;c->pc=0xb943;
+  memset(&b->guest,0,sizeof b->guest);return true;
+}
+/* Most neighbours of a zone are terrain or another zone, so there is no
+ * transport junction to rebuild. Keep the native join handler for roads,
+ * rails and wires; fuse only iterations it would immediately skip. */
+static bool build_no_join(ScBuildWork *job) {
+  BuildBus *b=job->bus;Interp816 *c=job->cpu;uint8_t *r=b->ram;
+  if(!b->world || c->k!=1 || c->pc!=0xb7b9 || c->mf || c->xf || c->dp || c->d)return false;
+  unsigned xp=word(r,(uint16_t)(c->sp+3)),yp=word(r,(uint16_t)(c->sp+1));
+  int dx=(int8_t)read_bus(b,(((unsigned)c->db<<16)+xp+c->y)&0xffffff);
+  int dy=(int8_t)read_bus(b,(((unsigned)c->db<<16)+yp+c->y)&0xffffff);
+  int x=word(r,0x205)+dx,y=word(r,0x207)+dy;
+  if(!ScWorldContains(b->world,x,y))return false;
+  unsigned tile=ScWorldCell(b->world,x,y)&1023;
+  if(tile>=0x30 && tile<0x80 && (tile&15)>=2 && (tile&15)<13)return false;
+  put(r,0x209,x);put(r,0x20b,y);put(r,0x243,0);put(r,0x245,0);put(r,0x247,0);
+  unsigned offset=2*(y*ScWorldWidth(b->world)+x);
+  put(r,0x79,y*ScWorldWidth(b->world));b->world->bank_anchor[1]=offset;
+  c->a=tile;c->x=(uint16_t)offset;c->c=true;c->n=(c->y&0x8000)!=0;c->z=!c->y;
+  c->v=((~((uint16_t)dy^word(r,0x207))&((uint16_t)dy^y))&0x8000)!=0;
+  c->pc=0xb821;memset(&b->guest,0,sizeof b->guest);return true;
+}
 ScBuildWork *ScConstructionBegin(const uint8_t *ram,const ScWorld *w,const uint8_t *rom,size_t size,const ScBuildPlan *p) {
   if (!rom || size!=0x80000 || p->tool>15 || !p->count || p->count>SC_BUILD_MAX ||
       (p->tool>=10 && p->tool!=13 && p->tool!=14 && p->count!=1))
@@ -124,7 +207,8 @@ ScBuildWork *ScConstructionBegin(const uint8_t *ram,const ScWorld *w,const uint8
 static bool build_before(void *context,Interp816 *cpu) {
   ScBuildWork *job=context;BuildBus *b=job->bus;
   if(job->batch_operations>=job->batch_limit || b->fault || cpu->stopped || cpu->waiting ||
-      (cpu->k==1 && (cpu->pc==0x7000 || ScTileLookupOwns(cpu->pc))))return false;
+      (cpu->k==1 && (cpu->pc==0x7000 || (b->world && (cpu->pc==0xbcaf || cpu->pc==0xb7b9 ||
+          (cpu->pc==0xb928 && word(b->ram,0x20d)>=5 && word(b->ram,0x20d)<=7 && word(b->ram,0x20f)==8))) || ScTileLookupOwns(cpu->pc))))return false;
   if(++job->steps>200000) {job->fault=true;return false;}
   if(b->world) {
     ScWorldGuestStepPrepared(b->world,cpu,b->ram);
@@ -164,6 +248,10 @@ bool ScConstructionStep(ScBuildWork *job,unsigned max_operations) {
       job->steps=0;memset(&b->guest,0,sizeof b->guest);job->placing=true;
     }
     while (!(cpu->k==1 && cpu->pc==0x7000)) {
+      if(!job->reference && (build_footprint(job) || build_zone_scan(job) || build_no_join(job))) {
+        if(++operations>=max_operations)return false;
+        continue;
+      }
       if(!job->reference) {
         job->batch_operations=0;job->batch_limit=max_operations-operations;
         unsigned edges=ScProgramRun(cpu,job,build_before,build_after,build_fallback);

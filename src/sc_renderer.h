@@ -107,6 +107,8 @@ uint32_t ScRendererPresentationPixel(const ScRenderer *r,unsigned x,unsigned y,
     unsigned width,unsigned height);
 void ScRendererResetHistory(ScRenderer *r);
 void ScRendererPan(ScRenderer *r,double dx,double dy);
+/* Preserve the world position at the view's center, including fractional pan. */
+void ScRendererZoom(ScRenderer *r,double zoom);
 void ScRendererResetCamera(ScRenderer *r);
 /* Only an actual guest city-load entry may freeze the previous terrain. */
 void ScRendererBeginMapLoad(ScRenderer *r);

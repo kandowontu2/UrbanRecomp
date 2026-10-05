@@ -99,11 +99,12 @@ bool ScWorldPutCell(ScWorld *w,int x,int y,uint16_t v) {
     if(word(w->tiles+at)!=v) {put(w->tiles+at,v);ScWorldTilesTouch(w,at,2);}
     return true;
 }
-static void generate(ScWorld *w,ScMapGenPrng *prng,unsigned size) {
+static void generate_mode(ScWorld *w,ScMapGenPrng *prng,unsigned size,unsigned style) {
     ScMapGenState *state=calloc(1,sizeof *state);
     if(!state) return;
     ScWorldReset(w); w->huge=size>=2;w->giant=size>=3;w->colossal=size>=4;w->mega=size==5;
-    if(size==5) sc_mapgen_generate_mega(prng,state);
+    if(style)sc_mapgen_generate_style(prng,state,size,style);
+    else if(size==5) sc_mapgen_generate_mega(prng,state);
     else if(size==4) sc_mapgen_generate_colossal(prng,state);
     else if(size==3) sc_mapgen_generate_giant(prng,state);
     else if(size==2) sc_mapgen_generate_huge(prng,state);
@@ -111,6 +112,7 @@ static void generate(ScWorld *w,ScMapGenPrng *prng,unsigned size) {
     for (unsigned i=0;i<ScWorldCells(w);++i) put(w->tiles+i*2,state->map[i]);
     free(state);w->active=true;
 }
+static void generate(ScWorld *w,ScMapGenPrng *prng,unsigned size) {generate_mode(w,prng,size,0);}
 void ScWorldGenerate(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,1); }
 void ScWorldGenerateHuge(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,2); }
 void ScWorldGenerateGiant(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,3); }
@@ -132,6 +134,7 @@ void ScWorldGenerateNumbered(ScWorld *w,unsigned size,unsigned number) {
     for(unsigned i=0;i<ScWorldCells(w);++i)put(w->tiles+2*i,state->map[i]);
     free(state);w->active=true;
 }
+void ScWorldGenerateStyled(ScWorld *w,unsigned size,ScMapGenPrng *prng,unsigned style) {generate_mode(w,prng,size<1?1:size>5?5:size,style);}
 unsigned ScWorldFieldWidth(const ScWorld *w,unsigned f) {
     return f<SC_WORLD_FIELDS?(w && w->giant && f>=17?65535:ScWorldFields[f].width*(f<17?ScWorldScale(w):1)):0;
 }

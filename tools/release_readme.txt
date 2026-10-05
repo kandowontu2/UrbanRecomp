@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 17 - TERRAIN, PREVIEWS AND CURSOR FIXES
+URBAN RECOMP ENHANCED - LOCAL TERRAIN AND CONSTRUCTION TEST
 ======================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -6,6 +6,18 @@ The runtime, assets, documentation, credits and all 19 restored songs are
 embedded. They unpack into a versioned private cache under LOCALAPPDATA.
 Saves and settings stay beside the portable EXE; existing installations are
 not replaced. No ROM or personal saves/settings are included.
+
+F12 LAND GENERATION offers Native (default), Procedural (the earlier
+generator), Islands, Lakes, Rivers and Fractal. The saved choice applies
+to newly generated terrain; existing cities keep their land. Map 31337
+remains water-free with every style and size.
+Map-number arrows allow repeated clicks across all five digits without
+regeneration until the mouse leaves their shared boundary. Five digits
+use the original font, No. label and beveled counter from screen entry.
+Main menu, map size and development speed publish their new lettering
+and sprite positions together, eliminating the one-frame text flash.
+Large successful zone fills use fused native construction loops. Costs,
+money cheats, terrain restrictions and transport joins remain intact.
 
 The mouse hand waits for menu graphics during the title-screen exit fade,
 preventing a corrupted logo tile from appearing at the pointer after a click.
@@ -23,8 +35,9 @@ Larger maps add trains, aircraft, ships and helicopters by 120x100 districts,
 up to 1,024 extra vehicles of each kind on 3840x3200. Rails, powered airports,
 and powered seaports with navigable water determine where they can appear.
 Their independent positions and headings use your cartridge's original art.
-Map previews draw sharply at display resolution. Ctrl+wheel zooms toward
-the mouse; middle mouse drags. Click the preview to expand it across the
+Map previews draw sharply at display resolution. Ctrl+wheel zooms around
+the view's center, in both the city and preview; middle mouse drags.
+Click the preview to expand it across the
 window, then click again or press Esc to return to map selection.
 Tool-window shadows stay over the zoomed city without full-size building
 fragments. GO TO MENU restores the main menu, and Resume aligns with the

@@ -147,6 +147,11 @@ void sc_mapgen_framed_map(ScMapGenPrng *p, ScMapGenState *st);
  * river walks, lakes, forests and fitting passes over the extended bounds.
  * Size is 0..5 (120x100 through 3840x3200). */
 void sc_mapgen_generate_geographic(ScMapGenPrng *p, ScMapGenState *st, unsigned size);
+/* Earlier procedural rivers/lakes/islands/forest generator, explicitly opt-in. */
+void sc_mapgen_generate_alternate(ScMapGenPrng *p,ScMapGenState *st,unsigned size);
+enum { SC_TERRAIN_NATIVE,SC_TERRAIN_PROCEDURAL,SC_TERRAIN_ISLANDS,
+       SC_TERRAIN_LAKES,SC_TERRAIN_RIVERS,SC_TERRAIN_FRACTAL,SC_TERRAIN_STYLES };
+void sc_mapgen_generate_style(ScMapGenPrng *p,ScMapGenState *st,unsigned size,unsigned style);
 /* Fixed native preview, independent of city dimensions and zoom. Waterways
  * grow first, then forest patches; frame 90 is the exact completed overview. */
 typedef struct ScMapPreview {
