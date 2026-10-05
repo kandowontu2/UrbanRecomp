@@ -4312,13 +4312,13 @@ static bool run_one_frame(void) {
         fast = (e && *e) ? (*e != '0') : 1;   /* on; SC_MAPGEN_FAST=0 disables */
       }
       if (!fast && !s_large_maps) {ScWorldReset(&s_world);s_world.journey=s_journey_arming;}
-      if (fast || s_large_maps) {
+      unsigned number=g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000;
+      if (fast || s_large_maps || number==31337) {
         static ScMapGenState gs;
         ScMapGenPrng pr;
         pr.s0 = (uint16_t)(g_ram[0x59] | (g_ram[0x5a] << 8));
         pr.s1 = (uint16_t)(g_ram[0x5b] | (g_ram[0x5c] << 8));
         pr.t  = (uint16_t)(g_ram[0x5d] | (g_ram[0x5e] << 8));
-        unsigned number=g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000;
         /* Preserve the cartridge's original three-digit seed path. The two
          * added digits extend its PRNG, rather than replace its terrain. */
         if(number>=1000) {
@@ -4326,10 +4326,12 @@ static bool run_one_frame(void) {
           pr.s0^=(uint16_t)key;pr.s1^=(uint16_t)(key>>16);
         }
         if (s_large_maps && !s_journey_arming && s_rom_fnv==SC_ROM_FNV_US) {
-          ScWorldGenerateSeeded(&s_world,s_large_maps,&pr);ScWorldMirror(&s_world,g_ram);
+          ScWorldGenerateSeeded(&s_world,s_large_maps,&pr);
+          ScWorldApplyMapNumber(&s_world,number);ScWorldMirror(&s_world,g_ram);
         } else {
           ScWorldReset(&s_world);
           sc_mapgen_generate(&pr,&gs);
+          sc_mapgen_apply_number(&gs,number);
           s_world.journey=s_journey_arming;
         }
         /* The map is at $7F0200 -- bank 7F, so 0x10200 into WRAM. */
@@ -4463,7 +4465,7 @@ static bool run_one_frame(void) {
         s_size_selecting=s_speed_selecting=s_practice_size_pending=false;ScMapSizeMenuSet(false);
       }
       if((s_size_selecting || s_speed_selecting) && cpu->k==3 && cpu->pc==0xd337) cpu->pc=0xd33b;
-      if((s_size_selecting || s_speed_selecting) && cpu->k==3 && cpu->pc==0xd333 && (g_ram[0xc9]&0x80)) {
+      if((s_size_selecting || s_speed_selecting) && cpu->k==3 && cpu->pc==0xd333 && (g_ram[0xc9]&0x40)) {
         if(s_speed_selecting && s_size_game_choice!=3) {
           s_speed_selecting=false;s_size_selecting=true;ScMapSizeMenuSet(true);
           ram_set_w(0x3e,s_large_maps+1);
@@ -11285,7 +11287,8 @@ int main(int argc, char **argv) {
         } else {
           s_escape_back_frames=2;
           s_escape_back_input=(s_mouse_dialog==SC_MOUSE_DIALOG_SLOTS ||
-              s_mouse_dialog==SC_MOUSE_DIALOG_SAVE_CONFIRM)?kPad_X:kPad_A;
+              s_mouse_dialog==SC_MOUSE_DIALOG_SAVE_CONFIRM)?kPad_X:
+              s_rom_is_us?ScMouseUiModalInput(g_ram,0,true):kPad_A;
         }
         continue;
       }
@@ -12201,7 +12204,8 @@ int main(int argc, char **argv) {
     if(s_escape_back_frames) {input|=s_escape_back_input;--s_escape_back_frames;}
     apply_frame_input(s_frames);
     apply_freezes();
-    g_snes->input1_currentState |= input;
+    input|=g_snes->input1_currentState;
+    g_snes->input1_currentState=s_rom_is_us?ScMouseUiModalInput(g_ram,input,false):input;
 
     /* Held Tab runs up to six guest frames within the display's time budget.
      * Draw the last expanded image and play its audio; retain full guest

@@ -246,3 +246,27 @@ int ScMouseUiCursorPlace(const uint8_t *ram,uint16_t *oam,uint8_t *high,int x,in
     oam[slot*2]=(uint16_t)(x|(y<<8));high[slot/4]&=~(1u<<(2*(slot&3)));
     return slot;
 }
+uint16_t ScMouseUiModalInput(uint8_t *r,uint16_t input,bool back) {
+  const unsigned b=1,start=8,x=0x200,mode=word(r,0x14);
+  if(mode==0 || mode==0x8000) {
+    if(r[0x391] && word(r,0x397)==word(r,0x39b)) {
+      if(word(r,0x39b)!=0x0d && (back || (input&start)))
+        return (input&~start)|b; /* Single adviser message: native B. */
+    } else if(word(r,0x3e) && r[0xe3]==1 && r[0xc3]==1 && word(r,0xd7)) {
+      unsigned page=word(r,0x1fb);
+      if(page==4) {
+        /* 02:a713: $0b17=0 accepts a loan, 1 declines it. An existing
+         * loan's information page ($0b19!=0) exits with native X. */
+        if(back && !r[0xb19]) {put(r,0xb17,1);return b;}
+        if(back || (input&(b|start)))
+          return (input&~(b|start))|(r[0xb19]?x:b);
+      } else if(page==3 || page==5 || page==6) {
+        if(back || (input&(b|start)))return (input&~(b|start))|x;
+      } else if(page==2 && (input&start)) {
+        return (input&~start)|b; /* Confirm the currently selected budget control. */
+      }
+    }
+  }
+  /* Existing city tool menus close with A; pre-game screens use X. */
+  return back?((mode==0 || mode==0x8000)?0x100:x):input;
+}

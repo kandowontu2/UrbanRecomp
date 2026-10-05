@@ -216,6 +216,24 @@ int main(void) {
     }
     /* A narrow river between the old point samples remains visible in both
      * the native overview and the sharper display-sized preview. */
+    for(unsigned size=0;size<6;++size) {
+        sc_mapgen_generate_numbered(&g->state,size,31337);
+        unsigned trees=0;
+        for(unsigned i=0;i<(unsigned)g->state.width*g->state.height;++i) {
+            unsigned tile=g->state.map[i]&0x3ff;
+            assert(!tile || tile>=20);trees+=tile>=20;
+        }
+        assert(trees);
+    }
+    /* Applying the special number preserves tree IDs and does not alter
+     * neighbouring numbered maps or consume extra randomness. */
+    again->width=20;again->height=1;
+    for(unsigned i=0;i<20;++i)again->map[i]=i+1;
+    sc_mapgen_apply_number(again,31336);
+    for(unsigned i=0;i<20;++i)assert(again->map[i]==i+1);
+    sc_mapgen_apply_number(again,31337);
+    for(unsigned i=0;i<19;++i)assert(!again->map[i]);
+    assert(again->map[19]==20);
     memset(again->map,0,240*200*2);
     for(unsigned y=0;y<200;++y)again->map[y*240+1]=1;
     ScMapPreview preview;sc_mapgen_preview_build(&preview,again->map,240,200,123);

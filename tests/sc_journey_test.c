@@ -201,6 +201,27 @@ static void preserved(unsigned ow,unsigned oh,unsigned dx,unsigned dy,bool host)
     assert(!memcmp(ram+0x59,original+0x59,6)); /* live random stream */
 }
 int main(int argc,char **argv) {
+    for(unsigned size=1;size<6;++size) {
+        ScMapGenPrng pr={0x1357,0x2468,0};
+        ScWorldGenerateSeeded(&world,size,&pr);
+        memcpy(&before,&world,sizeof world);
+        ScWorldApplyMapNumber(&world,31336);
+        assert(!memcmp(&before,&world,sizeof world));
+        ScWorldApplyMapNumber(&world,31337);
+        unsigned trees=0;
+        for(unsigned i=0;i<ScWorldCells(&world);++i) {
+            unsigned tile=word(world.tiles,2*i)&1023,old=word(before.tiles,2*i)&1023;
+            assert(!tile || tile>=20);
+            if(old>=20) {assert(tile==old);++trees;}
+        }
+        assert(trees);
+        ScWorldMirror(&world,ram);
+        for(unsigned i=0;i<12000;++i) {
+            unsigned tile=word(ram,0x10200+2*i)&1023;
+            assert(!tile || tile>=20);
+        }
+    }
+    puts("PASS: dry map 31337 across all expanded sizes, forests preserved, ordinary numbers unchanged and dry WRAM mirror");
     assert(argc==2);FILE *f=fopen(argv[1],"rb");assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);menu_test();saved_city_menu_test();legacy_large_save(4);legacy_large_save(5);
     memset(ram,0,sizeof ram);ScWorldReset(&world);

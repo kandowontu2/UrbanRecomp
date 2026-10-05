@@ -1,5 +1,15 @@
 # Enhanced fork changelog
 
+## Unreleased
+
+- Use the cartridge's X button for Back on the map-size and development-speed
+  pages, matching the remaining city setup screens. Escape also sends Back.
+- Let Enter and the normal confirmation control close full-screen reports and
+  bank information. Escape closes informational adviser messages and reports;
+  on a bank loan choice it selects No before confirming cancellation.
+- Make map number 31337 water-free at all six selectable sizes, preserving
+  forests and leaving existing saved terrain unchanged.
+
 ## 1.2.0 Enhanced Beta 17 — 2026-10-04
 
 - Restore the original cartridge generator for 120x100, preserving its terrain

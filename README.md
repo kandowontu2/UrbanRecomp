@@ -248,6 +248,8 @@ Keys that are not SNES buttons:
 | Scroll faster (hold) | Ctrl: 3x; Ctrl+Shift: 10x |
 | Fast-forward (hold) | Tab; Shift+Tab requests 4x the usual boost |
 | Open Save City during play; Back/Close in menus | Escape |
+| Back during city setup (including map size and development speed) | Controller X |
+| Close full-screen information / confirm selected loan choice | Enter or normal Confirm |
 | Reveal hidden 1920x1600 test City 3 on Load City | Ctrl+Shift+tilde |
 | Zoom the map in / out (city view) | + / - |
 | Save state to slot 1-9/0 | Shift+1 .. Shift+9, Shift+0 |
@@ -258,6 +260,8 @@ Keys that are not SNES buttons:
 | Debug cheats: No Disasters / Needless Money / Valve Max / Water Reclaim | F5 / F6 / F7 / F8 |
 | Fast D-pad cursor (toggle) | F9 |
 | Settings menu (toggle) | F10 |
+
+Map **31337** generates dry land with forests at every selectable size.
 
 - **F2** enters the game's hidden debug menu. It plays the documented entry
   code (Left, A, Right, Y, Up, B, Down, X, Select, Start, Start, Select, R, R,

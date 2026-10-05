@@ -168,6 +168,8 @@ void sc_mapgen_preview_pan(ScMapPreview *preview,double x,double y);
 /* 00000..99999 have distinct, visit-independent geography seeds. */
 uint32_t sc_mapgen_number_key(unsigned number);
 void sc_mapgen_generate_numbered(ScMapGenState *state,unsigned size,unsigned number);
+/* The designated dry map retains its forests; other numbers are unchanged. */
+void sc_mapgen_apply_number(ScMapGenState *state,unsigned number);
 unsigned sc_mapgen_number_digit(unsigned number,unsigned digit,int direction);
 unsigned sc_mapgen_number_nav(unsigned choice,unsigned directions);
 

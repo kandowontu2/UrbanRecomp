@@ -18,6 +18,9 @@ ScMouseUiResult ScMouseUiDialogPoint(ScMouseDialog dialog, uint8_t *ram,
                                     int x, int y, bool select);
 /* Both yearly and toolbar budget pages, excluding city/gift/report transitions. */
 bool ScMouseUiBudgetLive(const uint8_t *ram);
+/* Route confirm/back through the cartridge's modal handlers. Serial pad bits:
+ * B=1, Start=8, X=0x200. Escape cancels a loan rather than accepting it. */
+uint16_t ScMouseUiModalInput(uint8_t *ram,uint16_t input,bool back);
 ScMouseUiResult ScMouseUiPoint(uint8_t *ram, int x, int y,
                               bool select, bool ninth_scenario);
 bool ScMouseUiScenarioScroll(uint8_t *ram, int direction, bool ninth_scenario);

@@ -166,6 +166,28 @@ int main(void) {
   r[0x391]=0; assert(!ScMouseUiPoint(r,84,140,true,true).handled);
   r[0x391]=0xff; put(0x039b,1);
   assert(!ScMouseUiPoint(r,84,140,true,true).handled); /* queued message */
+  memset(r,0,sizeof r);put(0x14,0x8000);put(0x3e,2);
+  assert(ScMouseUiModalInput(r,8,false)==8); /* Gameplay Start remains Start. */
+  assert(ScMouseUiModalInput(r,0,true)==0x100); /* Existing city-tool Back. */
+  r[0x391]=255;put(0x397,1);put(0x39b,1);
+  assert(ScMouseUiModalInput(r,8,false)==1 && ScMouseUiModalInput(r,0,true)==1);
+  put(0x397,13);put(0x39b,13);
+  assert(ScMouseUiModalInput(r,8,false)==8); /* Never choose a gift by Enter mapping. */
+  r[0x391]=0;r[0xe3]=r[0xc3]=1;put(0xd7,65535);
+  for(unsigned page=3;page<=6;++page) {
+    put(0x1fb,page);r[0xb19]=1;
+    assert(ScMouseUiModalInput(r,1,false)==0x200);
+    assert(ScMouseUiModalInput(r,8,false)==0x200);
+    assert(ScMouseUiModalInput(r,0,true)==0x200);
+  }
+  put(0x1fb,4);put(0xb19,0);put(0xb17,0);
+  assert(ScMouseUiModalInput(r,8,false)==1 && word(0xb17)==0);
+  assert(ScMouseUiModalInput(r,0,true)==1 && word(0xb17)==1);
+  put(0x1fb,2);put(0xd67,3);
+  assert(ScMouseUiModalInput(r,8,false)==1 && word(0xd67)==3);
+  r[0xe3]=0;put(0x1fb,3);
+  assert(ScMouseUiModalInput(r,8,false)==8); /* Report fade is not interactive. */
+  put(0x14,5);assert(ScMouseUiModalInput(r,0,true)==0x200);
   ScMouseDialog dialog=SC_MOUSE_DIALOG_NONE;
   put(0x1ffe,0xc8fc); ScMouseUiObserve(&dialog,r,0,0xd19e,0x1ffd);
   assert(dialog==SC_MOUSE_DIALOG_SLOTS);

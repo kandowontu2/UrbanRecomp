@@ -117,6 +117,14 @@ void ScWorldGenerateGiant(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,3); }
 void ScWorldGenerateMega(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,5); }
 void ScWorldGenerateColossal(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,4); }
 void ScWorldGenerateSeeded(ScWorld *w,unsigned size,ScMapGenPrng *prng) { generate(w,prng,size<1?1:size>5?5:size); }
+void ScWorldApplyMapNumber(ScWorld *w,unsigned number) {
+    if(number!=31337 || !w->active)return;
+    for(unsigned i=0;i<ScWorldCells(w);++i) {
+        unsigned tile=word(w->tiles+2*i)&0x3ff;
+        if(tile && tile<20)put(w->tiles+2*i,0);
+    }
+    ScWorldTilesTouch(w,0,ScWorldCells(w)*2);
+}
 void ScWorldGenerateNumbered(ScWorld *w,unsigned size,unsigned number) {
     ScMapGenState *state=calloc(1,sizeof *state);if(!state)return;
     ScWorldReset(w);w->huge=size>=2;w->giant=size>=3;w->colossal=size>=4;w->mega=size==5;
