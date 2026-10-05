@@ -12,6 +12,10 @@ read-only volume. Command-line developer builds keep their existing paths.
 
 Mac rendering uses Metal presentation and the CPU terrain/field fallback.
 The Vulkan compute shaders used on Windows do not have a Metal implementation.
+The self-contained Mac build uses bundled outline emoji fonts instead of
+optional system FreeType/HarfBuzz libraries. `SC_MACOS_SELF_CONTAINED=OFF`
+allows those optional host libraries for a developer build; packaged apps
+must still contain both architectures and have no external dependencies.
 This package is ad-hoc signed. Developer ID signing and notarization require
 the maintainer's Apple signing credentials; an ad-hoc signature does not
 establish notarization or Gatekeeper approval.

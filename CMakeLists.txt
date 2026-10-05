@@ -16,6 +16,13 @@ set_source_files_properties(src/sc_world_guest.c PROPERTIES OBJECT_DEPENDS "${SC
 # checked-in SPIR-V with tools/compile_gpu_shaders.py after editing HLSL.
 
 option(SC_CONSOLE "Open a Windows console for development diagnostics" OFF)
+option(SC_MACOS_SELF_CONTAINED "Use bundled outline fonts without host font-library dependencies" ${APPLE})
+if(APPLE AND SC_MACOS_SELF_CONTAINED)
+    # The optional system color-emoji provider can discover single-architecture
+    # Homebrew dylibs, breaking a universal build and portability. The launcher
+    # already has a bundled OpenMoji/outline fallback; keep the submodule intact.
+    set(CMAKE_DISABLE_FIND_PACKAGE_Freetype ON)
+endif()
 function(sc_configure_windows_app target)
     if(WIN32 AND NOT SC_CONSOLE)
         set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE TRUE)
