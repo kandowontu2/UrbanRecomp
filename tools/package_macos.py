@@ -62,6 +62,7 @@ for source,destination in (
     ('recomp-ui/assets/common/img/NOTICE.md','images-NOTICE.md')):
     shutil.copy2(root/source,licenses/destination)
 shutil.copy2(args.build_dir.parent/'SDL/LICENSE.txt',licenses/'SDL3-LICENSE.txt')
+shutil.copytree(root/'snesrecomp/third_party/psxrecomp_color_lut',licenses/'psxrecomp_color_lut')
 iconset=stage/'UrbanRecomp.iconset';iconset.mkdir()
 for size in (16,32,128,256,512):
     for scale in (1,2):
@@ -71,7 +72,7 @@ for size in (16,32,128,256,512):
 subprocess.run(['iconutil','-c','icns',str(iconset),'-o',str(resources/'UrbanRecomp.icns')],check=True)
 info=dict(CFBundleExecutable='UrbanRecomp',CFBundleIdentifier='io.github.kandowontu2.UrbanRecomp',
     CFBundleName='UrbanRecomp',CFBundleDisplayName='Urban Recomp',CFBundlePackageType='APPL',
-    CFBundleShortVersionString='1.2.0',CFBundleVersion=args.version.lstrip('v').replace('-enhanced.','.'),
+    CFBundleShortVersionString='1.2.0',CFBundleVersion='1.2.'+args.version.rsplit('.',1)[-1],
     CFBundleIconFile='UrbanRecomp.icns',LSMinimumSystemVersion='11.0',
     LSApplicationCategoryType='public.app-category.simulation-games',NSHighResolutionCapable=True,
     SDL_FILESYSTEM_BASE_DIR_TYPE='resource')

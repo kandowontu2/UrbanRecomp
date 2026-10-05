@@ -44,7 +44,15 @@ jobs:
           asset=$(python3 -c 'import json,sys,os; r=next(r for page in json.load(open(sys.argv[1])) for r in page if r["tag_name"]==os.environ["INPUTS_RELEASE"]); assert r["draft"], "Build inputs must remain private"; print(next(a["id"] for a in r["assets"] if a["name"]=="macos-native-inputs.tar.gz"))' "$RUNNER_TEMP/input-release.json")
           gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/macos-native-inputs.tar.gz"
           python3 tools/stage_macos_inputs.py "$RUNNER_TEMP/macos-native-inputs.tar.gz" --sha256 "$INPUTS_SHA256"
+      - uses: actions/cache@v4
+        id: sdl-cache
+        with:
+          path: |
+            mac-deps/SDL
+            mac-deps/sdl-install
+          key: macos15-sdl3-3.4.16-universal-static-11.0-v1
       - name: Build universal static SDL3
+        if: steps.sdl-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
