@@ -679,7 +679,9 @@ its own original artwork, preventing land and building sprites from leaking
 into its background.
 
 The main menu's centered text and extended panel retain their geometry during
-the fade. Hidden **3. TEST CITY 3** aligns with the numbered save rows and its
+the fade. The mouse hand is hidden while the title screen fades out, until
+the menu's sprite graphics are ready; it does not sample the logo's sprite
+bank or change the title's OAM. Hidden **3. TEST CITY 3** aligns with the numbered save rows and its
 selection pointer. Empty slots display only **1.** or **2.**; existing save
 names and dates remain visible. The third row uses unused sprite slots so it
 cannot overwrite the second city's label.

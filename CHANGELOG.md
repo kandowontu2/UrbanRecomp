@@ -2,6 +2,10 @@
 
 ## Unreleased — local terrain, mouse, placement and city-entry fixes
 
+- Keep the mouse menu hand hidden during the title-screen exit fade, whose
+  sprite bank still contains logo graphics. Show it when the menu is ready,
+  preserving title sprites and the native option arrow in both renderers.
+
 - Extend city zoom-out by another factor of two, with up to 65536 native
   pixels of terrain across the view. The complete 3840x3200 map can fit at
   once in the default widescreen view and Fit to Screen; HUD, menus and

@@ -815,6 +815,24 @@ int main(void) {
     assert(ScRendererPixel(&r,96+169,134)==0xffff0000);
     assert(ScRendererPixel(&r,96+42,124)==0xff123456);
     assert(!memcmp(before,p,sizeof *p));
+    /* A click starts screen 2 while the title's logo CHR is still loaded.
+     * Mouse ownership must not add that tile at the pointer during the fade. */
+    word(ram,0x14,1);
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(r.title_live);
+    word(ram,0x14,2);
+    r.menu_pointer_active=false;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    size_t title_bytes=(size_t)r.view.width*r.view.height*sizeof *r.pixels;
+    uint32_t *title_pixels=malloc(title_bytes);assert(title_pixels);
+    memcpy(title_pixels,r.pixels,title_bytes);
+    r.menu_pointer_active=true;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(r.title_live && !memcmp(title_pixels,r.pixels,title_bytes));
+    word(ram,0x14,3);
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(!r.title_live && ScRendererPixel(&r,96+169,134)==0xffff0000);
+    free(title_pixels);
     ScRendererDestroy(&r); free(p); free(before); free(ram); free(rom);
     puts("PASS: tile flips, overlays, map bounds, native pixels, tall/wide surfaces and PPU immutability");
     return 0;

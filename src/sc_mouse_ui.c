@@ -226,6 +226,9 @@ void ScMouseUiPointerUpdate(ScMouseUiPointer *p,bool inside,bool moved,bool pres
 int ScMouseUiCursorPlace(const uint8_t *ram,uint16_t *oam,uint8_t *high,int x,int y) {
     int slot=-1;
     unsigned mode=word(ram,0x14);
+    /* Screen 2 begins before the menu's CHR upload. The visible native
+     * option arrow marks menu readiness; title/logo OAM must stay intact. */
+    if(mode==2 && (oam[1]!=0x34b9 || (oam[0]>>8)>=224 || (high[0]&1)))return -1;
     if(ScMouseUiArrowScreen(ram) || (mode>=10 && mode<=12)) {
         /* Scenario OAM begins with pins, followed by the selection frame.
          * Its unused final slot can show the shared native menu hand without

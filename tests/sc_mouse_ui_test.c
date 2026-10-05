@@ -32,6 +32,13 @@ int main(void) {
   assert(oam[0]==(117|(83<<8)) && !memcmp(oam+1,original+1,sizeof oam-2));
   assert(!memcmp(high,high_before,sizeof high));
   assert(ScMouseUiCursorPlace(r,oam,high,-3,500)==0 && oam[0]==(223<<8));
+  /* Title-to-menu screen 2 must not inject a hand into the logo CHR bank. */
+  put(0x14,2);memcpy(original,oam,sizeof oam);memcpy(high_before,high,sizeof high);
+  assert(ScMouseUiCursorPlace(r,oam,high,100,87)==-1);
+  assert(!memcmp(oam,original,sizeof oam) && !memcmp(high,high_before,sizeof high));
+  oam[0]=0x702a;oam[1]=0x34b9;
+  assert(ScMouseUiCursorPlace(r,oam,high,100,87)==127);
+  assert(oam[254]==(99|(86<<8)) && oam[255]==0x3f9e);
   /* Main-menu arrow remains beside its option; mouse gets a separate hand. */
   put(0x14,3);oam[1]=0x34b9;oam[128]=0x7c2a;oam[129]=0x30c2;
   memcpy(original,oam,sizeof oam);

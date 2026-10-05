@@ -2188,7 +2188,9 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         city_pointer(r,p,ram);
         /* The selector's OAM starts with map pins, not a cursor. Use its
          * shared native menu hand across the entire expanded canvas. */
-        if(r->menu_pointer_active &&
+        /* Screen 2 also covers the title's exit fade. Its OBJ bank still
+         * contains logo graphics, not the shared menu hand. */
+        if(r->menu_pointer_active && !r->title_live &&
            (ScMouseUiArrowScreen(ram) || ScSelector_OnScreen(ram[0x14])) &&
            !PPU_forcedBlank(p) && (p->screenEnabled[0]&16))
             for(int y=0;y<16;++y)for(int x=0;x<16;++x) {

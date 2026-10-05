@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 16 - LOCAL EXTENDED CITY ZOOM
+URBAN RECOMP ENHANCED BETA 16 - LOCAL TITLE CURSOR FIX
 ======================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -6,6 +6,9 @@ The runtime, assets, documentation, credits and all 19 restored songs are
 embedded. They unpack into a versioned private cache under LOCALAPPDATA.
 Saves and settings stay beside the portable EXE; existing installations are
 not replaced. No ROM or personal saves/settings are included.
+
+The mouse hand waits for menu graphics during the title-screen exit fade,
+preventing a corrupted logo tile from appearing at the pointer after a click.
 
 Local follow-up: connected rivers, tributaries, lakes, coasts/islands and forest
 districts on every size, with staged map-select previews. Expanded maps add
