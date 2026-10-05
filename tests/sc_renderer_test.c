@@ -49,6 +49,32 @@ static void free_camera_test(void) {
         }
         assert(fabs(r->camera_x-start_x)<1e-7 && fabs(r->camera_y-start_y)<1e-7);
     }
+    /* Mouse anchoring uses the complete displayed canvas, including positions
+     * past the native 256-pixel area. It never moves/scales the HUD or changes
+     * native scrolling, and zooming back restores fractional camera offsets. */
+    const double anchors[][2]={{682.75,411.125},{94.25,83.5},{319.5,220.25}};
+    for(unsigned layout=0;layout<2;++layout)for(unsigned hud=0;hud<2;++hud)
+        for(unsigned a=0;a<3;++a) {
+        r->view=(ScViewport){730,492,layout?237:0,layout?134:0,1,0};r->zoom_hud=hud;
+        ScRendererResetCamera(r);r->map_zoom=.25;ScRendererPan(r,.125,.375);
+        double start_x=r->camera_x,start_y=r->camera_y;
+        double cx=anchors[a][0]-r->view.core_x-(hud?56:0);
+        double cy=anchors[a][1]-r->view.core_y-(hud?46:0);
+        double world_x=r->scroll_x-lround(r->camera_x)+r->camera_x+cx*4;
+        double world_y=r->scroll_y-lround(r->camera_y)+r->camera_y+cy*4;
+        ScViewport before=r->view;
+        const double z[]={.015625,1.3,4,.25};
+        for(unsigned i=0;i<4;++i) {
+            ScRendererZoomAt(r,z[i],anchors[a][0],anchors[a][1]);
+            double inverse=floor(65536/z[i]+.5)/65536;
+            assert(fabs(r->scroll_x+cx*inverse-world_x)<.51);
+            assert(fabs(r->scroll_y+cy*inverse-world_y)<.51);
+            assert(r->native_scroll_x==2400 && r->native_scroll_y==2400);
+            assert(!memcmp(&r->view,&before,sizeof before));
+        }
+        assert(fabs(r->camera_x-start_x)<1e-7 && fabs(r->camera_y-start_y)<1e-7);
+    }
+    r->zoom_hud=true;
     /* At every zoom, the far-right/bottom map edge can move a full 64
      * canvas pixels inside the viewport, including centered Fit layouts. */
     const double zooms[]={1,.25,.015625,448.0/65536};

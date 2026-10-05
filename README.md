@@ -33,11 +33,13 @@ the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) an
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 19 is one portable Windows EXE; run it and select your own clean US ROM.
+Beta 20 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution
-path. Beta 19 executes the game through compiled C and removes the 65816
+path. Beta 20 anchors Ctrl+wheel zoom to the actual mouse pointer in the city
+and map preview while retaining fixed HUD/menu sizes. Beta 19 introduced
+compiled C game execution and removed the 65816
 interpreter from the release executable. Register and save-state layouts,
 memory access order and device clocks remain compatible. The independent
 interpreter is available only in explicit reference builds for testing.
@@ -77,7 +79,7 @@ Beta 18 also offers F12 LAND GENERATION styles: Native,
 Procedural (the earlier generator), Islands, Lakes, Rivers and Fractal.
 Native remains the default; the choice applies to newly generated maps.
 Five-digit map-number editing waits until the mouse leaves the arrow area
-before regenerating. Ctrl+wheel zooms around the view's center, and fused
+before regenerating. Ctrl+wheel zooms around the mouse pointer, and fused
 native construction loops accelerate large successful rectangle fills.
 Setup-menu lettering changes together with its sprite list to avoid flashes
 of mismatched text between pages. Map previews stay sharp through NEXT,

@@ -8263,6 +8263,34 @@ static ScRect map_selection_preview_rect(ScViewport v,int dw,int dh) {
   }
   return SC_RECT(s_destination.x+(v.core_x+48)*sx,s_destination.y+(v.core_y+88)*sy,120*sx,100*sy);
 }
+static void zoom_event_pointer(const SDL_Event *event,double *x,double *y) {
+#if SNESRECOMP_SDL3
+  if(event->type==SDL_MOUSEWHEEL) {*x=event->wheel.mouse_x;*y=event->wheel.mouse_y;return;}
+  float mx,my;SDL_GetMouseState(&mx,&my);
+#else
+#if SDL_VERSION_ATLEAST(2,26,0)
+  if(event->type==SDL_MOUSEWHEEL) {*x=event->wheel.mouseX;*y=event->wheel.mouseY;return;}
+#endif
+  int mx,my;SDL_GetMouseState(&mx,&my);
+#endif
+  *x=mx;*y=my;
+}
+static void city_zoom_at_pointer(SDL_Window *window,SDL_Renderer *renderer,
+                                 const SDL_Event *event,double factor) {
+  int ww,wh,dw,dh;SDL_GetWindowSize(window,&ww,&wh);SDL_GetRendererOutputSize(renderer,&dw,&dh);
+  ScViewport current=s_custom_video.enabled?s_custom_renderer.view:ScVideoViewport(&s_custom_video,dw,dh);
+  double mx,my,x,y;zoom_event_pointer(event,&mx,&my);
+  /* Read the raw displayed canvas, not the SNES cursor or relocated HUD
+   * hitboxes. Each event gets its own anchor, even within the same frame. */
+  if(!ScVideoWindowToCanvas(current,ScVideoDestination(current,dw,dh),ww,wh,dw,dh,mx,my,&x,&y))return;
+  if(!ScVideoZoom(&s_custom_video,current,dw,dh,factor))return;
+  ScRendererZoomAt(&s_custom_renderer,s_custom_video.map_zoom,x,y);
+  if(getenv("SC_MOUSE_PAN_DIAG"))fprintf(stderr,"[zoom anchor] canvas %.4f,%.4f zoom %.6f\n",x,y,s_custom_video.map_zoom);
+  if(s_ws_extra) {
+    s_ws_extra=0;s_host_map=false;s_video_w=kVideoWidth;s_video_pitch=kVideoWidth*4;
+    PpuSetExtraSpace(g_ppu,0);PpuBeginDrawing(g_ppu,s_video_pixels,(size_t)s_video_pitch,s_render_flags);
+  }
+}
 static void draw_map_selection_preview(SDL_Renderer *renderer,ScViewport v) {
   ScMapPreview *p=&s_custom_renderer.map_preview;
   if(!p->active || !p->source || !s_custom_renderer.map_preview_frame)return;
@@ -11204,10 +11232,10 @@ int main(int argc, char **argv) {
       memcpy(pc_begin,s_pc_profile_ops,sizeof pc_begin);
     }
     if(perf_on) memset(perf_current,0,sizeof perf_current);
-    double zoom_factor=1;
     SDL_Event ev;
     /* Owned regression windows exercise the actual SDL wheel/pinch routing.
-     * SC_ZOOM_EVENTS=tick:kind:amount:ctrl,...; kind is w (wheel) or p (pinch).
+     * SC_ZOOM_EVENTS=tick:kind:amount:ctrl[:window_x:window_y],...;
+     * kind is w (wheel) or p (pinch).
      * This does not move the system pointer or affect another application's
      * input. Absent the test variable, the block stays inactive. */
     {
@@ -11218,6 +11246,9 @@ int main(int argc, char **argv) {
       if(events) {
         const char *cursor=events;unsigned at,ctrl;char kind;double amount;int used;
         while(sscanf(cursor,"%u:%c:%lf:%u%n",&at,&kind,&amount,&ctrl,&used)==4) {
+          double px,py;SDL_Event pointer_event={0};zoom_event_pointer(&pointer_event,&px,&py);
+          int extended;
+          if(sscanf(cursor,"%u:%c:%lf:%u:%lf:%lf%n",&at,&kind,&amount,&ctrl,&px,&py,&extended)==6)used=extended;
           if(at==tick && isfinite(amount)) {
             SDL_Event gesture={0};
             if(kind=='w') {
@@ -11225,6 +11256,11 @@ int main(int argc, char **argv) {
               gesture.type=SDL_MOUSEWHEEL;
               gesture.wheel.windowID=SDL_GetWindowID(window);
               gesture.wheel.y=fmax(-32,fmin(32,amount));
+#if SNESRECOMP_SDL3
+              gesture.wheel.mouse_x=px;gesture.wheel.mouse_y=py;
+#elif SDL_VERSION_ATLEAST(2,26,0)
+              gesture.wheel.mouseX=px;gesture.wheel.mouseY=py;
+#endif
 #if !SNESRECOMP_SDL3 && SDL_VERSION_ATLEAST(2,0,18)
               gesture.wheel.preciseY=(float)amount;
 #endif
@@ -11322,11 +11358,17 @@ int main(int argc, char **argv) {
         double amount=ev.wheel.y;
 #endif
         if(ev.wheel.direction==SDL_MOUSEWHEEL_FLIPPED)amount=-amount;
-        double x=.5,y=.5;
+        int ww,wh,dw,dh;SDL_GetWindowSize(window,&ww,&wh);SDL_GetRendererOutputSize(renderer,&dw,&dh);
+        if(ww<=0 || wh<=0)continue;
+        ScRect rect=map_selection_preview_rect(s_custom_renderer.view,dw,dh);
+        double mx,my;zoom_event_pointer(&ev,&mx,&my);
+        double x=(mx*dw/ww-rect.x)/rect.w,y=(my*dh/wh-rect.y)/rect.h;
+        if(!isfinite(x) || !isfinite(y) || x<0 || x>=1 || y<0 || y>=1)continue;
         if(isfinite(amount))sc_mapgen_preview_zoom(&s_custom_renderer.map_preview,
             pow(1.25,fmax(-32,fmin(32,amount))),x,y);
-        if(getenv("SC_MAP_PREVIEW_DIAG"))fprintf(stderr,"[map preview] zoom %.4f center %.1f,%.1f\n",
-            s_custom_renderer.map_preview.zoom,s_custom_renderer.map_preview.center_x,s_custom_renderer.map_preview.center_y);
+        if(getenv("SC_MAP_PREVIEW_DIAG"))fprintf(stderr,"[map preview] zoom %.4f center %.4f,%.4f anchor %.4f,%.4f size %u,%u\n",
+            s_custom_renderer.map_preview.zoom,s_custom_renderer.map_preview.center_x,s_custom_renderer.map_preview.center_y,
+            x,y,s_custom_renderer.map_preview.width,s_custom_renderer.map_preview.height);
         continue;
       }
       if(!s_menu_open && !s_build_active && !s_build_pending && !s_clip_drag && !s_clip_pending && host_map_screen_live() &&
@@ -11340,12 +11382,12 @@ int main(int argc, char **argv) {
           double amount=ev.wheel.y;
 #endif
           if(ev.wheel.direction==SDL_MOUSEWHEEL_FLIPPED) amount=-amount;
-          if(isfinite(amount)) zoom_factor*=pow(1.125,fmax(-32,fmin(32,amount)));
+          if(isfinite(amount))city_zoom_at_pointer(window,renderer,&ev,pow(1.125,fmax(-32,fmin(32,amount))));
           continue;
         }
 #if SNESRECOMP_SDL3 && SDL_VERSION_ATLEAST(3,4,0)
         if(ev.type==SDL_EVENT_PINCH_UPDATE) {
-          if(isfinite(ev.pinch.scale) && ev.pinch.scale>0) zoom_factor*=ev.pinch.scale;
+          if(isfinite(ev.pinch.scale) && ev.pinch.scale>0)city_zoom_at_pointer(window,renderer,&ev,ev.pinch.scale);
           continue;
         }
 #endif
@@ -11568,18 +11610,6 @@ int main(int argc, char **argv) {
       SDL_MaximizeWindow(window);
       if(!ScVideoSave(&s_custom_video,s_video_config))
         fprintf(stderr,"settings: could not save fit-to-screen preference\n");
-    }
-    if(zoom_factor!=1) {
-      int zoom_w=0,zoom_h=0;SDL_GetRendererOutputSize(renderer,&zoom_w,&zoom_h);
-      ScViewport current=s_custom_video.enabled?s_custom_renderer.view:
-          ScVideoViewport(&s_custom_video,zoom_w,zoom_h);
-      if(ScVideoZoom(&s_custom_video,current,zoom_w,zoom_h,zoom_factor)) {
-        ScRendererZoom(&s_custom_renderer,s_custom_video.map_zoom);
-        if(s_ws_extra) {
-          s_ws_extra=0;s_host_map=false;s_video_w=kVideoWidth;s_video_pitch=kVideoWidth*4;
-          PpuSetExtraSpace(g_ppu,0);PpuBeginDrawing(g_ppu,s_video_pixels,(size_t)s_video_pitch,s_render_flags);
-        }
-      }
     }
     s_custom_renderer.map_zoom=s_custom_video.map_zoom>0?s_custom_video.map_zoom:1;
     {const char *e=getenv("SC_CITY_ZOOM");if(e && atof(e)>0)s_custom_renderer.map_zoom=atof(e);}

@@ -57,7 +57,7 @@ BG2 layer, and the preview does not change city zoom or UI scale.
 NEXT regenerates on release; map-number clicks regenerate once the pointer
 leaves the shared five-digit arrow area. All five digits appear from entry,
 using the original font, counter cells and No. label. Ctrl+wheel zooms around
-the center of the city view or preview, keeping the HUD at its existing size.
+the mouse pointer in the city view or preview, keeping the HUD at its existing size.
 The display-resolution preview remains in place during pending NEXT/number
 edits and selector entry/exit frames. The visible panel is identified before
 scanout so a changed screen state cannot expose the coarse native preview.

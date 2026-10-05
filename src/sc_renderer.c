@@ -1185,18 +1185,21 @@ void ScRendererResetCamera(ScRenderer *r) {
     r->scroll_x-=(int)lround(r->camera_x);r->scroll_y-=(int)lround(r->camera_y);
     r->camera_x=r->camera_y=0;r->object_grid_valid=false;
 }
-void ScRendererZoom(ScRenderer *r,double zoom) {
-    if(!isfinite(zoom) || zoom<=0)return;
+void ScRendererZoomAt(ScRenderer *r,double zoom,double canvas_x,double canvas_y) {
+    if(!isfinite(zoom) || zoom<=0 || !isfinite(canvas_x) || !isfinite(canvas_y))return;
     unsigned old_step=zoom_step(r);
     int old_x=(int)lround(r->camera_x),old_y=(int)lround(r->camera_y);
     r->map_zoom=zoom;
     double delta=((double)old_step-zoom_step(r))/65536;
-    double x=r->view.width*.5-r->view.core_x-(r->zoom_hud?56:0);
-    double y=r->view.height*.5-r->view.core_y-(r->zoom_hud?46:0);
+    double x=canvas_x-r->view.core_x-(r->zoom_hud?56:0);
+    double y=canvas_y-r->view.core_y-(r->zoom_hud?46:0);
     r->camera_x+=x*delta;r->camera_y+=y*delta;
     r->scroll_x+=(int)lround(r->camera_x)-old_x;
     r->scroll_y+=(int)lround(r->camera_y)-old_y;
     r->object_grid_valid=false;
+}
+void ScRendererZoom(ScRenderer *r,double zoom) {
+    ScRendererZoomAt(r,zoom,r->view.width*.5,r->view.height*.5);
 }
 void ScRendererPan(ScRenderer *r,double dx,double dy) {
     if(!isfinite(dx) || !isfinite(dy) || (!dx && !dy)) return;

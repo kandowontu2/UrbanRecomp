@@ -31,6 +31,11 @@ void ScVideoCaptureScale(ScVideoSettings *settings, ScViewport view, int width, 
 bool ScVideoZoom(ScVideoSettings *settings,ScViewport current,int width,int height,double factor);
 bool ScVideoToGuest(ScViewport view, ScVideoRect destination, double x, double y,
                    int *guest_x, int *guest_y);
+/* Raw displayed canvas position, including widescreen and fractional pixels.
+ * Reject letterboxing; do not remap fixed HUD elements into SNES coordinates. */
+bool ScVideoWindowToCanvas(ScViewport view, ScVideoRect destination,
+                          int window_w,int window_h,int drawable_w,int drawable_h,
+                          double x,double y,double *canvas_x,double *canvas_y);
 /* SDL pointer coordinates are window units; destination is drawable pixels.
  * Use the rendered viewport (including its live menu anchor). */
 bool ScVideoWindowToGuest(ScViewport view, ScVideoRect destination,

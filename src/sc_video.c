@@ -168,6 +168,17 @@ bool ScVideoToGuest(ScViewport v, ScVideoRect d, double x, double y, int *gx, in
     if (gy) *gy = py;
     return px >= 0 && px < 256 && py >= 0 && py < 224;
 }
+bool ScVideoWindowToCanvas(ScViewport v,ScVideoRect d,
+                          int ww,int wh,int dw,int dh,
+                          double x,double y,double *cx,double *cy) {
+    if(ww<=0 || wh<=0 || dw<=0 || dh<=0 || d.w<=0 || d.h<=0 ||
+       !isfinite(x) || !isfinite(y))return false;
+    double px=x*dw/ww,py=y*dh/wh;
+    if(px<d.x || px>=d.x+d.w || py<d.y || py>=d.y+d.h)return false;
+    if(cx)*cx=(px-d.x)*v.width/d.w;
+    if(cy)*cy=(py-d.y)*v.height/d.h;
+    return true;
+}
 bool ScVideoWindowToGuest(ScViewport v, ScVideoRect d,
                           int ww, int wh, int dw, int dh,
                           double x, double y, int *gx, int *gy) {

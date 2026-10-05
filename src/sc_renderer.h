@@ -110,6 +110,9 @@ void ScRendererResetHistory(ScRenderer *r);
 void ScRendererPan(ScRenderer *r,double dx,double dy);
 /* Preserve the world position at the view's center, including fractional pan. */
 void ScRendererZoom(ScRenderer *r,double zoom);
+/* Preserve the world under a displayed canvas point; HUD remapping does not
+ * apply to this anchor. Fractional camera coordinates remain intact. */
+void ScRendererZoomAt(ScRenderer *r,double zoom,double canvas_x,double canvas_y);
 void ScRendererResetCamera(ScRenderer *r);
 /* Only an actual guest city-load entry may freeze the previous terrain. */
 void ScRendererBeginMapLoad(ScRenderer *r);

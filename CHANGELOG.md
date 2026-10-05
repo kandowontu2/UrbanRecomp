@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.2.0 Enhanced Beta 20 — 2026-10-05
+
+- Anchor city and map-preview Ctrl+wheel zoom to the actual mouse position,
+  preserving the terrain beneath it across widescreen, Fit and high-DPI
+  layouts. Keep HUD/menu scale fixed and ignore wheel input in letterboxing.
+
 ## 1.2.0 Enhanced Beta 19 — 2026-10-05
 
 - Remove the 65816 interpreter from the release executable. Execute all

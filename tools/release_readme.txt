@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 19 - NATIVE GAME EXECUTION
+URBAN RECOMP ENHANCED BETA 20 - POINTER-CENTERED ZOOM
 =============================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -45,7 +45,7 @@ up to 1,024 extra vehicles of each kind on 3840x3200. Rails, powered airports,
 and powered seaports with navigable water determine where they can appear.
 Their independent positions and headings use your cartridge's original art.
 Map previews draw sharply at display resolution. Ctrl+wheel zooms around
-the view's center, in both the city and preview; middle mouse drags.
+the mouse pointer, in both the city and preview; middle mouse drags.
 Click the preview to expand it across the
 window, then click again or press Esc to return to map selection.
 Tool-window shadows stay over the zoomed city without full-size building

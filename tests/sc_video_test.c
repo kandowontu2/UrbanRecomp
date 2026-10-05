@@ -113,6 +113,15 @@ int main(int argc,char **argv) {
             double py=d.y+(v.core_y+112.5)*d.h/v.height;
             assert(ScVideoToGuest(v,d,px,py,&x,&y) && x==128 && y==112);
             assert(!ScVideoToGuest(v,d,-100,-100,&x,&y));
+            /* Zoom anchors retain subpixel positions throughout the full
+             * canvas at 2x window/drawable scaling, outside native HUD space. */
+            double cx,cy,ax=v.width*.83+.125,ay=v.height*.71+.25;
+            double wx=(d.x+ax*d.w/v.width)*.5,wy=(d.y+ay*d.h/v.height)*.5;
+            assert(ScVideoWindowToCanvas(v,d,sizes[i][0],sizes[i][1],
+                sizes[i][0]*2,sizes[i][1]*2,wx,wy,&cx,&cy));
+            assert(fabs(cx-ax)<1e-8 && fabs(cy-ay)<1e-8);
+            assert(!ScVideoWindowToCanvas(v,d,sizes[i][0],sizes[i][1],
+                sizes[i][0]*2,sizes[i][1]*2,-1,-1,&cx,&cy));
         }
     }
     const int fixed[]={342,448,684};
