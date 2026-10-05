@@ -3,6 +3,19 @@ name: macOS native app
 on:
   workflow_dispatch:
     inputs:
+      source_ref:
+        description: Enhanced source branch, tag or commit to build
+        default: codex/placement-and-mouse-menus
+        required: true
+        type: string
+      runner:
+        description: Mac host for building both executable architectures
+        default: macos-15-intel
+        required: true
+        type: choice
+        options:
+          - macos-15-intel
+          - macos-15
       inputs_release:
         description: Temporary private draft release containing native sources and restored music
         required: true
@@ -22,7 +35,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner || 'macos-15-intel' }}
     timeout-minutes: 45
     env:
       GH_TOKEN: ${{ github.token }}
@@ -34,15 +47,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          ref: ${{ inputs.source_ref || github.ref }}
       - name: Fetch private build inputs
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$INPUTS_RELEASE" > "$RUNNER_TEMP/input-release.json"
-          asset=$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["draft"], "Build inputs must remain private"; print(next(a["id"] for a in r["assets"] if a["name"]=="macos-native-inputs.tar.gz"))' "$RUNNER_TEMP/input-release.json")
+          # Drafts are intentionally absent from the public tag lookup. The
+          # authenticated release list includes them for the repository owner.
+          gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --slurp > "$RUNNER_TEMP/input-release.json"
+          asset=$(python3 -c 'import json,sys,os; r=next(r for page in json.load(open(sys.argv[1])) for r in page if r["tag_name"]==os.environ["INPUTS_RELEASE"]); assert r["draft"], "Build inputs must remain private"; print(next(a["id"] for a in r["assets"] if a["name"]=="macos-native-inputs.tar.gz"))' "$RUNNER_TEMP/input-release.json")
           gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/macos-native-inputs.tar.gz"
           python3 tools/stage_macos_inputs.py "$RUNNER_TEMP/macos-native-inputs.tar.gz" --sha256 "$INPUTS_SHA256"
+      - uses: actions/cache@v4
+        id: sdl-cache
+        with:
+          path: |
+            mac-deps/SDL
+            mac-deps/sdl-install
+          key: macos15-sdl3-3.4.16-universal-static-11.0-v1
       - name: Build universal static SDL3
+        if: steps.sdl-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
