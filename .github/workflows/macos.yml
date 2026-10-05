@@ -38,8 +38,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$INPUTS_RELEASE" > "$RUNNER_TEMP/input-release.json"
-          asset=$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["draft"], "Build inputs must remain private"; print(next(a["id"] for a in r["assets"] if a["name"]=="macos-native-inputs.tar.gz"))' "$RUNNER_TEMP/input-release.json")
+          # Drafts are intentionally absent from the public tag lookup. The
+          # authenticated release list includes them for the repository owner.
+          gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --slurp > "$RUNNER_TEMP/input-release.json"
+          asset=$(python3 -c 'import json,sys,os; r=next(r for page in json.load(open(sys.argv[1])) for r in page if r["tag_name"]==os.environ["INPUTS_RELEASE"]); assert r["draft"], "Build inputs must remain private"; print(next(a["id"] for a in r["assets"] if a["name"]=="macos-native-inputs.tar.gz"))' "$RUNNER_TEMP/input-release.json")
           gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/macos-native-inputs.tar.gz"
           python3 tools/stage_macos_inputs.py "$RUNNER_TEMP/macos-native-inputs.tar.gz" --sha256 "$INPUTS_SHA256"
       - name: Build universal static SDL3
