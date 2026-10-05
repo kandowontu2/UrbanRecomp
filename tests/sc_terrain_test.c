@@ -19,7 +19,7 @@ static ScGpuTerrain *sharp_gpu;
 #endif
 static void sharp_zoom_test(void) {
     ScRenderer *r=calloc(1,sizeof *r);assert(r);r->view=(ScViewport){16,16,0,0,1,0};r->zoom_frame=true;
-    assert(ScTerrainResize(&r->terrain,16,16));assert(ScTerrainSpanWidth(&r->terrain,128));
+    assert(ScTerrainResize(&r->terrain,16,16));assert(ScTerrainSpanWidth(&r->terrain,SC_MAX_MAP_SPAN));
     ScTerrainFrame *f=&r->terrain;
     f->deferred=256;
     r->pixels=calloc(256,4);assert(r->pixels);

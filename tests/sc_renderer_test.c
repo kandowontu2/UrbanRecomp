@@ -32,21 +32,30 @@ static void free_camera_test(void) {
     assert(r->map_zoom==.25 && r->native_scroll_x==2400 && r->native_scroll_y==2400);
     /* At every zoom, the far-right/bottom map edge can move a full 64
      * canvas pixels inside the viewport, including centered Fit layouts. */
-    const double zooms[]={1,.25,.015625};
-    for(unsigned layout=0;layout<2;++layout)for(unsigned z=0;z<3;++z) {
-        int width=z==2?448:730,height=z==2?224:492;
+    const double zooms[]={1,.25,.015625,448.0/65536};
+    for(unsigned layout=0;layout<2;++layout)for(unsigned z=0;z<4;++z) {
+        int width=z>=2?448:730,height=z>=2?224:492;
         r->view=(ScViewport){width,height,layout?(width-256)/2:0,layout?(height-224)/2:0,1,0};
         r->map_zoom=zooms[z];ScRendererResetCamera(r);
         ScRendererPan(r,10000000,10000000);
-        double edge_x=r->view.core_x+56+(ScWorldWidth(world)*8-r->scroll_x-56)*r->map_zoom;
-        double edge_y=r->view.core_y+46+(ScWorldHeight(world)*8-r->scroll_y-46)*r->map_zoom;
-        assert(fabs(edge_x-(width-64))<1e-8 && fabs(edge_y-(height-64))<1e-8);
-        assert(r->map_zoom==zooms[z] && r->native_scroll_x==2400 && r->native_scroll_y==2400);
-        ScRendererPan(r,-10000000,-10000000);
+        double edge_x=r->view.core_x+56+(ScWorldWidth(world)*8.0-r->scroll_x-56)*r->map_zoom;
+        double edge_y=r->view.core_y+46+(ScWorldHeight(world)*8.0-r->scroll_y-46)*r->map_zoom;
         double left=r->zoom_hud && !r->view.core_x?56:56+(-r->view.core_x-56)/r->map_zoom;
         double top=r->zoom_hud && !r->view.core_y?46:46+(-r->view.core_y-46)/r->map_zoom;
-        assert(fabs((r->scroll_x+left)*r->map_zoom+64)<1e-8);
-        assert(fabs((r->scroll_y+top)*r->map_zoom+64)<1e-8);
+        double expected_x=fmin(width-64,r->view.core_x+56+(ScWorldWidth(world)*8+left-56)*r->map_zoom-64);
+        double expected_y=fmin(height-64,r->view.core_y+46+(ScWorldHeight(world)*8+top-46)*r->map_zoom-64);
+        double tolerance=r->map_zoom*.5+1e-8; /* subpixel camera, rounded world sampling */
+        if(fabs(edge_x-expected_x)>=tolerance || fabs(edge_y-expected_y)>=tolerance)
+            fprintf(stderr,"Pan layout=%u zoom=%g edge=%g,%g expected=%g,%g scroll=%d,%d\n",layout,r->map_zoom,edge_x,edge_y,expected_x,expected_y,r->scroll_x,r->scroll_y);
+        assert(fabs(edge_x-expected_x)<tolerance && fabs(edge_y-expected_y)<tolerance);
+        assert(r->map_zoom==zooms[z] && r->native_scroll_x==2400 && r->native_scroll_y==2400);
+        ScRendererPan(r,-10000000,-10000000);
+        double right=56+(width-r->view.core_x-56)/r->map_zoom;
+        double bottom=46+(height-r->view.core_y-46)/r->map_zoom;
+        double expected_left=fmin(-left,ScWorldWidth(world)*8-right)-64/r->map_zoom;
+        double expected_top=fmin(-top,ScWorldHeight(world)*8-bottom)-64/r->map_zoom;
+        assert(fabs(r->scroll_x-expected_left)<.5+1e-8);
+        assert(fabs(r->scroll_y-expected_top)<.5+1e-8);
     }
     free(r);free(world);
     puts("PASS: fractional host camera, no idle drift, preserved zoom/native camera and full 1920x1600/3840x3200 bounds");

@@ -65,7 +65,11 @@ static void check_zoom(void) {
         assert(ScVideoZoom(&s,after,w,h,2));assert(s.map_zoom==1);
         assert(ScVideoZoom(&s,after,w,h,1e-30));
         assert(s.map_zoom>0 && before.width/s.map_zoom<=SC_MAX_MAP_SPAN+1);
-        assert(before.width/s.map_zoom>=16384); /* full largest-city coverage */
+        assert(before.width/s.map_zoom>=32768);
+        /* The entire 3840x3200 city fits below/right of the fixed HUD,
+         * including at the ordinary 21:9 canvas size. */
+        assert((before.width-56)/s.map_zoom>=3840*8);
+        assert((before.height-46)/s.map_zoom>=3200*8);
         after=ScVideoViewport(&s,w,h);
         assert(after.width==before.width && after.height==before.height);
         assert(ScVideoZoom(&s,after,w,h,1e30));assert(s.map_zoom==4);
@@ -73,6 +77,11 @@ static void check_zoom(void) {
         assert(!ScVideoZoom(&s,after,w,h,NAN) && !ScVideoZoom(&s,after,w,h,0));
         assert(!ScVideoZoom(&s,after,0,h,2));assert(!memcmp(&s,&valid,sizeof s));
     }
+    ScVideoSettings s;ScVideoDefaults(&s);
+    ScViewport v=ScVideoViewport(&s,1024,768);
+    assert(ScVideoZoom(&s,v,1024,768,1e-30));
+    assert((v.width-56)/s.map_zoom>=3840*8 && (v.height-46)/s.map_zoom>=3200*8);
+    assert(!ScVideoZoom(&s,v,1024,768,.5)); /* stays at the new safe limit */
 }
 
 int main(int argc,char **argv) {

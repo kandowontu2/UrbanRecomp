@@ -2,6 +2,11 @@
 
 ## Unreleased — local terrain, mouse, placement and city-entry fixes
 
+- Extend city zoom-out by another factor of two, with up to 65536 native
+  pixels of terrain across the view. The complete 3840x3200 map can fit at
+  once in the default widescreen view and Fit to Screen; HUD, menus and
+  minimap retain their normal size and terrain keeps nearest sampling.
+
 - Scale extra trains, aircraft, ships and helicopters with expanded-map area:
   one eligible vehicle of each kind per 120x100 district, up to 1,024 of each
   on 3840x3200. Trains follow rails; aircraft require powered airports; ships

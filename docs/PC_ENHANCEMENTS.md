@@ -662,9 +662,10 @@ Zoom reveals more land when reducing scale and keeps the complete native HUD
 visible at the upper limit. Geometry checks cover DPI, centered views, bounds
 and pointer mapping. Hardware touchpad behavior has not been verified locally.
 
-Enhanced Beta 14 allows terrain spanning up to 32768x32768 native pixels,
-separately from the canvas size. This can show the entire 1920x1600 test city
-in a widescreen window. HUD, toolbox, overview maps and menus retain their
+The local zoom follow-up allows terrain spanning up to 65536 native pixels
+across the view, twice the previous limit, separately from the canvas size.
+This can show the entire 3840x3200 map in the default widescreen view and
+Fit to Screen. HUD, toolbox, overview maps and menus retain their
 normal size. Keyboard and mouse edge scrolling, toolbar popups, gifts and
 Dr. Wright messages preserve the selected terrain zoom. Mouse edge scrolling
 uses the free host camera, including Ctrl's 3x rate. The host camera allows

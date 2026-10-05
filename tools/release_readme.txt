@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 16 - LOCAL MAP EXPANSION / VEHICLE FLEET
+URBAN RECOMP ENHANCED BETA 16 - LOCAL EXTENDED CITY ZOOM
 ======================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -70,8 +70,9 @@ X10/X20/X50 temporarily override it. Calendar/budget scheduling remains normal.
 Older saves load at 1x and migrate automatically when saved with this build.
 Mouse drag panning shows the original-size minimap with the live camera marker.
 Fit to Screen increases visible land at the chosen tile scale.
-Ctrl+wheel zoom-out now exposes terrain spanning up to 32768x32768 native
-pixels, enough to fit the entire 1920x1600 test city in a widescreen window.
+Ctrl+wheel zoom-out now reaches twice as far, exposing terrain spanning up
+to 65536 native pixels across the view. The entire 3840x3200 map can fit in
+the default widescreen view and Fit to Screen. HUD and menus stay the same size.
 
 Hidden TEST CITY 3: press Ctrl+Shift+tilde on Resume Saved City to reveal
 the 1920x1600 developed test city. With no saved cities, the same shortcut
