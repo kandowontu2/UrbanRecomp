@@ -1,0 +1,99 @@
+name: macOS native app
+
+on:
+  workflow_dispatch:
+    inputs:
+      inputs_release:
+        description: Temporary private draft release containing native sources and restored music
+        required: true
+        type: string
+      inputs_sha256:
+        description: SHA-256 of macos-native-inputs.tar.gz
+        required: true
+        type: string
+      version:
+        description: Mac package version label
+        default: v1.2.0-enhanced.20
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUTS_RELEASE: ${{ inputs.inputs_release }}
+      INPUTS_SHA256: ${{ inputs.inputs_sha256 }}
+      PACKAGE_VERSION: ${{ inputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Fetch private build inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$INPUTS_RELEASE" > "$RUNNER_TEMP/input-release.json"
+          asset=$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["draft"], "Build inputs must remain private"; print(next(a["id"] for a in r["assets"] if a["name"]=="macos-native-inputs.tar.gz"))' "$RUNNER_TEMP/input-release.json")
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/macos-native-inputs.tar.gz"
+          python3 tools/stage_macos_inputs.py "$RUNNER_TEMP/macos-native-inputs.tar.gz" --sha256 "$INPUTS_SHA256"
+      - name: Build universal static SDL3
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mac-deps
+          git clone --depth 1 --branch release-3.4.16 https://github.com/libsdl-org/SDL.git mac-deps/SDL
+          cmake -S mac-deps/SDL -B mac-deps/sdl-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DSDL_SHARED=OFF -DSDL_STATIC=ON \
+            -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DCMAKE_INSTALL_PREFIX="$PWD/mac-deps/sdl-install"
+          cmake --build mac-deps/sdl-build --parallel 3
+          cmake --install mac-deps/sdl-build
+      - name: Build native universal game and host tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B mac-deps/game-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS_RELEASE='-O2 -DNDEBUG' \
+            -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_PREFIX_PATH="$PWD/mac-deps/sdl-install" -DSNESRECOMP_SDL_BACKEND=SDL3 \
+            -DSC_AOT=OFF -DSC_PROGRAM=ON -DSC_INTERPRETER_REFERENCE=OFF -DSC_LTO=OFF
+          cmake --build mac-deps/game-build --parallel 2 --target UrbanRecomp sc_video_test sc_renderer_test sc_scroll_renderer_test sc_terrain_test
+          ctest --test-dir mac-deps/game-build -R '^simcity_(video|renderer|scroll_renderer|deferred_terrain)$' --output-on-failure
+      - name: Package app and verify packaged startup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/package_macos.py "$PACKAGE_VERSION" --build-dir mac-deps/game-build --restored-music-dir music/restored
+          app="dist/macos-$PACKAGE_VERSION/UrbanRecomp.app"
+          plutil -lint "$app/Contents/Info.plist"
+          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/UrbanRecomp"
+          set +e
+          "$app/Contents/MacOS/UrbanRecomp" --no-settings > "$RUNNER_TEMP/startup.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/startup.log"
+          test "$status" -eq 1
+          grep -q 'no ROM' "$RUNNER_TEMP/startup.log"
+          grep -q '\[macOS\] saves/settings:' "$RUNNER_TEMP/startup.log"
+          gh release upload "$INPUTS_RELEASE" "dist/UrbanRecomp-$PACKAGE_VERSION-macos-universal.zip" "dist/UrbanRecomp-$PACKAGE_VERSION-macos-universal.zip.sha256" --repo "$GITHUB_REPOSITORY"
+      - name: Remove private inputs from runner
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          root=Path.cwd().resolve()
+          for rel in ('src/program_gen','music/restored'):
+              path=(root/rel).resolve()
+              assert path.is_relative_to(root)
+              shutil.rmtree(path,ignore_errors=True)
+          archive=Path(os.environ['RUNNER_TEMP'])/'macos-native-inputs.tar.gz'
+          archive.unlink(missing_ok=True)
+          PY

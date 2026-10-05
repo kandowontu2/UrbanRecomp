@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a universal macOS app packaging path for Apple Silicon and Intel,
+  including restored music, assets, credits and licenses. Bundled Mac builds
+  keep saves/settings in Application Support and locate assets in Resources.
+
 ## 1.2.0 Enhanced Beta 20 — 2026-10-05
 
 - Anchor city and map-preview Ctrl+wheel zoom to the actual mouse position,

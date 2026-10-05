@@ -23,6 +23,7 @@
  * explicitly at their call sites -- see runner/src/desktop/mmx23_host_main.inc
  * for how upstream does each one. */
 #include "sc_sdl_compat.h"
+#include "sc_macos.h"
 #include "sc_gpu_terrain.h"
 #include "sc_gpu_fields.h"
 #ifdef _WIN32
@@ -9919,6 +9920,7 @@ static int run_qualification(uint64_t frames) {
 }
 
 int main(int argc, char **argv) {
+  if(!ScMacPreparePaths(argc,argv))return 2;
   for (int i = 1; i + 1 < argc; ++i)
     if (!strcmp(argv[i], "--video-config")) s_video_config = argv[++i];
   if (!ScVideoLoad(&s_custom_video, s_video_config)) {

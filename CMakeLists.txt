@@ -65,6 +65,7 @@ endif()
 
 add_executable(UrbanRecomp
     src/main.c
+    src/sc_macos.c
     src/sc_world.c
     src/sc_world_guest.c src/sc_postpass.c src/sc_sweep.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c src/sc_infrastructure.c
     src/sc_journey.c
