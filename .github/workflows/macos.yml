@@ -58,7 +58,7 @@ jobs:
           asset=$(python3 -c 'import json,sys,os; r=next(r for page in json.load(open(sys.argv[1])) for r in page if r["tag_name"]==os.environ["INPUTS_RELEASE"]); assert r["draft"], "Build inputs must remain private"; print(next(a["id"] for a in r["assets"] if a["name"]=="macos-native-inputs.tar.gz"))' "$RUNNER_TEMP/input-release.json")
           gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/macos-native-inputs.tar.gz"
           python3 tools/stage_macos_inputs.py "$RUNNER_TEMP/macos-native-inputs.tar.gz" --sha256 "$INPUTS_SHA256"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: sdl-cache
         with:
           path: |
@@ -78,6 +78,13 @@ jobs:
             -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DCMAKE_INSTALL_PREFIX="$PWD/mac-deps/sdl-install"
           cmake --build mac-deps/sdl-build --parallel 3
           cmake --install mac-deps/sdl-build
+      - uses: actions/cache/save@v4
+        if: steps.sdl-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            mac-deps/SDL
+            mac-deps/sdl-install
+          key: macos15-sdl3-3.4.16-universal-static-11.0-v1
       - name: Build native universal game and host tests
         shell: bash
         run: |
@@ -87,7 +94,7 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DCMAKE_PREFIX_PATH="$PWD/mac-deps/sdl-install" -DSNESRECOMP_SDL_BACKEND=SDL3 \
             -DSC_AOT=OFF -DSC_PROGRAM=ON -DSC_INTERPRETER_REFERENCE=OFF -DSC_LTO=OFF
-          cmake --build mac-deps/game-build --parallel 2 --target UrbanRecomp sc_video_test sc_renderer_test sc_scroll_renderer_test sc_terrain_test
+          cmake --build mac-deps/game-build --parallel 4 --target UrbanRecomp sc_video_test sc_renderer_test sc_scroll_renderer_test sc_terrain_test
           ctest --test-dir mac-deps/game-build -R '^simcity_(video|renderer|scroll_renderer|deferred_terrain)$' --output-on-failure
       - name: Package app and verify packaged startup
         shell: bash
