@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <limits.h>
+static bool finder_startup;
 
 bool ScMacPreparePaths(int argc,char **argv) {
 #if SNESRECOMP_SDL3
@@ -32,10 +33,30 @@ bool ScMacPreparePaths(int argc,char **argv) {
         }
     }
     bool ok=chdir(data)==0;
-    if(ok)fprintf(stderr,"[macOS] saves/settings: %s\n",data);
+    if(ok) {
+        finder_startup=argc==1;
+        /* Finder hides stderr. Keep the latest launch log beside settings,
+         * while qualification and terminal commands preserve their output. */
+        if(finder_startup) {
+            FILE *log=fopen("urbanrecomp-startup.log","w");
+            if(log) {
+                fflush(stderr);
+                if(dup2(fileno(log),STDERR_FILENO)>=0)setvbuf(stderr,NULL,_IONBF,0);
+                fclose(log);
+            }
+        }
+        fprintf(stderr,"[macOS] saves/settings: %s\n",data);
+    }
     else fprintf(stderr,"Cannot open Mac save/settings directory: %s\n",data);
     SDL_free(data);return ok;
 }
+void ScMacStartupError(const char *message) {
+    fprintf(stderr,"%s\n",message);
+    if(finder_startup)SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+        "Urban Recomp could not start",message,NULL);
+}
 #else
 bool ScMacPreparePaths(int argc,char **argv) {(void)argc;(void)argv;return true;}
+#include <stdio.h>
+void ScMacStartupError(const char *message) {fprintf(stderr,"%s\n",message);}
 #endif

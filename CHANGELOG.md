@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Normalize optional copier headers before native ROM fingerprint checks,
+  matching the launcher's verification. Diagnose unreadable/unsupported ROMs
+  before startup, show Finder errors and preserve a Mac startup log.
 - Add a universal macOS app packaging path for Apple Silicon and Intel,
   including restored music, assets, credits and licenses. Bundled Mac builds
   keep saves/settings in Application Support and locate assets in Resources.

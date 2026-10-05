@@ -7705,6 +7705,13 @@ static uint8_t *read_file(const char *path, uint32_t *size_out) {
   return b;
 }
 
+static int startup_sdl_failure(const char *operation) {
+  char message[1200];
+  snprintf(message,sizeof message,"%s: %s",operation,SDL_GetError());
+  ScMacStartupError(message);
+  return 1;
+}
+
 /* â”€â”€ synthetic input injection for headless repro (mirrors the --input
  * flag in snesrecomp/cosim/ref_driver.c) -- lets a specific controller
  * press be reproduced deterministically at an exact frame, instead of
@@ -10318,8 +10325,8 @@ int main(int argc, char **argv) {
   if (!rom_path && ScFindRom(SC_ROM_FNV_US, s_found_rom, sizeof s_found_rom))
     rom_path = s_found_rom;
   if (!rom_path) {
-    fprintf(stderr, "no ROM: pass the path of your own copy, pick it in the "
-                    "launcher, or put it (any file name) in the working directory\n");
+    ScMacStartupError("no ROM: pass the path of your own copy, pick it in the "
+                      "launcher, or put it (any file name) in the working directory");
     return 1;
   }
 
@@ -10331,6 +10338,20 @@ int main(int argc, char **argv) {
   }
   uint32_t rom_size = 0;
   uint8_t *rom_data = read_file(rom_path, &rom_size);
+  if(!rom_data) {
+    char message[1400];
+    snprintf(message,sizeof message,"Cannot read ROM '%s'. Select your own clean SimCity SNES ROM in the launcher.",rom_path);
+    ScMacStartupError(message);
+    return 1;
+  }
+  /* The launcher verifies the cartridge body without an optional copier
+   * header. Use that same body for native profile selection and live reads;
+   * the player's file is unchanged. */
+  if(rom_size>512 && rom_size%1024==512) {
+    rom_size-=512;
+    memmove(rom_data,rom_data+512,rom_size);
+    fprintf(stderr,"rom: removed 512-byte copier header in memory\n");
+  }
   s_rom_data = rom_data; s_rom_size = rom_size;
   /* Region report + AOT fingerprint guard.
    *
@@ -10355,8 +10376,11 @@ int main(int argc, char **argv) {
     bool compiled_rom=ScProgramSelectRom(fp);
 #ifdef SC_NATIVE_ONLY
     if(!compiled_rom) {
-      fprintf(stderr,"No compiled native profile for cartridge fingerprint %08x. "
-          "Generate its verified regional profile before running this native-only build.\n",fp);
+      char message[512];
+      snprintf(message,sizeof message,"No compiled native profile for cartridge fingerprint %08x. "
+          "Select a clean supported SimCity SNES ROM. Patched ROMs are not supported; the restored music is already bundled.",fp);
+      ScMacStartupError(message);
+      free(rom_data);s_rom_data=NULL;s_rom_size=0;
       return 1;
     }
 #endif
@@ -10661,11 +10685,6 @@ int main(int argc, char **argv) {
                     "(entry I_RESET_M1X1)\n");
   }
 #endif
-  if (!rom_data) {
-    fprintf(stderr, "cannot read ROM '%s'\n", rom_path);
-    return 1;
-  }
-
   /* REMOVED: the "D-pad bug family" ROM patches (11 sites, ~470 lines).
    *
    * They never should have existed. The runner returned the two halves of
@@ -10838,7 +10857,9 @@ int main(int argc, char **argv) {
   cart_set_master_clock_source(g_snes->cart, &g_master_cycles);
   g_ppu = g_snes->ppu;
   if (!snes_loadRom(g_snes, rom_data, (int)rom_size)) {
-    fprintf(stderr, "loadRom failed for '%s'\n", rom_path);
+    char message[1400];
+    snprintf(message,sizeof message,"Could not load cartridge '%s'.",rom_path);
+    ScMacStartupError(message);
     return 1;
   }
   /* cart_init() copies the ROM, so confirm the translation survived into
@@ -11070,8 +11091,7 @@ int main(int argc, char **argv) {
 #else
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
 #endif
-    fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
-    return 1;
+    return startup_sdl_failure("SDL_Init failed");
   }
 #if SNESRECOMP_SDL3
   const SDL_WindowFlags window_flags = s_fullscreen ? SDL_WINDOW_FULLSCREEN : 0;
@@ -11082,7 +11102,7 @@ int main(int argc, char **argv) {
   SDL_Window *window = snesrecomp_sdl_create_window(
       "Urban Recomp", s_window_width, s_window_height,
       SDL_WINDOW_RESIZABLE | window_flags);
-  if (!window) { fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError()); return 1; }
+  if (!window) return startup_sdl_failure("SDL_CreateWindow failed");
   ScSetWindowIcon(window);
   /* No SDL_RENDERER_PRESENTVSYNC: on some hosts (observed under a VM) the
    * driver's vsync wait blocks for longer than one real display refresh
@@ -11095,13 +11115,14 @@ int main(int argc, char **argv) {
   /* vsync off deliberately -- see the comment above; pacing is manual. */
   SDL_Renderer *renderer = ScGpuTerrainRenderer(window);
   if(!renderer) renderer = snesrecomp_sdl_create_renderer(window, false, false);
-  if (!renderer) { fprintf(stderr, "SDL_CreateRenderer failed: %s\n", SDL_GetError()); return 1; }
+  if (!renderer) return startup_sdl_failure("SDL_CreateRenderer failed");
   { const char *rn = snesrecomp_sdl_renderer_name(renderer);
     fprintf(stderr, "renderer: %s\n", rn ? rn : "?"); }
   SDL_Texture *texture = SDL_CreateTexture(
       renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
       s_custom_video.enabled ? s_custom_renderer.view.width : s_video_w,
       s_custom_video.enabled ? s_custom_renderer.view.height : kVideoHeight);
+  if(!texture)return startup_sdl_failure("SDL_CreateTexture failed");
 
   /* The framebuffer is ARGB8888 but the PPU never writes an alpha byte, so
    * every pixel carries A=0. Under SDL2 that was harmless: a texture defaults

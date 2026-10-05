@@ -9,6 +9,10 @@ Bundled apps store settings and saves in
 `~/Library/Application Support/UrbanRecomp/UrbanRecomp/`. Shipped assets are
 read from `Contents/Resources`; the app can remain in Applications or on a
 read-only volume. Command-line developer builds keep their existing paths.
+Finder launches write `urbanrecomp-startup.log` beside settings and saves.
+Unreadable or unsupported ROMs show a startup error instead of silently
+closing. Both headerless cartridges and images with a 512-byte copier header
+use the same verified native profile; the ROM file remains unchanged.
 
 Mac rendering uses Metal presentation and the CPU terrain/field fallback.
 The Vulkan compute shaders used on Windows do not have a Metal implementation.
