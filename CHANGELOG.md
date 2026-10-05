@@ -1,6 +1,6 @@
 # Enhanced fork changelog
 
-## Unreleased
+## 1.2.0 Enhanced Beta 20 — macOS startup revision — 2026-10-05
 
 - Normalize optional copier headers before native ROM fingerprint checks,
   matching the launcher's verification. Diagnose unreadable/unsupported ROMs
