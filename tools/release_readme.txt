@@ -1,5 +1,5 @@
-URBAN RECOMP ENHANCED - LOCAL TERRAIN AND CONSTRUCTION TEST
-======================================================
+URBAN RECOMP ENHANCED BETA 18 - SHARP PREVIEWS AND TERRAIN STYLES
+=============================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
 The runtime, assets, documentation, credits and all 19 restored songs are

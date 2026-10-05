@@ -33,11 +33,11 @@ the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) an
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 17 is one portable Windows EXE; run it and select your own clean US ROM.
+Beta 18 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution
-path. Native C simulation kernels retain compatibility fallbacks. Beta 17
+path. Native C simulation kernels retain compatibility fallbacks. Beta 18
 distributes development across city districts at Normal
 speed as well; its time allowance keeps development work bounded per frame.
 See the enhancement notes for current behavior and performance limits.
@@ -68,14 +68,15 @@ left to investigate, with the evidence already gathered for each.
 
 ## How it runs
 
-The current local build also offers F12 LAND GENERATION styles: Native,
+Beta 18 also offers F12 LAND GENERATION styles: Native,
 Procedural (the earlier generator), Islands, Lakes, Rivers and Fractal.
 Native remains the default; the choice applies to newly generated maps.
 Five-digit map-number editing waits until the mouse leaves the arrow area
 before regenerating. Ctrl+wheel zooms around the view's center, and fused
 native construction loops accelerate large successful rectangle fills.
 Setup-menu lettering changes together with its sprite list to avoid flashes
-of mismatched text between pages.
+of mismatched text between pages. Map previews stay sharp through NEXT,
+number editing, generation and setup transitions.
 
 Enhanced Windows releases run compatible ROM-generated C alongside connected
 native C simulation routines over snesrecomp's PPU, APU, DMA and cartridge

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.2.0 Enhanced Beta 18 — 2026-10-04
+
 - Keep the display-resolution map preview visible while NEXT is held, map
   numbers are dirty and the selector enters or exits. Latch the actual panel
   before scanout instead of exposing the coarse native preview when the
