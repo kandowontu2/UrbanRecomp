@@ -103,7 +103,7 @@ jobs:
           python3 tools/package_macos.py "$PACKAGE_VERSION" --build-dir mac-deps/game-build --restored-music-dir music/restored
           app="dist/macos-$PACKAGE_VERSION/UrbanRecomp.app"
           plutil -lint "$app/Contents/Info.plist"
-          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/UrbanRecomp"
+          lipo "$app/Contents/MacOS/UrbanRecomp" -verify_arch arm64 x86_64
           set +e
           "$app/Contents/MacOS/UrbanRecomp" --no-settings > "$RUNNER_TEMP/startup.log" 2>&1
           status=$?
