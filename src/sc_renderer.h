@@ -49,6 +49,8 @@ typedef struct ScRenderer {
     ScViewport view;
     ScViewport gameplay_view; /* configured HUD anchor; menus are centered */
     double map_zoom;
+    bool focus_pending,focus_tracking;
+    double focus_x,focus_y;
     bool zoom_frame, zoom_hud, land_view_frame;
     uint32_t *pixels;
     ScTerrainFrame terrain;
@@ -72,6 +74,8 @@ typedef struct ScRenderer {
     bool clipboard_cursor;
     bool clipboard_font_valid;
     uint8_t clipboard_font[128][16]; /* original 8x8 adviser lettering */
+    uint8_t minimap_font[40][8]; /* original four-pixel city-name lettering */
+    bool minimap_font_valid;
     int pointer_x, pointer_y; /* full canvas position, relative to the native anchor */
     bool menu_pointer_active;
     int menu_pointer_x,menu_pointer_y; /* scenario pointer can enter wide margins */
@@ -124,6 +128,8 @@ void ScRendererZoom(ScRenderer *r,double zoom);
  * apply to this anchor. Fractional camera coordinates remain intact. */
 void ScRendererZoomAt(ScRenderer *r,double zoom,double canvas_x,double canvas_y);
 void ScRendererResetCamera(ScRenderer *r);
+void ScRendererCenterWorld(ScRenderer *r,double x,double y);
+void ScRendererFocusWorld(ScRenderer *r,double x,double y);
 /* Only an actual guest city-load entry may freeze the previous terrain. */
 void ScRendererBeginMapLoad(ScRenderer *r);
 /* Called AFTER the stock PPU has drawn a line, BEFORE the guest advances.
@@ -154,6 +160,8 @@ void ScRendererClipboardRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,
 void ScRendererDisasterRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,const uint8_t *ram,int y,uint32_t *out);
 void ScRendererHudPointer(ScRenderer *r,const Ppu *ppu);
 uint32_t ScRendererHandPixel(const Ppu *ppu,int x,int y);
+uint32_t ScRendererCityHandPixel(const Ppu *ppu,int x,int y);
+bool ScRendererMinimapFont(ScRenderer *r,const uint8_t *tiles,size_t size);
 /* Distinguish the visible map panel from waiting/name pages during setup. */
 bool ScRendererMapPreviewVisible(const Ppu *ppu,const uint8_t *ram);
 void ScRendererMapGenerationRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,

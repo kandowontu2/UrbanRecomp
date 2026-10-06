@@ -3,7 +3,7 @@
 ## Beta 22 largest-map fast-forward — 2026-10-06
 
 The largest generated Test City 3 has 664,935 R/C/I zones. With 50x development,
-held Tab (six complete guest frames per display), and 1/128 city zoom, three
+held Tab (an explicitly fixed six-frame test cohort), and 1/128 city zoom, three
 alternating reference and optimized replays each advanced 300 guest frames and
 presented 50 frames. SDL's dummy software renderer disabled GPU terrain and
 compute; the normal dedicated music worker stayed enabled. Per-kernel timers
@@ -16,8 +16,12 @@ were disabled during these measurements.
 
 This is a modest 9.5% reduction in simulation time and about 7.2% more extra
 attempts per second on this machine. It does not establish 60 FPS or an actual
-50x development rate on the largest map. Complete fast-forward cohorts, the
-native calendar and each city's saved development speed remain intact.
+50x development rate on the largest map. Production now caps busy cohorts at
+roughly 80ms plus one final complete frame and checks Tab release between guest
+frames. This bounds event-polling delay without interrupting a guest frame,
+altering derived-field clocks, or changing the saved development speed. The
+SC_TAB_TEST_BATCH replay override retains fixed cohorts for exact comparisons.
+A single costly simulation frame can still exceed that time budget.
 
 The optimization connects shared arithmetic and electrical traversal to the
 native city loop. Only electrical traversal receives a bounded allowance for

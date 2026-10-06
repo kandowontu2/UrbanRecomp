@@ -8,6 +8,8 @@ typedef struct {
     uint64_t ordinary_capacity;
 } ScTestCityStats;
 void ScTestCityConfigureStart(uint8_t *ram);
+void ScTestCityRepairWires(ScWorld *world,uint8_t *ram,const uint8_t *rom,size_t size);
+void ScTestCityRepairName(uint8_t *ram);
 bool ScTestCityGenerate(ScWorld *world,ScPopulation *population,uint8_t *ram,
     const uint8_t *rom,size_t size,unsigned map_size,unsigned development_speed,ScTestCityStats *stats);
 void ScTestCityInspect(const ScWorld *world,const ScPopulation *population,

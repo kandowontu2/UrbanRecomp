@@ -716,7 +716,7 @@ target_include_directories(UrbanRecompMathTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
 
 add_executable(UrbanRecompMouseUiTest EXCLUDE_FROM_ALL tests/sc_mouse_ui_test.c src/sc_mouse_ui.c)
-add_executable(UrbanRecompDebugGiftTest EXCLUDE_FROM_ALL tests/sc_debug_gift_test.c src/sc_debug_gift.c)
+add_executable(UrbanRecompDebugGiftTest EXCLUDE_FROM_ALL tests/sc_debug_gift_test.c src/sc_debug_gift.c src/sc_decomp.c)
 target_include_directories(UrbanRecompDebugGiftTest PRIVATE src)
 if(MSVC)
     target_compile_options(UrbanRecompDebugGiftTest PRIVATE /UNDEBUG)

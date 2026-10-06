@@ -38,6 +38,10 @@ int main(int argc,char **argv) {
     assert(argc==3);FILE *f=fopen(argv[1],"rb");assert(f);assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);
     assert(ScProgramSelectRom(0xec01686a));
     ScPopulation p,q;ScTestCityStats stats;
+    const uint8_t old_name[]={0x1d,0x0e,0x1c,0x1d,0x2f,0x0c,0x12,0x1d,0x22};
+    ram[0xb5b]=9;memcpy(ram+0xb5c,old_name,9);ScTestCityRepairName(ram);
+    assert(ram[0xb5b]==8 && ram[0xb60]==0x0c && ram[0xb63]==0x22);
+    ram[0xb5c]=0;ram[0xb5b]=9;ScTestCityRepairName(ram);assert(ram[0xb5b]==9 && !ram[0xb5c]);
     size_t size=ScTestCityRecordSize();uint8_t *record=malloc(size);assert(record);
     for(unsigned mode=0;mode<6;++mode) {
         memset(ram,0,sizeof ram);

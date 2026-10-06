@@ -135,6 +135,18 @@ int main(void) {
     p->vram[0]=0x0080; p->vram[7]=0x0100;
     for (int i=0;i<958;++i) word(rom,0x14f2d+i*2,0x300);
     static ScRenderer r; ScRendererInit(&r,rom,0x80000,true);
+    /* Keep minimap captions independent of guest CHR uploads, including
+     * gift icons that reuse the same tile memory. Copy the native 4px font. */
+    uint8_t minimap_tiles[(0x60+40)*32]={0};
+    for(unsigned ch=0;ch<40;++ch)for(unsigned y=0;y<8;++y)
+        minimap_tiles[(0x60+ch)*32+y*2+1]=(uint8_t)(((ch+y)&15)<<4|3);
+    assert(!ScRendererMinimapFont(&r,NULL,sizeof minimap_tiles));
+    assert(!ScRendererMinimapFont(&r,minimap_tiles,sizeof minimap_tiles-1));
+    assert(!r.minimap_font_valid);
+    assert(ScRendererMinimapFont(&r,minimap_tiles,sizeof minimap_tiles));
+    memset(minimap_tiles,0,sizeof minimap_tiles);
+    for(unsigned ch=0;ch<40;++ch)for(unsigned y=0;y<8;++y)
+        assert(r.minimap_font[ch][y]==((ch+y)&15));
     assert(ScRendererMapPixel(&r,p,ram,0,0)==0xffff0000);
     assert(ScRendererMapPixel(&r,p,ram,7,7)==0xff00ff00);
     /* Live DMA-style updates to either plane pair must invalidate decoded
@@ -476,6 +488,17 @@ int main(void) {
         assert(!ScRendererCityPoint(&r,ram,300,22,&wx,&wy));
     }
     r.zoom_frame=r.zoom_hud=false;r.map_zoom=1;
+    /* Disaster/Go-To focus is centered at every zoom without changing UI. */
+    r.zoom_frame=r.zoom_hud=true;
+    for(int z=0;z<8;++z) {
+        r.map_zoom=z?1.0/(1u<<z):1;
+        ScRendererCenterWorld(&r,28004,23004);
+        double zx=28004-r.scroll_x-r.scroll_adjust_x,zy=23004-r.scroll_y-r.scroll_adjust_y;
+        ScRendererProjectCity(&r,&zx,&zy);
+        double left=r.view.core_x?0:56,top=r.view.core_y?0:46;
+        assert(fabs(zx-(left+r.view.width)/2)<1 && fabs(zy-(top+r.view.height)/2)<1);
+    }
+    ScRendererResetCamera(&r);r.zoom_frame=r.zoom_hud=false;r.map_zoom=1;
     for (int width=448;width<=684;width+=236) for (int centered=0;centered<2;++centered)
     for (int dpi=1;dpi<=3;++dpi) {
         r.view=(ScViewport){width,300,centered?(width-256)/2:0,centered?38:0,1,0};

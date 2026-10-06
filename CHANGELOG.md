@@ -18,15 +18,27 @@
   map coordinates and run the native removal/radiation handler. Add temporary
   NUKE and UFO buttons as a third row in the original Disaster panel, with
   mouse/controller/keyboard selection; attacks start after closing the panel.
-- Add Shift-click on the toolbox ? image to open an all-15-gifts debug picker,
-  even when dimmed. Use normal gift placement and preserve queued earned gifts.
+- Add Shift-click on the toolbox ? image to open all 15 gifts, even when
+  dimmed. Keep the original two-column, 32px icon layout, lettering and hand
+  in a taller box, scrolling extra rows in smaller windows. Full-image targets,
+  directional selection and native placement preserve queued earned gifts.
+- Keep gift selection outlines and icon sprites intact when moving the mouse.
+  Use a separate hand and avoid duplicating the native HUD in the gift popup.
+- Center the host camera on native disaster/Go-To targets at the current zoom.
+  Anchor UFO destruction to its attack rather than a distant simulation sweep;
+  UFO and nuclear announcements can replace queued routine city advice.
+- Rejoin generated/saved Test City 3 power-line artwork from the completed
+  infrastructure with the native connectivity/junction tables.
+- Repair the old generated test-city name to the native eight-character
+  TESTCITY limit. Render minimap captions from the original immutable font,
+  preserving player-renamed cities and avoiding gift-graphics corruption.
 
-- Make held Tab advance six complete simulation frames per display update,
-  Shift+Tab advance 24, and Ctrl+Shift+Tab advance 96, including calendar, development, demand, services
-  and vehicles. Remove adaptive truncation that reduced busy cities to one
-  frame and almost no boost. Keep restored music at its real-time tempo and
-  report actual simulation speed against the native clock in the window title.
-  Actual acceleration remains limited by city workload and hardware.
+- Held Tab targets up to six complete guest frames per display, Shift+Tab 24,
+  and Ctrl+Shift+Tab 96, including calendar, development, demand, services and
+  vehicles. Check for Tab release between guest frames and yield busy cohorts
+  after roughly 80ms plus the final complete frame, preventing a long burst
+  from blocking input. Keep restored music at real-time tempo and report actual
+  simulation speed. City workload and hardware still limit acceleration/FPS.
 - Complete the largest map's terrain-quality and service fields with full-width
   coordinates. The former byte iterator wrapped before reaching the 480x400
   field boundary, stalling the calendar and subsequent density recalculation.

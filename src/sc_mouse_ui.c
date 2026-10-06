@@ -236,10 +236,18 @@ void ScMouseUiPointerUpdate(ScMouseUiPointer *p,bool inside,bool moved,bool pres
 int ScMouseUiCursorPlace(const uint8_t *ram,uint16_t *oam,uint8_t *high,int x,int y) {
     int slot=-1;
     unsigned mode=word(ram,0x14);
+    if((mode==0 || mode==0x8000) && word(ram,0x20d)==15 && ram[0xe3]==255 &&
+       !word(ram,0xd7) && !ram[0x391]) {
+        /* The native gift selection uses four outline pieces. Preserve the
+         * selection frame and draw a separate authentic city hand. */
+        slot=127;oam[slot*2+1]=0x31ec;
+        high[31]=(high[31]&63)|128;
+    }
     /* Screen 2 begins before the menu's CHR upload. The visible native
      * option arrow marks menu readiness; title/logo OAM must stay intact. */
     if(mode==2 && (oam[1]!=0x34b9 || (oam[0]>>8)>=224 || (high[0]&1)))return -1;
-    if(ScMouseUiArrowScreen(ram) || (mode>=10 && mode<=12)) {
+    if(slot>=0) { /* Dedicated gift hand above. */ }
+    else if(ScMouseUiArrowScreen(ram) || (mode>=10 && mode<=12)) {
         /* Scenario OAM begins with pins, followed by the selection frame.
          * Its unused final slot can show the shared native menu hand without
          * changing either the frame or the scroll inferred from those pins. */
@@ -248,7 +256,9 @@ int ScMouseUiCursorPlace(const uint8_t *ram,uint16_t *oam,uint8_t *high,int x,in
         x-=SC_MOUSE_HAND_HOT_X;y-=SC_MOUSE_HAND_HOT_Y;
     } else if((oam[1]==0x31ec || oam[1]==0x3f9e) &&
               (oam[0]>>8)<224 && !(high[0]&1))slot=0;
-    else for(int i=0;i<128;++i)
+    /* Gift pictures reuse $30c2. Only the dedicated modal cursor slot may
+     * be moved; searching every OBJ can tear a tile out of an icon. */
+    else for(int i=0;i<4;++i)
         if(oam[i*2+1]==0x30c2 && (oam[i*2]>>8)<224 &&
            !(high[i/4]&(1u<<(2*(i&3))))) {slot=i;break;}
     if(slot<0)return -1;

@@ -232,6 +232,10 @@ static void track_scroll(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     r->scroll_valid=true;r->native_scroll_x=x;r->native_scroll_y=y;
     r->scroll_x=x+(int)lround(r->camera_x);r->scroll_y=y+(int)lround(r->camera_y);
     r->scroll_h=h;r->scroll_v=v;
+    if(r->focus_pending || (r->focus_tracking && u16(ram,0x3fe))) {
+        ScRendererCenterWorld(r,r->focus_x,r->focus_y);r->focus_pending=false;
+    }
+    if(!u16(ram,0x3fe))r->focus_tracking=false;
 }
 static void track_objects(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     bool city=city_live(r,p,ram);
@@ -1209,8 +1213,26 @@ void ScRendererResetHistory(ScRenderer *r) {
     memset(r->changed_cells,0,sizeof r->changed_cells);
 }
 void ScRendererResetCamera(ScRenderer *r) {
+    r->focus_pending=r->focus_tracking=false;
     r->scroll_x-=(int)lround(r->camera_x);r->scroll_y-=(int)lround(r->camera_y);
     r->camera_x=r->camera_y=0;r->object_grid_valid=false;
+}
+void ScRendererFocusWorld(ScRenderer *r,double x,double y) {
+    r->focus_x=x;r->focus_y=y;r->focus_pending=r->focus_tracking=true;
+}
+void ScRendererCenterWorld(ScRenderer *r,double x,double y) {
+    double zoom=r->map_zoom>0?r->map_zoom:1;
+    double ox=r->zoom_hud?56:0,oy=r->zoom_hud?46:0;
+    double left=r->zoom_hud && !r->view.core_x?ox:-r->view.core_x;
+    double top=r->zoom_hud && !r->view.core_y?oy:-r->view.core_y;
+    double cx=(left+r->view.width-r->view.core_x)/2;
+    double cy=(top+r->view.height-r->view.core_y)/2;
+    int old_x=(int)lround(r->camera_x),old_y=(int)lround(r->camera_y);
+    r->camera_x=x-ox-(cx-ox)/zoom-r->native_scroll_x-r->scroll_adjust_x;
+    r->camera_y=y-oy-(cy-oy)/zoom-r->native_scroll_y-r->scroll_adjust_y;
+    r->scroll_x+=(int)lround(r->camera_x)-old_x;
+    r->scroll_y+=(int)lround(r->camera_y)-old_y;
+    r->object_grid_valid=false;r->scroll_repair=true;
 }
 void ScRendererZoomAt(ScRenderer *r,double zoom,double canvas_x,double canvas_y) {
     if(!isfinite(zoom) || zoom<=0 || !isfinite(canvas_x) || !isfinite(canvas_y))return;
@@ -1230,6 +1252,7 @@ void ScRendererZoom(ScRenderer *r,double zoom) {
 }
 void ScRendererPan(ScRenderer *r,double dx,double dy) {
     if(!isfinite(dx) || !isfinite(dy) || (!dx && !dy)) return;
+    r->focus_pending=r->focus_tracking=false;
     double zoom=r->map_zoom>0?r->map_zoom:1;
     unsigned width=r->world && r->world->active?ScWorldWidth(r->world):120;
     unsigned height=r->world && r->world->active?ScWorldHeight(r->world):100;
@@ -1495,7 +1518,7 @@ static void fill_flat_margins(ScRenderer *r) {
             y<r->view.core_y || y>=r->view.core_y+224)
             r->pixels[(size_t)y*r->view.width+x]=colors[best];
 }
-static void capture_advisor_row(ScRenderer *r,const Ppu *p,int y,const uint32_t *native) {
+static void capture_advisor_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y,const uint32_t *native) {
     if(r->native_line) {
         unsigned ay=y+r->view.core_y;
         unsigned policy=r->terrain.rows[ay].math&~255u;
@@ -1509,6 +1532,12 @@ static void capture_advisor_row(ScRenderer *r,const Ppu *p,int y,const uint32_t 
         if (page_pixels[x]) { if (x<first) first=x; last=x; }
     }
     for (int x=0;x<256;++x) {
+        /* Fixed city HUD is already composed at its host anchor. Retained
+         * native HUD sprites must not become a second caption in a popup. */
+        if(r->city_overlay_frame && r->zoom_hud && u16(ram,0x20d)==15 &&
+           ram[0xe3]==255 && !u16(ram,0xd7) && y<46) {
+            r->advisor_pixels[y*256+x]=0;continue;
+        }
         /* Black lettering can be transparent BG3 over the window-cleared
          * backdrop. It belongs to the opaque page too. Bound this fill by
          * the actual page span, so the city's clipped outer staging columns
@@ -1522,7 +1551,8 @@ static void capture_advisor_row(ScRenderer *r,const Ppu *p,int y,const uint32_t 
             (ScObjPixel(p,x)&255);
         if(obj && r->city_overlay_frame) {
             obj=false;
-            for(int slot=0;slot<109 && !obj;++slot) {
+            for(int slot=0;slot<128 && !obj;++slot) {
+                if(slot>=109 && !(slot==127 && p->oam[255]==0x31ec))continue;
                 int ox=sprite_x(p,slot);if(ox>=256)ox-=512;
                 int dy=y-(p->oam[slot*2]>>8);
                 if(dy>=0 && dy<64 && sprite_pixel(p,slot,x-ox,dy))obj=true;
@@ -2100,6 +2130,21 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
                 out[target]=composite_color(p,ci,ci<192?6:4,0,5,ox+x);
         }
     }
+    /* Draw the caption from its immutable native font. Cached frame CHR may
+     * still contain a previous name after snapshot/load or gift graphics DMA. */
+    if(r->minimap_font_valid && y>=46 && y<54) {
+        unsigned count=ram[0xb5b];if(count>8)count=8;
+        int left=core+198+shift;
+        for(int x=0;x<32;++x)if(left+x>=0 && left+x<r->view.width)out[left+x]=color(p,129);
+        for(unsigned i=0;i<count;++i) {
+            unsigned ch=ram[0xb5c+i];if(ch>=40)continue;
+            unsigned bits=r->minimap_font[ch][y-46];
+            for(unsigned x=0;x<4;++x) {
+                int at=left+(8-count)/2*4+i*4+x;
+                if((bits&(8u>>x)) && at>=0 && at<r->view.width)out[at]=color(p,132);
+            }
+        }
+    }
     if(r->world && r->world->land_type && y>=56 && y<81) {
         unsigned width=r->world->active?ScWorldWidth(r->world):120;
         unsigned height=r->world->active?ScWorldHeight(r->world):100;
@@ -2158,6 +2203,16 @@ static void map_preview_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y)
 uint32_t ScRendererHandPixel(const Ppu *p,int x,int y) {
     unsigned ci=sprite_word_pixel(p,0x3f9e,16,x,y);
     return ci?color(p,ci):0;
+}
+uint32_t ScRendererCityHandPixel(const Ppu *p,int x,int y) {
+    unsigned ci=sprite_word_pixel(p,0x31ec,16,x,y);
+    return ci?color(p,ci):0;
+}
+bool ScRendererMinimapFont(ScRenderer *r,const uint8_t *tiles,size_t size) {
+    if(!r || !tiles || size<(0x60+40)*32)return false;
+    for(unsigned ch=0;ch<40;++ch)for(unsigned y=0;y<8;++y)
+        r->minimap_font[ch][y]=tiles[(0x60+ch)*32+y*2+1]>>4;
+    r->minimap_font_valid=true;return true;
 }
 /* Resolve the device's backgrounds in native priority order, without copying
  * an OAM hand from the old caption position into the moved caption. */
@@ -2436,7 +2491,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
     measured=MEASURE_BEGIN(r);
     int first=(r->repaired_edges[line]&1) ? 8 : 0;
     int end=(r->repaired_edges[line]&2) ? 248 : 256;
-    if (r->advisor_frame || r->city_overlay_frame) capture_advisor_row(r,p,line,native);
+    if (r->advisor_frame || r->city_overlay_frame) capture_advisor_row(r,p,ram,line,native);
     else if(r->native_line) {
         unsigned policy=r->terrain.rows[line+r->view.core_y].math&~255u;
         capture_native_row(r,p,line+r->view.core_y,line+1);
@@ -2484,6 +2539,16 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         for(int y=SC_DISASTER_BUTTON_Y;y<SC_DISASTER_BUTTON_Y+SC_DISASTER_BUTTON_H+4;++y)
             ScRendererDisasterRow(r,p,r->view,ram,y,r->pixels+(size_t)(y+r->view.core_y)*r->view.width);
         city_pointer(r,p,ram);
+        /* A separate modal mouse hand must win over earlier gift-icon OAM.
+         * Compose it last, keeping the native four-piece selection outline. */
+        if(r->menu_pointer_active && u16(ram,0x20d)==15 && ram[0xe3]==255 &&
+           !u16(ram,0xd7) && !ram[0x391] && !PPU_forcedBlank(p))
+            for(int y=0;y<16;++y)for(int x=0;x<16;++x) {
+                unsigned ci=sprite_word_pixel(p,0x31ec,16,x,y);
+                int ax=r->view.core_x+r->menu_pointer_x+x,ay=r->view.core_y+r->menu_pointer_y+y;
+                if(ci && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
+                    r->pixels[(size_t)ay*r->view.width+ax]=color(p,ci);
+            }
         /* The selector's OAM starts with map pins, not a cursor. Use its
          * shared native menu hand across the entire expanded canvas. */
         /* Screen 2 also covers the title's exit fade. Its OBJ bank still

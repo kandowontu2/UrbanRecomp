@@ -86,7 +86,10 @@ static void meltdown(bool compiled,unsigned size,bool plant) {
         unsigned at=2*(yy*width+xx);radiation+=((tiles[at]|(unsigned)tiles[at+1]<<8)&1023)==0x364;
     }
     assert((radiation>0)==plant);assert((word(0xced)==8)==plant);
-    if(plant)assert((tiles[2*(y*width+x)]|((unsigned)tiles[2*(y*width+x)+1]<<8))!=0x27c);
+    if(plant) {
+        assert((tiles[2*(y*width+x)]|((unsigned)tiles[2*(y*width+x)+1]<<8))!=0x27c);
+        assert(word(0x397)==0x24); /* Manual disaster replaces queued advice. */
+    }
     assert(ScScenarioEventTick(&event,ram));
     assert(word(0x3e)==2 && word(0x40)==7 && word(0xc0d)==291);
     printf("PASS %s meltdown size=%u plant=%u radiation=%u steps=%u\n",compiled?"native":"oracle",size,plant,radiation,steps);
@@ -105,6 +108,36 @@ static void menu(void) {
     assert(ScScenarioMenuButton(44,112)==0 && ScScenarioMenuButton(117,135)==1);
     assert(ScScenarioMenuButton(80,124)<0 && ScScenarioMenuButton(62,136)<0);
 }
+static void ufo_damage(bool compiled,unsigned size) {
+    memset(ram,0,sizeof ram);memset(&guest,0,sizeof guest);ScWorldReset(world);
+    world->active=true;world->huge=size>=2;world->giant=size>=3;world->colossal=size>=4;world->mega=size>=5;
+    unsigned width=ScWorldWidth(world),height=ScWorldHeight(world),x=32,y=36;
+    unsigned at=2*(y*width+x);world->tiles[at]=0x62;
+    world->coord[2][0]=width-40;world->coord[2][1]=height-40;
+    ScScenarioEvent event={0};assert(ScScenarioEventArm(&event,ram,world,6,16));
+    put(0xaf9,x);put(0xaf7,y);
+    Interp816 *cpu=interp816_init(NULL,read_bus,write_bus);assert(cpu);
+    cpu->k=cpu->db=3;cpu->pc=0xa9c2;cpu->dp=0x1e00;cpu->sp=0x1ffc;
+    cpu->e=cpu->mf=cpu->xf=false;cpu->a=x|(y<<8);cpu->y=1;
+    put(0x1ffd,0x6fff);ram[0x1fff]=3;
+    unsigned steps=0;
+    while(cpu->pc!=0x7000) {
+        assert(++steps<20000);ScScenarioEventStep(&event,cpu,ram,world);
+        ScWorldGuestStep(world,cpu,ram);ScWorldGuestBegin(&guest,world,cpu,rom,sizeof rom);
+        if(compiled)assert(ScProgramStep(cpu));else interp816_runOpcode(cpu);
+    }
+    assert((world->tiles[at]|world->tiles[at+1]<<8)!=0x62);
+    assert(world->coord[2][0]==width-40 && world->coord[2][1]==height-40 && !event.damage_anchor);
+    /* The native UFO announcement must override routine queued advice too. */
+    cpu->pc=0xbe04;cpu->sp=0x1ffd;cpu->a=0x30;put(0x1ffe,0x6fff);put(0x395,1);put(0x397,6);
+    while(cpu->pc!=0x7000) {
+        assert(++steps<20000);ScScenarioEventStep(&event,cpu,ram,world);
+        if(compiled)assert(ScProgramStep(cpu));else interp816_runOpcode(cpu);
+    }
+    assert(word(0x397)==0x30 && word(0x395)==2);
+    printf("PASS %s UFO damage size=%u with distant simulation anchor and queued advice\n",compiled?"native":"oracle",size);
+    interp816_free(cpu);memset(&guest,0,sizeof guest);
+}
 int main(int argc,char **argv) {
     assert(argc==2);FILE *f=fopen(argv[1],"rb");assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);
@@ -118,5 +151,6 @@ int main(int argc,char **argv) {
     for(unsigned compiled=0;compiled<2;++compiled)for(unsigned size=0;size<6;++size) {
         meltdown(compiled,size,true);meltdown(compiled,size,false);
     }
+    for(unsigned compiled=0;compiled<2;++compiled)for(unsigned size=1;size<6;++size)ufo_damage(compiled,size);
     menu();free(world);puts("PASS temporary native Disaster menu selection/back/other-page isolation");
 }

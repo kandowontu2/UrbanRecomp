@@ -268,7 +268,7 @@ Keys that are not SNES buttons:
 |---|---|
 | Pan the free city camera | X + arrow keys |
 | Scroll faster (hold) | Ctrl: 3x; Ctrl+Shift: 10x |
-| Fast-forward (hold) | Tab targets 6x; Shift+Tab 24x; Ctrl+Shift+Tab 96x simulation speed (music keeps normal tempo) |
+| Fast-forward (hold) | Tab targets up to 6 frames; Shift+Tab 24; Ctrl+Shift+Tab 96, yielding busy batches for input (music keeps normal tempo) |
 | Open Save City during play; Back/Close in menus | Escape |
 | Back during city setup (including map size and development speed) | Controller X |
 | Close full-screen information / confirm selected loan choice | Enter or normal Confirm |

@@ -164,6 +164,10 @@ static ScDebugGift s_debug_gift;
 static unsigned s_debug_gift_pending;
 static bool s_debug_gift_skip_dialog,s_debug_gift_open,s_debug_gift_click_owned;
 static int s_debug_gift_selected;
+static int s_debug_gift_first;
+static bool s_debug_gift_pointer;
+static double s_debug_gift_mouse_x,s_debug_gift_mouse_y;
+static uint16_t s_debug_gift_pad_owned;
 static Interp816 s_save_dialog_return;
 static unsigned s_save_dialog_phase;
 static uint16_t s_save_dialog_page,s_save_dialog_x,s_save_dialog_y;
@@ -4999,6 +5003,17 @@ static bool run_one_frame(void) {
     }
     if (s_rom_fnv == SC_ROM_FNV_US) {
       ScScenarioEventStep(&s_scenario_event,cpu,g_ram,&s_world);
+      /* Capture native Go-To/attack targets when its pan routine starts.
+       * The renderer applies them after tracking the native camera movement. */
+      if(cpu->k==0 && cpu->pc==0xc798 && ram_w(0x3fe) && host_map_screen_live()) {
+        int x=ram_w(0x400),y=ram_w(0x402);
+        if(s_scenario_event.armed && s_scenario_event.event==4 && s_scenario_event.nuclear_x>=0) {
+          x=s_scenario_event.nuclear_x;y=s_scenario_event.nuclear_y;
+        } else if(ram_w(0xaf1) && ram_w(0xaef)) {x=g_ram[0xaf9];y=g_ram[0xaf7];}
+        if(x>=0 && y>=0 && x<(int)(s_world.active?ScWorldWidth(&s_world):120) &&
+           y<(int)(s_world.active?ScWorldHeight(&s_world):100))
+          ScRendererFocusWorld(&s_custom_renderer,x*8+4,y*8+4);
+      }
       if(cpu->k==3 && cpu->pc==0xc8a1) {
         s_loading_slot=ram_w(0x421)==1?0:1;s_city_loading=true;
       }
@@ -5035,6 +5050,8 @@ static bool run_one_frame(void) {
           test_city_restore_sram();s_test_load_pending=false;
           if(ok) {
             ScPopulationMirror(&s_population,g_ram);ScWorldMirror(&s_world,g_ram);
+            ScTestCityRepairWires(&s_world,g_ram,g_snes->cart->rom,g_snes->cart->romSize);
+            ScTestCityRepairName(g_ram);
             ram_set_w(0x1c5,(s_world.active?ScWorldWidth(&s_world):120)-(ram_w(0x1d7)?25:30));
             ram_set_w(0x1c9,(s_world.active?ScWorldHeight(&s_world):100)-(ram_w(0x1d7)?22:26));
             fprintf(stderr,"[test city] loaded saved City 3, population %llu\n",(unsigned long long)s_population.value);
@@ -7834,6 +7851,7 @@ static bool load_state(const char *path) {
     }
   }
   ScWorldYearMirror(&s_world,g_ram);
+  if(s_world.test_city)ScTestCityRepairName(g_ram);
   g_ppu->lastBrightnessMult = 0xff;   /* rebuild the brightness tables */
   ScRendererResetCamera(&s_custom_renderer);
   ScRendererResetHistory(&s_custom_renderer);
@@ -8608,7 +8626,6 @@ static void arm_scenario_event(unsigned idx, uint16_t countdown, const char *wha
     return;
   }
   s_scenario_event_what=what;
-  if(idx==6 || idx==4)ScRendererResetCamera(&s_custom_renderer);
   if(idx==4 && s_scenario_event.nuclear_x>=0) {
     ram_set_w(0x400,(uint16_t)s_scenario_event.nuclear_x);
     ram_set_w(0x402,(uint16_t)s_scenario_event.nuclear_y);
@@ -8759,8 +8776,7 @@ static int text_width(int px, const char *s) {
 
 typedef struct SettingsLayout { int px, line_h, pad, x, y, w, h; } SettingsLayout;
 static SettingsLayout settings_layout(int out_w, int out_h) {
-  const int lines = s_debug_gift_open?SC_DEBUG_GIFT_COUNT+6:
-      (int)kSettingCount + 6 + (s_menu_preview ? 4 : 0);
+  const int lines = (int)kSettingCount + 6 + (s_menu_preview ? 4 : 0);
   int px = out_h / (6 * (lines + 1));
   if (px > 4) px = 4;
   if (px < 1) px = 1;
@@ -8776,10 +8792,12 @@ static int settings_mouse_row(SDL_Window *window, SDL_Renderer *renderer, double
   SettingsLayout r=settings_layout(dw,dh);
   int first_y=r.y+r.pad+2*r.line_h;
   if (x<r.x+r.pad || x>=r.x+r.w-r.pad || y<first_y ||
-      y>=first_y+(s_debug_gift_open?SC_DEBUG_GIFT_COUNT:(int)kSettingCount)*r.line_h) return -1;
+      y>=first_y+(int)kSettingCount*r.line_h) return -1;
   int row=(int)((y-first_y)/r.line_h);
-  return !s_debug_gift_open && s_settings[row].kind==kSettingHeader ? -1 : row;
+  return s_settings[row].kind==kSettingHeader ? -1 : row;
 }
+
+#include "sc_gift_picker.inc"
 
 static void render_settings_menu(SDL_Renderer *renderer) {
   int out_w = 0, out_h = 0;
@@ -8803,20 +8821,8 @@ static void render_settings_menu(SDL_Renderer *renderer) {
   SDL_RenderDrawRect(renderer, &bg);
 
   int ty = menu_y + pad;
-  draw_text(renderer, menu_x + pad, ty, px, s_debug_gift_open?"DEBUG GIFTS":"SETTINGS");
+  draw_text(renderer, menu_x + pad, ty, px, "SETTINGS");
   ty += line_h * 2;
-  if(s_debug_gift_open) {
-    for(unsigned i=0;i<SC_DEBUG_GIFT_COUNT;++i) {
-      bool selected=(int)i==s_debug_gift_selected;
-      SDL_SetRenderDrawColor(renderer,255,255,selected?0:255,255);
-      if(selected)draw_text(renderer,menu_x+pad,ty,px,">");
-      draw_text(renderer,menu_x+pad+4*px,ty,px,ScDebugGiftNames[i]);ty+=line_h;
-    }
-    SDL_SetRenderDrawColor(renderer,180,180,180,255);
-    draw_text(renderer,menu_x+pad,ty+line_h/2,px>1?px-1:1,"ENTER OR CLICK SELECT");
-    draw_text(renderer,menu_x+pad,ty+line_h*3/2,px>1?px-1:1,"ESC OR F12 CLOSE");
-    SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_NONE);return;
-  }
 
   for (size_t i = 0; i < kSettingCount; i++) {
     SettingDesc *d = &s_settings[i];
@@ -10981,6 +10987,13 @@ int main(int argc, char **argv) {
       if(!result.bad)s_custom_renderer.setup_font_valid=ScCitySetupFont(s_custom_renderer.setup_font,font+0x8000,result.bytes_out);
       free(font);
     }
+    font=calloc(1,0x20000);
+    if(font) {
+      ScDecompResult result;
+      sc_decomp_run(font,clipboard_rom_read,&s_custom_renderer,0x0b,0x86f7,0,&result);
+      if(!result.bad)ScRendererMinimapFont(&s_custom_renderer,font+0x8000,result.bytes_out);
+      free(font);
+    }
   }
   s_custom_renderer.population=&s_population;
   if(s_rom_is_us) {
@@ -11512,15 +11525,7 @@ int main(int argc, char **argv) {
         s_menu_open = !s_menu_open;s_debug_gift_open=false;
         fprintf(stderr, "[F10/F12] settings menu %s\n", s_menu_open ? "OPEN" : "CLOSED");
       }
-      if(s_menu_open && s_debug_gift_open && ev.type==SDL_KEYDOWN) {
-        SDL_Scancode code=SC_EVENT_SCANCODE(ev);
-        if(code==SDL_SCANCODE_UP)s_debug_gift_selected=(s_debug_gift_selected+14)%15;
-        if(code==SDL_SCANCODE_DOWN)s_debug_gift_selected=(s_debug_gift_selected+1)%15;
-        if(code==SDL_SCANCODE_RETURN) {
-          s_debug_gift_pending=(unsigned)s_debug_gift_selected+1;
-          s_menu_open=s_debug_gift_open=false;s_debug_gift_click_owned=true;
-        }
-      } else if (s_menu_open && ev.type == SDL_KEYDOWN) {
+      if (s_menu_open && !s_debug_gift_open && ev.type == SDL_KEYDOWN) {
         switch (SC_EVENT_SCANCODE(ev)) {
           case SDL_SCANCODE_UP:
             /* Step until a non-header lands under the cursor. Bounded by
@@ -11553,20 +11558,30 @@ int main(int argc, char **argv) {
           (ev.type==SDL_MOUSEBUTTONDOWN && ev.button.button==SDL_BUTTON_LEFT))) {
         double x=ev.type==SDL_MOUSEMOTION?ev.motion.x:ev.button.x;
         double y=ev.type==SDL_MOUSEMOTION?ev.motion.y:ev.button.y;
-        int row=settings_mouse_row(window,renderer,x,y);
-        if(row>=0) {
-          if(s_debug_gift_open) {
-            s_debug_gift_selected=row;
-            if(ev.type==SDL_MOUSEBUTTONDOWN) {
-              s_debug_gift_pending=(unsigned)row+1;
-              s_menu_open=s_debug_gift_open=false;s_debug_gift_click_owned=true;
+        if(s_debug_gift_open) {
+          int cx,cy;if(gift_mouse_point(window,renderer,x,y,&cx,&cy)) {
+            s_debug_gift_pointer=true;ScGiftLayout l=gift_layout();
+            int gift=ScDebugGiftHit(l,cx,cy);
+            if(gift>=0) {
+              s_debug_gift_selected=gift;
+              if(ev.type==SDL_MOUSEBUTTONDOWN) {
+                s_debug_gift_pending=(unsigned)gift+1;
+                s_menu_open=s_debug_gift_open=false;s_debug_gift_click_owned=true;
+              }
+            } else if(ev.type==SDL_MOUSEBUTTONDOWN && cx>=l.x+73 && cx<l.x+84) {
+              if(cy>=l.y+3 && cy<l.y+14)s_debug_gift_selected=ScDebugGiftMove(s_debug_gift_selected,0,-1);
+              if(cy>=l.y+l.h-14 && cy<l.y+l.h-3)s_debug_gift_selected=ScDebugGiftMove(s_debug_gift_selected,0,1);
             }
-          } else {
-            s_menu_selected=row;
-            if(ev.type==SDL_MOUSEBUTTONDOWN)setting_activate(&s_settings[row]);
           }
+        } else {
+          int row=settings_mouse_row(window,renderer,x,y);
+          if(row>=0) {s_menu_selected=row;if(ev.type==SDL_MOUSEBUTTONDOWN)setting_activate(&s_settings[row]);}
         }
       }
+      if(s_menu_open && s_debug_gift_open && ev.type==SDL_MOUSEWHEEL) {
+        s_debug_gift_selected=ScDebugGiftMove(s_debug_gift_selected,0,ev.wheel.y>0?-1:1);
+      }
+
       /* F4: dump WRAM to a fixed path right now, on demand -- for pinning
        * down exact WRAM byte values at a precise live moment (e.g. hold a
        * button combo, press F4, inspect $7e011b/$7e011c directly) instead
@@ -12192,7 +12207,8 @@ int main(int argc, char **argv) {
           ScDebugGiftButton(mouse_target_x,mouse_target_y) && s_mouse_enabled && s_rom_is_us &&
           host_map_screen_live() && ram_w(0x1d7) && !ram_w(0xd7) && !ram_w(0x379) &&
           s_mouse_dialog==SC_MOUSE_DIALOG_NONE && !s_build_active && !s_build_pending && !s_clip_pending) {
-        s_menu_open=s_debug_gift_open=true;s_debug_gift_selected=0;
+        s_menu_open=s_debug_gift_open=true;s_debug_gift_selected=0;s_debug_gift_first=0;
+        s_debug_gift_pointer=true;s_debug_gift_mouse_x=mouse_target_x;s_debug_gift_mouse_y=mouse_target_y;
         s_debug_gift_click_owned=true;mouse_clip_consumed=true;mouse_edge_input=0;
         pressed=false;
         fprintf(stderr,"[debug gift] picker opened, including disabled gifts button\n");
@@ -12328,6 +12344,21 @@ int main(int argc, char **argv) {
      * SNES D-pad and Start bindings. The game is frozen so nothing acts on
      * them immediately, but whatever is held on the frame the menu closes
      * would otherwise leak straight through as a real button press. */
+    static uint16_t gift_pad_previous;
+    s_debug_gift_pad_owned&=input;input&=~s_debug_gift_pad_owned;
+    if(s_menu_open && s_debug_gift_open) {
+      uint16_t pressed=input&~gift_pad_previous;gift_pad_previous=input;
+      int dx=((pressed&kPad_Right)!=0)-((pressed&kPad_Left)!=0);
+      int dy=((pressed&kPad_Down)!=0)-((pressed&kPad_Up)!=0);
+      if(dx || dy) {s_debug_gift_selected=ScDebugGiftMove(s_debug_gift_selected,dx,dy);s_debug_gift_pointer=false;}
+      if(pressed&kPad_X) {s_debug_gift_pad_owned=input;s_menu_open=s_debug_gift_open=false;s_debug_gift_click_owned=true;}
+      else if(pressed&(kPad_B|kPad_Start)) {
+        s_debug_gift_pad_owned=input;
+        s_debug_gift_pending=(unsigned)s_debug_gift_selected+1;
+        s_menu_open=s_debug_gift_open=false;s_debug_gift_click_owned=true;
+      }
+      input=0;
+    } else gift_pad_previous=input;
     if (s_menu_open || scripted_input) input = 0;
     if(map_selection_preview_live() && s_preview_input_blocked)input=0;
     if(s_escape_back_frames) {input|=s_escape_back_input;--s_escape_back_frames;}
@@ -12411,10 +12442,9 @@ int main(int argc, char **argv) {
       s_gpu_terrain_enabled=false;ScRendererDeferTerrain(&s_custom_renderer,false);
     }
     int frames_this_iter = fast_forward ? (maximum_fast_forward?96:shift_fast_forward?24:6) : (dragging ? s_drag_turbo : 1);
-    /* Fixed batches let Tab advance the entire simulation, including native
-     * calendar/demand/service ticks, instead of spending only spare render
-     * time and silently collapsing to Normal on a busy city. Music retains
-     * the independent real-time worker clock. */
+    /* Accelerate complete guest frames, including the calendar. Keep long
+     * cohorts interruptible so a busy city cannot hide input for seconds.
+     * Music retains its independent real-time worker clock. */
     static int test_tab_batch=-1;
     if(test_tab_batch<0) {const char *e=getenv("SC_TAB_TEST_BATCH");
       test_tab_batch=e?atoi(e):0;if(test_tab_batch<1 || test_tab_batch>96) test_tab_batch=0;}
@@ -12437,15 +12467,23 @@ int main(int argc, char **argv) {
      * (and therefore `texture` below) simply isn't touched this iteration,
      * so whatever was last rendered stays on screen underneath the overlay. */
     bool guard_tripped = false;
+    static double guest_frame_estimate_ms;
+    uint64_t cohort_started=SDL_GetPerformanceCounter();
     if(!s_debug_gift_pending && !s_debug_gift_skip_dialog)ScDebugGiftTick(&s_debug_gift,g_ram);
     poll_mouse_construction();
     if (!s_menu_open && !s_build_work) {
       for (int ffi = 0; ffi < frames_this_iter && !s_build_work; ffi++) {
-        /* Draw the last frame of the requested batch. Intermediate frames
-         * retain simulation, native PPU/APU timing and input, while omitting
-         * pixels that will never be displayed. Do not truncate the batch
-         * based on the last expensive simulation phase. */
-        bool final_frame=ffi+1==frames_this_iter;
+        double cohort_ms=(SDL_GetPerformanceCounter()-cohort_started)*1000.0/SDL_GetPerformanceFrequency();
+        bool tab_released=false;
+        if(ffi && fast_forward && !test_fast_forward && !holds && !scripted_input) {
+          SDL_PumpEvents();
+          tab_released=!snesrecomp_sdl_get_keyboard_state()[SDL_SCANCODE_TAB];
+        }
+        /* Render the final frame before returning to event polling. A timing
+         * yield never abandons a guest instruction or leaves skipped pixels
+         * on screen. Requested 6/24/96x remains the upper bound. */
+        bool final_frame=ffi+1==frames_this_iter || tab_released ||
+            (!test_tab_batch && (guest_frame_estimate_ms==0 || cohort_ms+guest_frame_estimate_ms>=80.0));
         s_skip_custom_frame=fast_forward && !final_frame;
         /* Intermediate Tab frames keep sprite/beam/APU work, but their native
          * background image is never presented. The final frame is always full. */
@@ -12460,12 +12498,14 @@ int main(int argc, char **argv) {
           g_ram[0x01ed] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_y<0?0:mouse_target_y>223?223:mouse_target_y);
         }
         ScGpuFieldsPoll(gpu_fields);
+        uint64_t guest_started=SDL_GetPerformanceCounter();
         if (!run_one_frame()) {
           fprintf(stderr, "frame %llu: opcode guard tripped (hang/runaway) -- stopping\n",
                   (unsigned long long)s_frames);
           guard_tripped = true;
           break;
         }
+        guest_frame_estimate_ms=(SDL_GetPerformanceCounter()-guest_started)*1000.0/SDL_GetPerformanceFrequency();
         ++fps_guest_frames;
         if(perf_on) ++perf_total_guests;
         if(perf_on) {s_perf_custom_ms+=s_custom_frame_ms;s_perf_native_ms+=ScPpuPixelMilliseconds();}
@@ -12746,7 +12786,7 @@ int main(int argc, char **argv) {
       if (diag < 99 && (s_frames % 60) == 0) {
         fprintf(stderr, "[sdl] lock=%d pitch=%d expect=%d copy=%d err=%s\n",
                 (int)_lok, pitch, (int)s_video_pitch, (int)_cok, SDL_GetError()); } }
-    if (s_menu_open) render_settings_menu(renderer);
+    if (s_menu_open) {if(s_debug_gift_open)render_gift_picker(renderer);else render_settings_menu(renderer);}
     if (s_replay_open) render_replay_menu(renderer);
 
     /* SC_RENDER_DUMP_AT=<frame> + SC_RENDER_DUMP_PATH: capture the RENDERER,

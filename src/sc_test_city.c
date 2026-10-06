@@ -9,6 +9,36 @@ static unsigned word(const uint8_t *p,unsigned a) {return p[a]|p[a+1]<<8;}
 static void put(uint8_t *p,unsigned a,unsigned v) {p[a]=(uint8_t)v;p[a+1]=(uint8_t)(v>>8);}
 static void put32(uint8_t *p,unsigned a,uint32_t v) {put(p,a,v);put(p,a+2,v>>16);}
 static uint32_t get32(const uint8_t *p,unsigned a) {return word(p,a)|(uint32_t)word(p,a+2)<<16;}
+void ScTestCityRepairName(uint8_t *ram) {
+    /* Native names have eight characters; $27 is blank, not $2f. Migrate
+     * only our old generated name, preserving player-renamed test cities. */
+    static const uint8_t old[]={0x1d,0x0e,0x1c,0x1d,0x2f,0x0c,0x12,0x1d,0x22};
+    if(ram[0xb5b]==sizeof old && !memcmp(ram+0xb5c,old,sizeof old)) {
+        memmove(ram+0xb60,ram+0xb61,4);ram[0xb5b]=8;ram[0xb64]=0x27;
+    }
+}
+void ScTestCityRepairWires(ScWorld *w,uint8_t *ram,const uint8_t *rom,size_t size) {
+    if(!w || !w->test_city || !ram || !rom || size!=0x80000)return;
+    unsigned width=w->active?ScWorldWidth(w):120,height=w->active?ScWorldHeight(w):100;
+    uint8_t *tiles=w->active?w->tiles:ram+0x10200;
+    /* 01:b705/b777's ordered conductivity probes and 01:b65b's wire table.
+     * Footprint stamps can cut or extend a prototype wire after it was joined.
+     * Recompute its artwork from the completed blueprint, retaining power. */
+    for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
+        unsigned at=2*(y*width+x),raw=word(tiles,at),t=raw&1023,mask=0;
+        if(t<0x62 || t>=0x6d)continue;
+        for(int d=3;d>=0;--d) {
+            int xx=(int)x+(int8_t)rom[0x1b61+d],yy=(int)y+(int8_t)rom[0x1b65+d];
+            unsigned n=xx<0 || yy<0 || xx>=(int)width || yy>=(int)height?0:word(tiles,2*(yy*width+xx))&1023;
+            bool connected=n>=0x80 && (n<0x354 || n>=0x366);
+            if(n<0x80)for(unsigned p=0x83ae;p<0x83dc && word(rom,p)!=0xffff;p+=2)
+                if(word(rom,p)==n)connected=true;
+            mask=mask*2+connected;
+        }
+        put(tiles,at,(raw&~1023u)|0x60|rom[0x8020+mask]);
+    }
+    if(w->active)ScWorldTilesTouch(w,0,width*height*2);
+}
 static bool commit(uint8_t *ram,ScWorld *w,const uint8_t *rom,ScBuildPlan *plan) {
     if(!plan->count)return true;
     unsigned price;ScBuildResult result=ScConstructionCommitWorld(ram,w,rom,0x80000,plan,&price);
@@ -209,6 +239,7 @@ bool ScTestCityGenerate(ScWorld *w,ScPopulation *population,uint8_t *ram,
         if(best==INT_MIN) {fprintf(stderr,"[test city] no gift parcel %u\n",n);goto fail;}
         stamp(tiles,width,best_x,best_y,gifts[reward[n]],3);
     }
+    ScTestCityRepairWires(w,ram,rom,size);
     if(!ScConstructionRefreshPower(ram,w,rom,size) || !ScConstructionPrimeWorldFields(ram,w,rom,size)) {fprintf(stderr,"[test city] final fields failed\n");goto fail;}
     /* Even maximum native R demand (2000) cannot overcome land-pollution
      * below 32: 32*31-3000+2000 is still negative. Keep gift-rescued housing;
@@ -227,8 +258,8 @@ bool ScTestCityGenerate(ScWorld *w,ScPopulation *population,uint8_t *ram,
     put(ram,0xb53,1900);put(ram,0xb55,1);put(ram,0xb57,0);put(ram,0xb59,31337);
     w->calendar_year=1900;
     put(ram,0xb9d,0x1200);ram[0xb9f]=0x7a; /* 8 million ordinary treasury */
-    static const char name[]="TEST CITY";ram[0xb5b]=sizeof name-1;
-    for(unsigned i=0;i<sizeof name-1;++i)ram[0xb5c+i]=name[i]==' '?0x2f:name[i]-'A'+0x0a;
+    static const char name[]="TESTCITY";ram[0xb5b]=sizeof name-1;
+    for(unsigned i=0;i<sizeof name-1;++i)ram[0xb5c+i]=name[i]-'A'+0x0a;
     put(ram,0x3e,2);put(ram,0x38,0);put(ram,0x425,0);ScTestCityConfigureStart(ram);
     ScWorldMirror(w,ram);ScPopulationImport(population,ram);
     if(!ScPopulationRefreshLive(population,ram,w,rom,size))goto fail;
