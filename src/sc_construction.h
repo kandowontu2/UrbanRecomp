@@ -40,4 +40,6 @@ bool ScConstructionPowerBitmapReference(const uint8_t *ram,const ScWorld *world,
     const uint8_t *rom,size_t size,uint8_t *bitmap,size_t bitmap_size);
 /* Initialize generated stock-district spatial fields with the original scans. */
 bool ScConstructionPrimeFields(uint8_t *ram,const uint8_t *rom,size_t size);
+/* Initialize the actual generated world, including native park/gift diffusion. */
+bool ScConstructionPrimeWorldFields(uint8_t *ram,ScWorld *world,const uint8_t *rom,size_t size);
 #endif

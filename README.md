@@ -33,11 +33,11 @@ the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) an
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 20 is one portable Windows EXE; run it and select your own clean US ROM.
+Beta 22 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution
-path. Beta 20 anchors Ctrl+wheel zoom to the actual mouse pointer in the city
+path. Ctrl+wheel anchors Ctrl+wheel zoom to the actual mouse pointer in the city
 and map preview while retaining fixed HUD/menu sizes. Beta 19 introduced
 compiled C game execution and removed the 65816
 interpreter from the release executable. Register and save-state layouts,
@@ -51,7 +51,7 @@ distributes development across city districts at Normal
 speed as well; its time allowance keeps development work bounded per frame.
 See the enhancement notes for current behavior and performance limits.
 Beta 17 restores original 120x100 terrain and extends its generator to larger
-maps at native feature scale. It also adds map numbers 00000–99999,
+maps at native feature scale. It also adds map numbers 00000â€“99999,
 sharp previews with zoom and drag panning, larger vehicle fleets, responsive
 large construction, and zoom-out sufficient to show the complete 3840x3200
 map. It also fixes title-click cursor corruption and tool-window backdrops.
@@ -128,15 +128,15 @@ text.
 ### Scenario map export tool
 
 `tools/extract_maps.py` decodes every scenario map out of the ROM to
-`extracted_assets/maps/` — a raw 24000-byte `.bin` in exactly the layout
-the game keeps live at `$7F0200` (120×100 cells, one little-endian 16-bit
+`extracted_assets/maps/` â€” a raw 24000-byte `.bin` in exactly the layout
+the game keeps live at `$7F0200` (120Ã—100 cells, one little-endian 16-bit
 tile index each), plus a false-colour `.png` preview. No dependencies; run
 `python tools/extract_maps.py` from the repo root with your ROM in the
 repository root (any file name). The format is documented in
 [`docs/REFERENCE_map_format.md`](docs/REFERENCE_map_format.md).
 
 The last two entries are free play and the tutorial map. Both place zero
-buildings, where every real scenario stamps 200+ — the tell that they're
+buildings, where every real scenario stamps 200+ â€” the tell that they're
 maps you start on rather than cities you inherit. Free play's terrain is
 drawn as Mario's face, which is worth knowing before assuming a decode
 has gone wrong.
@@ -151,22 +151,22 @@ Found and fixed by **Truttle1** (<https://www.youtube.com/@Truttle1>),
 whose patch is what identified **bit 15 (`$8000`) of each 16-bit map
 cell** as the power bit. Measured here to confirm it: loading a scenario
 and sampling every 60 frames, powered cells sit at **0 for the first
-~400 frames**, then jump to 2888 and settle at 3043 — a ~6.7-second
+~400 frames**, then jump to 2888 and settle at 3043 â€” a ~6.7-second
 window with nothing powered.
 
 `FIX POWER ON LOAD` in the F10 menu (**on by default**) marks every cell
 powered once the map is in place at `03:c8dd`, letting the game's own
 power scan clear whatever is genuinely unpowered on its next pass.
 
-Implemented host-side in C rather than by porting Truttle1's bytes — this
+Implemented host-side in C rather than by porting Truttle1's bytes â€” this
 repo doesn't vendor third-party work, and doing it from C needs no free
 ROM space. It also avoids a quirk of that patch: because it replaces
 `STZ $003a ; RTS` with a 4-byte `JSL`, its `RTL` lands on `03:c8e1` and
-runs the SRAM loader a second time (harmless — an idempotent copy that
+runs the SRAM loader a second time (harmless â€” an idempotent copy that
 doesn't touch `$7F0200`, so the power bits survive).
 
 The trigger point `03:c8dd` is **confirmed**: a bsnes exec breakpoint
-there fires on loading a saved game, reached via `00:c845` → `03:c8a0`.
+there fires on loading a saved game, reached via `00:c845` â†’ `03:c8a0`.
 This project's own headless harness still cannot drive that path (the
 mode-freeze technique doesn't reach it), so the confirmation is from
 bsnes, not from `--qualify`.
@@ -175,8 +175,8 @@ bsnes, not from `--qualify`.
 routine that makes bit 15 mean "powered" is `03:b152`, which walks all
 12000 cells applying a **packed power bitmap held at `$7FA598`** (one bit
 per cell, `AND #$7fff` then conditionally `ORA #$8000`). That bitmap is
-*not* part of the SRAM save block — the load path restores `$7F5FC0` and
-`$7F6560` but nothing at `$7FA598` — so after a load it has to be
+*not* part of the SRAM save block â€” the load path restores `$7F5FC0` and
+`$7F6560` but nothing at `$7FA598` â€” so after a load it has to be
 recomputed from scratch, and until it is, every cell reads unpowered.
 Hence the dropout, and hence why "assume powered until the real scan says
 otherwise" is the right shape of fix: `03:b152` corrects it on its next
@@ -255,7 +255,7 @@ key labelled Y.
 The letter bindings follow the **labels on the keyboard**, not QWERTY key
 positions, so they are the same keys on a German layout as on a US one. They
 are resolved through `SDL_GetScancodeFromKey`, because SNES Y and SNES B now
-sit on the keys labelled Y and X — which on QWERTZ are not where a positional
+sit on the keys labelled Y and X â€” which on QWERTZ are not where a positional
 binding would put them.
 
 The right mouse button also pans the map while it is held and moved.
@@ -268,11 +268,11 @@ Keys that are not SNES buttons:
 |---|---|
 | Pan the free city camera | X + arrow keys |
 | Scroll faster (hold) | Ctrl: 3x; Ctrl+Shift: 10x |
-| Fast-forward (hold) | Tab; Shift+Tab requests 4x the usual boost |
+| Fast-forward (hold) | Tab targets 6x; Shift+Tab 24x; Ctrl+Shift+Tab 96x simulation speed (music keeps normal tempo) |
 | Open Save City during play; Back/Close in menus | Escape |
 | Back during city setup (including map size and development speed) | Controller X |
 | Close full-screen information / confirm selected loan choice | Enter or normal Confirm |
-| Reveal hidden 1920x1600 test City 3 on Load City | Ctrl+Shift+tilde |
+| Reveal hidden test City 3 on Load City | Ctrl+Shift+tilde |
 | Zoom the map in / out (city view) | + / - |
 | Save state to slot 1-9/0 | Shift+1 .. Shift+9, Shift+0 |
 | Load state from slot 1-9/0 | 1 .. 9, 0 |
@@ -398,21 +398,23 @@ for noncommercial purposes only. All third-party licences are listed in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Nothing here grants any
 right to the game itself.
 
-The hidden **TEST CITY 3** starts with approximately 62 million residents at
-ordinary zone capacities. Its districts contain connected road, rail and power
-networks, funded police and fire stations, parks and nuclear power plants;
-the civic precinct includes buildable gifts, a stadium and airports, with
-seaports along the eastern coast. The usual simulation rules still apply.
-Press **Ctrl+Shift+tilde** on **Resume Saved City** to reveal it. If you have
-no regular saved cities, the same shortcut on the main menu opens that page.
-Selecting City 3 loads its saved SRM record if present, otherwise generates
-it from code. **Escape, Save?, Yes** saves this city back to City 3 without
-replacing City 1 or 2. Its full map is stored inside the SRM; the original
-32 KiB cartridge area remains intact. Keep the whole SRM when backing up
-City 3. Save-state loads also retain its hidden-city identity.
+The hidden **TEST CITY 3** starts with empty R/C/I zones and zero population.
+Its source-based layout provides connected rail, roads and power, funded
+police/fire stations, parks, nuclear power plants, distributed gifts, a stadium, airport and
+dry-land seaport on water-free map 31337. Ordinary growth and economy rules apply.
+Press **Ctrl+Shift+tilde** on **Resume Saved City** to reveal it. With no regular
+saves, the shortcut also opens that page from the main menu. An unsaved City 3
+asks for **MAP SIZE** and **DEVELOPMENT SPEED**, supporting all six sizes through
+**3840x3200**. Saved City 3 records retain their existing size and speed.
+**Escape, Save?, Yes** saves back to City 3 without replacing City 1 or 2.
+Its full map is stored inside the SRM; keep the whole SRM when backing it up.
+[Placement effects](docs/PLACEMENT_EFFECTS.md) covers every tool and gift from
+the source. [Layout calculations and ten-year measurements](docs/TEST_CITY_LAYOUT.md)
+explain the revised city and its limits. The calendar supports years through
+**999999**, without leading zeroes, in the HUD, budget and saved cities.
 
 Ctrl+mouse-wheel zoom can expose terrain spanning up to **32768x32768** native
-pixels, enough to fit the complete 1920×1600 test city inside a widescreen
+pixels, enough to fit the complete 1920Ã—1600 test city inside a widescreen
 window. Only the land zooms;
 the HUD, minimap, overview panels and menus keep their normal display size.
 Expanded cities update across the map instead of sweeping visibly row by row.

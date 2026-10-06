@@ -1,6 +1,52 @@
 # Enhanced fork changelog
 
-## 1.2.0 Enhanced Beta 21 — 2026-10-06
+## Unreleased â€” 2026-10-06
+
+- Make held Tab advance six complete simulation frames per display update,
+  Shift+Tab advance 24, and Ctrl+Shift+Tab advance 96, including calendar, development, demand, services
+  and vehicles. Remove adaptive truncation that reduced busy cities to one
+  frame and almost no boost. Keep restored music at its real-time tempo and
+  report actual simulation speed against the native clock in the window title.
+  Actual acceleration remains limited by city workload and hardware.
+- Complete the largest map's terrain-quality and service fields with full-width
+  coordinates. The former byte iterator wrapped before reaching the 480x400
+  field boundary, stalling the calendar and subsequent density recalculation.
+  Scale shared arithmetic work by its spatial caller while retaining normal
+  timing for global calculations, menus and redraw waits.
+- Render the top-toolbar View tool's third world graphics layer at the selected
+  city zoom in both CPU and GPU terrain composition.
+
+- Add Moon to LAND TYPE with gray lunar ground and stable year-round colors.
+  Remove naturally generated forests in new Moon cities, Practice and Journey
+  expansions across all supported sizes; preserve shores and water mechanics.
+- Cover both football stadium variants with domes on Mars, Venus and Moon.
+  Keep their simulation behavior and other buildings' artwork unchanged.
+  Restore native stadium graphics when leaving these themes and before saving
+  snapshots, then reapply the selected city's domes on reload.
+- Preserve short city notices' native opaque paper, ink and borders over
+  repaired/zoomed terrain, including CPU and deferred terrain rendering.
+
+- Rebuild hidden Test City 3 from the source rules: global outside industry,
+  green-buffered commerce, paired inner housing with local jobs, 27 finite
+  gifts scored by the actual terrain diffusion, and all three demand-cap
+  facilities including a dry-land port. Convert housing sites that cannot
+  obtain a positive growth score. Keep every R/C/I lot empty at entry, native
+  capacities, 3% tax and full service upkeep. Unsaved City 3 asks for size/speed;
+  existing saves retain their own layouts and City 1/2 remain intact.
+- Add a source-based guide covering every placement tool and all 15 gifts,
+  and require natural multi-year validation for future layout changes. In the
+  controlled 120x100 test, the revised city has 310,880 people and no completely
+  empty housing after ten years; the former layout has 77,840 and 215 empty lots.
+  Document conditions and remaining density/land gates without claiming a
+  stable maximum or global optimum.
+- Fix largest-map police/fire coverage conversion wrapping at 65,535 cells;
+  both native conversions now finish all 192,000 cells instead of repeating
+  work and delaying development/calendar updates.
+- Extend the calendar through year 999999, with no leading zeroes in the HUD
+  and budget/Tax date headings. Preserve full dates in city saves and snapshots,
+  import older metadata, and retain native month/yearly collection behavior.
+
+## 1.2.0 Enhanced Beta 21 â€” 2026-10-06
 
 - Changing GENERATION or LAND TYPE keeps the current preview until its complete
   replacement is ready, then publishes the terrain and colors together. Type
@@ -57,7 +103,7 @@
   Atolls rings with broad buildable islands, smaller lagoons and curved sea
   entrances. Check full district footprints across seeds and all map sizes.
 
-## 1.2.0 Enhanced Beta 20 — macOS startup revision — 2026-10-05
+## 1.2.0 Enhanced Beta 20 â€” macOS startup revision â€” 2026-10-05
 
 - Normalize optional copier headers before native ROM fingerprint checks,
   matching the launcher's verification. Diagnose unreadable/unsupported ROMs
@@ -66,13 +112,13 @@
   including restored music, assets, credits and licenses. Bundled Mac builds
   keep saves/settings in Application Support and locate assets in Resources.
 
-## 1.2.0 Enhanced Beta 20 — 2026-10-05
+## 1.2.0 Enhanced Beta 20 â€” 2026-10-05
 
 - Anchor city and map-preview Ctrl+wheel zoom to the actual mouse position,
   preserving the terrain beneath it across widescreen, Fit and high-DPI
   layouts. Keep HUD/menu scale fixed and ignore wheel input in letterboxing.
 
-## 1.2.0 Enhanced Beta 19 — 2026-10-05
+## 1.2.0 Enhanced Beta 19 â€” 2026-10-05
 
 - Remove the 65816 interpreter from the release executable. Execute all
   verified ROM entry points through compiled per-address C while retaining
@@ -92,7 +138,7 @@
 - Preserve embedded restored music, runtime files, assets, credits and
   licenses in the single EXE. ROMs and personal saves remain external.
 
-## 1.2.0 Enhanced Beta 18 — 2026-10-04
+## 1.2.0 Enhanced Beta 18 â€” 2026-10-04
 
 - Keep the display-resolution map preview visible while NEXT is held, map
   numbers are dirty and the selector enters or exits. Latch the actual panel
@@ -123,7 +169,7 @@
 - Make map number 31337 water-free at all six selectable sizes, preserving
   forests and leaving existing saved terrain unchanged.
 
-## 1.2.0 Enhanced Beta 17 — 2026-10-04
+## 1.2.0 Enhanced Beta 17 â€” 2026-10-04
 
 - Restore the original cartridge generator for 120x100, preserving its terrain
   and random-state results. Extend the same river walks, lake/coast brushes,
@@ -195,7 +241,7 @@
   guest frame, including skipped fast-forward frames, before revealing terrain.
 
 
-## 1.2.0 Enhanced Beta 16 — 2026-10-04
+## 1.2.0 Enhanced Beta 16 â€” 2026-10-04
 
 - Add a native-font DEVELOPMENT SPEED page after map-size selection: 1x, 3x,
   5x, 10x, 20x and 50x. Store each city's default with its map metadata and
@@ -223,11 +269,11 @@
   original entry fade begins. Reveal the completed sharp view with its HUD
   during that fade, avoiding a transient blurry city before the blackout.
 
-## 1.2.0 Enhanced Beta 15 — 2026-10-04
+## 1.2.0 Enhanced Beta 15 â€” 2026-10-04
 
 - Update RCI zones in batches distributed throughout the city, including
   Normal development speed. Use a map-size-independent cadence so a fully
-  built 1920×1600 city no longer waits for a slow moving sweep to reach
+  built 1920Ã—1600 city no longer waits for a slow moving sweep to reach
   each district. Each stable zone index completes a pass before repeating.
 - Bound development work per frame to keep rendering and mouse input
   responsive. Retain the five requested speed multipliers; on overloaded
@@ -240,7 +286,7 @@
 - Rebuild the disposable zone index after loading or replacing a city;
   completed development remains in the existing city/save format.
 
-## 1.2.0 Enhanced Beta 14 — 2026-10-04
+## 1.2.0 Enhanced Beta 14 â€” 2026-10-04
 
 - Center the main-menu text block and move its selection pointer with it.
   Expand the original panel before its entry-fade upload so it keeps one
@@ -255,12 +301,12 @@
   arrow/button hit areas, gap rejection and native held-click repeat. Retain
   keyboard/gamepad jumps; an idle mouse no longer overrides their positions.
 - Increase maximum terrain coverage from 4096 to 32768 native pixels per
-  dimension. Allow the complete 1920×1600 test city to fit inside a widescreen
+  dimension. Allow the complete 1920Ã—1600 test city to fit inside a widescreen
   view; retain sharp original tile sampling and fixed-size UI.
 - Preserve city zoom during keyboard navigation, toolbar popups, gift dialogs
   and Dr. Wright messages. Draw popup artwork at its original size over the
   selected city view instead of switching the land back to native scale.
-- Use the free host camera for mouse edge scrolling and retain Ctrl's 3× rate.
+- Use the free host camera for mouse edge scrolling and retain Ctrl's 3Ã— rate.
 - Draw the toolbox from its own BG3 and sprite artwork over zoomed land,
   preventing unscaled city tiles and building roofs from leaking around it.
 - Show the original hand cursor throughout the full widened HUD, including
@@ -268,7 +314,7 @@
 - Extend packed projected sprite coordinates to signed 24-bit values, with
   CPU/Vulkan regression coverage beyond the original 16-bit range.
 
-## 1.2.0 Enhanced Beta 13 — 2026-10-04
+## 1.2.0 Enhanced Beta 13 â€” 2026-10-04
 
 - Sharpen terrain zoom on Vulkan by sampling the original tile graphics at
   the displayed resolution, instead of shrinking land into the logical canvas
@@ -285,7 +331,7 @@
   deltas. PAN SPEED and MOUSE SPEED adjust sensitivity. Keep guest camera and
   simulation registers unchanged; loading another city resets the view offset.
 
-## 1.2.0 Enhanced Beta 12 — 2026-10-04
+## 1.2.0 Enhanced Beta 12 â€” 2026-10-04
 
 - Convert connected road, bridge and rail upkeep to native C, including
   traffic-dependent artwork, funding and decay, bridge footprint changes,
@@ -442,7 +488,7 @@ this tested PC/workload rather than every machine or game path. Physical
 hardware pinch delivery remains unverified, and the yearly black budget
 popup report remains deferred.
 
-## 1.2.0 Enhanced Beta 11 — 2026-10-03
+## 1.2.0 Enhanced Beta 11 â€” 2026-10-03
 
 ### Performance and rendering
 
@@ -462,7 +508,7 @@ popup report remains deferred.
 
 ### Maps, population and building tools
 
-- Add full **1920×1600** maps alongside 120×100, 240×200, 480×400 and 960×800.
+- Add full **1920Ã—1600** maps alongside 120Ã—100, 240Ã—200, 480Ã—400 and 960Ã—800.
   Move the map-size heading, choices, selection arrow and mouse hitboxes down
   16 native pixels inside their original in-game panel.
   Keep the chosen size highlighted throughout the exit fade.
@@ -477,13 +523,13 @@ popup report remains deferred.
 
 ### Mouse and menus
 
-- Middle-button drag moves land with the mouse at 3× speed, hides the pointer
+- Middle-button drag moves land with the mouse at 3Ã— speed, hides the pointer
   and uses relative capture so panning continues past the screen edge.
 - Correct HUD mouse alignment while Copy/Paste is selected.
 - Coal and nuclear plants support multiple placements in one drag.
 - Mouse clicks operate F12 options; Left decreases and Right increases.
 - Gift choices and single-gift messages accept centered mouse input. Toolbox
-  gift hitboxes cover the full 32×32 images.
+  gift hitboxes cover the full 32Ã—32 images.
 - F12 **MUTE CITY WARNINGS** suppresses crime, traffic and pollution banners
   and adviser messages without changing their simulation. Defaults to OFF.
 
@@ -496,7 +542,7 @@ popup report remains deferred.
 - Add consolidated credits, this changelog and the soundtrack import tool.
 - ROM-backed tests cover native execution state, cycles, interrupt yields,
   map-size menu/font, construction, clipboard, population and power. Paired
-  filled 1920×1600 Fit/50× CPU and Vulkan replays compare states and images.
+  filled 1920Ã—1600 Fit/50Ã— CPU and Vulkan replays compare states and images.
   Detailed measurements and fallback scope: [GPU_PERFORMANCE.md](docs/GPU_PERFORMANCE.md).
 
 Remaining limits: complete interpreter removal and sustained 60 FPS in every
@@ -506,7 +552,7 @@ hands-on testing. The reported black yearly budget popup remains deferred.
 ## Earlier enhanced releases
 
 - [Beta 10](https://github.com/kandowontu2/UrbanRecomp/releases/tag/v1.2.0-enhanced.10):
-  960×800 maps, native size selection, saved-city geometry/power recovery,
+  960Ã—800 maps, native size selection, saved-city geometry/power recovery,
   Fit to Screen and rendering performance work.
 - [Beta 9](https://github.com/kandowontu2/UrbanRecomp/releases/tag/v1.2.0-enhanced.9):
   Windows launch without a console.

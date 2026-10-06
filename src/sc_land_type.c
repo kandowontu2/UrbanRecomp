@@ -1,6 +1,9 @@
 #include "sc_land_type.h"
+#include <stdlib.h>
 
 #define RGB(r,g,b) ((r)|((g)<<5)|((b)<<10))
+#define MOON_PALETTE {RGB(19,19,20),RGB(22,22,23),RGB(12,12,14),RGB(26,26,27), \
+    RGB(10,13,17),RGB(5,7,10),RGB(20,20,21),RGB(13,13,15),RGB(7,7,9),RGB(12,12,13)}
 typedef struct {
     uint16_t ground,grain,bank,edge,fluid,deep,leaves,shade,outline,trunk;
 } LandPalette;
@@ -85,8 +88,11 @@ static const LandPalette palettes[SC_LAND_TYPES][SC_LAND_SEASONS]={
          RGB(9,12,8),RGB(5,7,5),RGB(26,19,6),RGB(18,12,4),RGB(9,7,3),RGB(9,7,3)},
         {RGB(25,26,24),RGB(27,28,26),RGB(17,19,16),RGB(30,31,28),
          RGB(12,18,19),RGB(6,11,13),RGB(27,27,22),RGB(17,19,15),RGB(8,12,9),RGB(9,7,3)}
-    }
+    },
+    /* Airless lunar dust and dark ice seas; no Earth-like vegetation/seasons. */
+    {MOON_PALETTE,MOON_PALETTE,MOON_PALETTE,MOON_PALETTE}
 };
+#undef MOON_PALETTE
 #undef RGB
 
 /* Anchors are January (winter), April, July and October. The intervening
@@ -167,6 +173,68 @@ bool ScLandGraphicsApply(ScLandGraphics *s,unsigned type,unsigned month,bool act
         if(fresh || cgram[at]!=s->shown_palette[i])s->palette[i]=cgram[at];
         uint16_t result=land_color(&p,i,s->palette[i]);
         changed|=cgram[at]!=result;cgram[at]=s->shown_palette[i]=result;
+    }
+    return changed;
+}
+
+static const unsigned stadium_chars[SC_STADIUM_CHARS]={
+    0x3b9,0x3ba,0x3bb,0x1e5,0x3bc,0x3bd,0x3be,0x1e6,
+    0x3bf,0x3c0,0x3c1,0x1e7,0x3c2,0x3c3,0x3c4,0x1e8,
+    0x2f5,0x2f6,0x2f7,0x2f8,0x2f9,0x2fa,0x2fb,0x2fc,
+    0x2fd,0x2fe,0x2ff,0x302,0x303,0x304,0x305,0x306,0x1e4
+};
+static unsigned dome_pixel(unsigned x,unsigned y,unsigned native) {
+    int dx=(int)x*2-31,dy=(int)y*2-27;
+    int ellipse=dx*dx*121+dy*dy*196;
+    if(ellipse>196*121*4 || y>26)return native;
+    if(ellipse>196*121*7/2 || y==26)return 2; /* dark perimeter and sealed base */
+    if(y>=23)return y==23?6:3;
+    /* Curved steel ribs, a central spine and two narrow reflected skylights.
+     * Use the cartridge's existing stadium gray/blue ramp, without touching
+     * the shared palette or texture of any other building. */
+    int width=28,rib=dx<0?-dx:dx;
+    while(width>0 && width*width*121+dy*dy*196>196*121*4)--width;
+    if(x==15 || x==16 || abs(rib*3-width)<3 || abs(rib*3-width*2)<3)return 3;
+    if(y==9 || y==17)return 3;
+    if(x+y>=15 && x+y<=18 && y>=5 && y<=13)return 7;
+    return x<15?6:5;
+}
+bool ScLandStadiumApply(ScLandStadiumGraphics *s,unsigned type,bool active,
+                        unsigned base,uint16_t *vram) {
+    bool dome=active && (type==SC_LAND_MARS || type==SC_LAND_VENUS || type==SC_LAND_MOON);
+    bool changed=false;
+    if(s->valid && (!dome || s->base!=base)) {
+        for(unsigned tile=0;tile<SC_STADIUM_CHARS;++tile)for(unsigned i=0;i<16;++i) {
+            unsigned at=(s->base+stadium_chars[tile]*16+i)&32767;
+            if(vram[at]==s->shown[tile][i] && vram[at]!=s->original[tile][i]) {
+                vram[at]=s->original[tile][i];changed=true;
+            }
+        }
+        s->valid=false;
+    }
+    if(!dome)return changed;
+    bool fresh=!s->valid,dirty=fresh;s->valid=true;s->base=base;
+    for(unsigned tile=0;tile<SC_STADIUM_CHARS;++tile)for(unsigned i=0;i<16;++i) {
+        unsigned at=(base+stadium_chars[tile]*16+i)&32767;
+        if(fresh || vram[at]!=s->shown[tile][i]) {
+            s->original[tile][i]=vram[at];dirty=true;
+        }
+    }
+    if(!dirty)return changed;
+    for(unsigned tile=0;tile<SC_STADIUM_CHARS;++tile) {
+        uint16_t image[16]={0};
+        if(tile<32)for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x) {
+            unsigned bit=7-x,lo=s->original[tile][y],hi=s->original[tile][y+8];
+            unsigned native=((lo>>bit)&1)|(((lo>>(bit+8))&1)<<1)|
+                (((hi>>bit)&1)<<2)|(((hi>>(bit+8))&1)<<3);
+            unsigned ci=dome_pixel((tile%4)*8+x,((tile%16)/4)*8+y,native);
+            image[y]|=(ci&1)<<bit|((ci>>1)&1)<<(bit+8);
+            image[y+8]|=((ci>>2)&1)<<bit|((ci>>3)&1)<<(bit+8);
+        }
+        for(unsigned i=0;i<16;++i) {
+            unsigned at=(base+stadium_chars[tile]*16+i)&32767;
+            changed|=vram[at]!=image[i];vram[at]=s->shown[tile][i]=image[i];
+        }
     }
     return changed;
 }

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <limits.h>
+#include <time.h>
 
 typedef struct {
   uint8_t ram[0x20000];
@@ -466,32 +467,58 @@ bool ScConstructionRefreshPower(uint8_t *ram,ScWorld *w,const uint8_t *rom,size_
   free(power);return true;
 }
 
-/* Generated districts need live density, land value and service fields before
- * their first development pass. Run the original stock scans on private WRAM;
- * the generator tiles the surrounded district's resulting spatial fields. */
+/* Initialize the actual blueprint through the original field scans. Private
+ * WRAM keeps scratch/call state out of the guest; the expanded world uses the
+ * same verified bounded C kernels as normal execution. No growth pass runs. */
 bool ScConstructionPrimeFields(uint8_t *ram,const uint8_t *rom,size_t size) {
+  return ScConstructionPrimeWorldFields(ram,NULL,rom,size);
+}
+bool ScConstructionPrimeWorldFields(uint8_t *ram,ScWorld *world,const uint8_t *rom,size_t size) {
   if(!ram || !rom || size!=0x80000)return false;
+  ScWorldGuestBindRom(rom,size);
   BuildBus *b=calloc(1,sizeof *b);if(!b)return false;
-  b->rom=rom;b->size=size;memcpy(b->ram,ram,sizeof b->ram);
+  b->rom=rom;b->size=size;b->world=world;memcpy(b->ram,ram,sizeof b->ram);
+  unsigned width=world && world->active?ScWorldWidth(world):120;
+  unsigned height=world && world->active?ScWorldHeight(world):100;
+  const uint8_t *tiles=world && world->active?world->tiles:ram+0x10200;
+  for(unsigned f=0;f<SC_WORLD_FIELDS;++f)if(f!=5) {
+    const ScWorldField *field=&ScWorldFields[f];
+    uint8_t *dest=world && world->active?world->fields[f]:b->ram+0x10000+field->base;
+    memset(dest,0,world && world->active?ScWorldFieldSizeWorld(world,f):
+        field->stock_width*field->stock_height*field->element_bytes);
+  }
   /* 03:ab0e/ab67 contribute the full 1000-point funded service strength
    * at each powered, transport-connected ordinary fire/police station. */
-  for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x) {
-    unsigned raw=word(ram,0x10200+2*(y*120+x)),tile=raw&1023;
-    if(tile!=0x249 && tile!=0x252)continue;
-    unsigned a=0x10000+(tile==0x249?0xb2f4:0xb16e)+2*((y/8)*15+x/8);
-    put(b->ram,a,word(b->ram,a)+((raw&0x8000)?1000:500));
+  for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
+    unsigned raw=word(tiles,2*(y*width+x)),tile=raw&1023;
+    if(tile!=0x249 && tile!=0x252 && tile!=0x307 && tile!=0x310)continue;
+    unsigned f=tile==0x249 || tile==0x307?11:10;
+    uint8_t *dest=world && world->active?world->fields[f]:b->ram+0x10000+ScWorldFields[f].base;
+    unsigned a=2*((y/8)*(width/8)+x/8),strength=(tile>=0x307?2000:1000);
+    /* All blueprint stations have a native perimeter transport probe. */
+    if(!(raw&0x8000))strength/=2;
+    put(dest,a,word(dest,a)+strength);
   }
   Interp816 *c=interp816_init(b,read_bus,write_bus);if(!c){free(b);return false;}
-  const unsigned scans[]={0x9ad7,0x9aa3,0x9c11,0x9e8e};bool ok=true;
+  const unsigned scans[]={0x9ad7,0x9aa3,0x9c11,0x9c11,0x9e8e};bool ok=true;
   for(unsigned n=0;n<sizeof scans/sizeof *scans && ok;++n) {
+    clock_t began=clock();
     interp816_reset(c);c->k=c->db=3;c->pc=scans[n];c->sp=0x1ffd;c->dp=0x1e00;
     c->mf=c->xf=c->e=false;c->i=true;put(b->ram,0x1ffe,0x6fff);
     unsigned steps=0;
     while(c->pc!=0x7000 || c->k!=3) {
-      if(++steps>20000000 || b->fault || c->stopped || c->waiting){ok=false;break;}
+      if(++steps>200000000 || b->fault || c->stopped || c->waiting){ok=false;break;}
+      if(world && world->active) {
+        if(ScWorldGuestBatchStep(world,c,b->ram,rom,size,1000000))continue;
+        if(ScWorldGuestKernelStep(world,c,b->ram,rom,size,1000000))continue;
+        ScWorldGuestStepPrepared(world,c,b->ram);
+        ScWorldGuestBeginPrepared(&b->guest,world,c,rom,size);
+      }
       ScProgramExecute(c);
     }
     ok=ok && c->sp==0x1fff && c->dp==0x1e00;
+    if(getenv("SC_TEST_CITY_DIAG"))fprintf(stderr,"[test city fields] %ux%u pc=%x steps=%u seconds=%.3f ok=%u\n",
+        width,height,scans[n],steps,(double)(clock()-began)/CLOCKS_PER_SEC,ok);
   }
   if(ok) {
     for(unsigned f=0;f<17;++f) {

@@ -83,6 +83,8 @@ def main():
         (os.path.join(ROOT, "CREDITS.md"), "CREDITS.md"),
         (os.path.join(ROOT, "CHANGELOG.md"), "CHANGELOG.md"),
         (os.path.join(ROOT, "docs", "PC_ENHANCEMENTS.md"), "PC_ENHANCEMENTS.md"),
+        (os.path.join(ROOT, "docs", "TEST_CITY_LAYOUT.md"), "TEST_CITY_LAYOUT.md"),
+        (os.path.join(ROOT, "docs", "PLACEMENT_EFFECTS.md"), "PLACEMENT_EFFECTS.md"),
         (os.path.join(ROOT, "docs", "GPU_PERFORMANCE.md"), "GPU_PERFORMANCE.md"),
         (os.path.join(ROOT, "docs", "NATIVE_EXECUTION.md"), "NATIVE_EXECUTION.md"),
         (os.path.join(ROOT, "tools", "start_release.cmd"), "Start-UrbanRecomp.cmd"),

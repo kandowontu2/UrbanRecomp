@@ -172,6 +172,7 @@ void sc_mapgen_preview_build(ScMapPreview *preview, const uint16_t *map,
 /* Replace a selected terrain type atomically, retaining its inspection view. */
 void sc_mapgen_preview_refresh(ScMapPreview *preview, const uint16_t *map,
                               unsigned width, unsigned height, unsigned seed);
+void sc_mapgen_remove_forests(ScMapGenState *state);
 unsigned sc_mapgen_preview_cell(const ScMapPreview *preview, unsigned x, unsigned y);
 void sc_mapgen_preview_raster(const ScMapPreview *preview,uint8_t *cells,uint8_t *reveal,
                               unsigned width,unsigned height);

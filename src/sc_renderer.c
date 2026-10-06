@@ -10,7 +10,8 @@
 #include <stdio.h>
 #include <math.h>
 
-enum { MAP = 0x10200, TILES = 0x156a9, OVERLAYS = TILES - 0x77c, CELL_TYPES = 0x77c/2 };
+enum { MAP = 0x10200, TILES = 0x156a9, OVERLAYS = TILES - 0x77c,
+    VIEW_TILES = TILES + 0x77c, CELL_TYPES = 0x77c/2 };
 #define MEASURE_BEGIN(r) ((r)->measure_clock ? (r)->measure_clock() : 0)
 #define MEASURE_END(r,stage,start) do { if((r)->measure_clock) \
     (r)->measure_ticks[stage]+=(r)->measure_clock()-(start); } while(0)
@@ -1141,17 +1142,40 @@ static void zoom_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y,bo
         }
         row->math&=~SC_ROW_OBJECT_CORE;
         row->world_y=(row->world_y&7)|((uint32_t)virtual_y<<8);
+        if(r->land_view_frame && (p->screenEnabled[0]&4)) {
+            /* View's third tile table is world artwork, not a fixed-size
+             * menu. Capture its live BG3 CHR/palette at the same inverse
+             * projection as the land; CPU and GPU share these overlays. */
+            bool large=r->world && r->world->active;
+            unsigned width=large?ScWorldWidth(r->world):120;
+            unsigned height=large?ScWorldHeight(r->world):100;
+            const uint8_t *map=large?r->world->tiles:ram+MAP;
+            int wy=sy+virtual_y+1;
+            for(unsigned x=0;x<(unsigned)r->view.width;++x) {
+                int wx=sx+zoom_local(r,(int)x-r->view.core_x,false);
+                unsigned ci=0;
+                if(wx>=0 && wy>=0 && (unsigned)wx<width*8 && (unsigned)wy<height*8) {
+                    unsigned cell=u16(map,2*((wy/8)*width+wx/8))&1023;
+                    if(cell<CELL_TYPES && VIEW_TILES+2*cell+1<r->rom_size) {
+                        unsigned word=u16(r->rom,VIEW_TILES+2*cell)|0x2000;
+                        ci=tile_pixel(p,word,PPU_bgTileAdr(p,2),wx,wy,2,0);
+                    }
+                }
+                r->terrain.overlays[(size_t)ay*r->view.width+x].background=
+                    UINT32_C(0x80000000)|(ci<<16)|((PPU_bg3priority(p)?15u:3u)<<24);
+            }
+        }
     }
     uint32_t *out=r->pixels+(size_t)ay*r->view.width;
     int first=core_only?r->view.core_x:0,end=core_only?r->view.core_x+256:r->view.width;
-    if(r->zoom_hud && !r->advisor_frame && !r->city_overlay_frame && y>=0 && y<46)return;
+    if(r->zoom_hud && !r->advisor_frame && !r->city_overlay_frame && !r->land_view_frame && y>=0 && y<46)return;
     /* Project continuous land spans, then apply fixed UI ink. */
     bool deferred=r->defer_terrain && !PPU_forcedBlank(p);
     if(deferred) {
         for(int x=first;x<end;++x)out[x]=SC_TERRAIN_PIXEL;
         if(end>first)r->terrain.deferred+=(unsigned)(end-first);
     } else for(int x=first;x<end;++x)out[x]=ScTerrainPixel(&r->terrain,x,ay);
-    if(!core_only || !r->zoom_hud || r->advisor_frame || r->city_overlay_frame || y<46 || y>=224)return;
+    if(!core_only || !r->zoom_hud || r->advisor_frame || r->city_overlay_frame || r->land_view_frame || y<46 || y>=224)return;
     /* The toolbox is BG3 plus fixed UI objects. Recompose that artwork over
      * projected land, never the native city cache or its building roofs. */
     unsigned ranks[56]={0};
@@ -1533,6 +1557,18 @@ static void place_advisor(ScRenderer *r) {
         if (pixel) r->pixels[(size_t)(y+dy)*r->view.width+x+dx]=pixel;
     }
 }
+/* Short city notices do not suspend input. Their high-priority BG3 ink is
+ * still fixed UI, even while the land underneath is projected or repaired. */
+static void city_notice_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
+    if(!u16(ram,0x387) || !city_live(r,p,ram) || r->advisor_frame ||
+       y<46 || !(p->screenEnabled[0]&4) || !PPU_bg3priority(p))return;
+    uint32_t *out=r->pixels+(size_t)(y+r->view.core_y)*r->view.width+r->view.core_x;
+    for(int x=56;x<256;++x) {
+        if((p->screenWindowed[0]&4) && window_contains(p,2,x))continue;
+        bool high=false;unsigned ci=bg_sample(p,2,x,y+1,&high);
+        if(ci && high)out[x]=composite_color(p,ci,2,0,5,x);
+    }
+}
 static bool in_rect(int x,int y,int left,int top,int width,int height) {
     return x>=left && x<left+width && y>=top && y<top+height;
 }
@@ -1842,6 +1878,26 @@ static uint32_t hud_ground(const Ppu *p) {
 static bool population_host_draw(const ScRenderer *r) {
     return r->rom_is_us && r->population && r->population->valid &&
         (r->population->live || r->population->value>999999);
+}
+void ScRendererYearRow(const ScRenderer *r,const Ppu *p,const uint8_t *ram,
+                      ScViewport v,int y,uint32_t *out) {
+    unsigned year=ScWorldYear(r->world,ram);
+    if(!r->rom_is_us || !year || y<12 || y>=20)return;
+    char digits[12];snprintf(digits,sizeof digits,"%u",year);
+    int count=(int)strlen(digits),first=v.core_x+17;
+    /* Six date digits plus a gap and three month letters fit above the
+     * unchanged toolbar, even in the original 256-pixel viewport. */
+    for(int x=first;x<v.core_x+97 && x<v.width;++x)if(x>=0)out[x]=hud_ground(p);
+    for(int g=0;g<count+3;++g) {
+        unsigned attr=g<count?(p->oam[23]&0xff00)|rom_read((void *)r,0x0085e1+digits[g]-'0'):
+            p->oam[(16+g-count)*2+1];
+        int left=first+(g+(g>=count))*8;
+        for(int x=0;x<8;++x) {
+            unsigned ci=sprite_word_pixel(p,attr,8,x,y-12);
+            if(ci && left+x>=0 && left+x<v.width)
+                out[left+x]=composite_color(p,ci,ci<192?6:4,0,5,17+x);
+        }
+    }
 }
 void ScRendererPopulationRow(const ScRenderer *r,const Ppu *p,ScViewport v,
                              bool split,int y,uint32_t *out) {
@@ -2302,7 +2358,8 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
             (p->screenEnabled[1]&31)==3 && !(PPU_mathEnabled(p)&20) &&
             (r->map_zoom!=1 || r->camera_x || r->camera_y ||
              r->view.core_x!=(r->view.width-256)/2 || r->view.core_y!=(r->view.height-224)/2);
-        bool hud=city_live(r,p,ram) && !r->advisor_frame && u16(ram,0x1d7) &&
+        r->land_view_frame=city_live(r,p,ram) && u16(ram,0xd7)==2 && u16(ram,0x1df)==6;
+        bool hud=city_live(r,p,ram) && !r->advisor_frame && !r->land_view_frame && u16(ram,0x1d7) &&
             (p->screenEnabled[0]&3)==3 && !u16(ram,0x379);
         r->split_hud=hud && r->view.width>256;
         r->pan_frame=city_live(r,p,ram) && !r->advisor_frame && !u16(ram,0x379) &&
@@ -2315,7 +2372,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
          * Retain its pivot while overlays temporarily hide the HUD. */
         if(r->city_input || !city_live(r,p,ram))r->zoom_hud=hud;
         r->zoom_frame=city_live(r,p,ram) && !r->map_hold && r->map_zoom>0 && (fabs(r->map_zoom-1)>1e-9 || r->camera_x || r->camera_y || (r->vehicle_count && r->vehicles[r->vehicle_count-1].host));
-        r->city_overlay_frame=r->zoom_frame && !r->city_input && !r->advisor_frame && !r->pan_frame;
+        r->city_overlay_frame=r->zoom_frame && !r->city_input && !r->advisor_frame && !r->pan_frame && !r->land_view_frame;
         if(getenv("SC_CITY_VIEW_DIAG"))fprintf(stderr,
             "[city view] input=%d adviser=%d pan=%d zoom=%g applied=%d hud=%d masks=%u/%u modal=%u/%u/%u/%u\n",
             r->city_input,r->advisor_frame,r->pan_frame,r->map_zoom,r->zoom_frame,r->zoom_hud,
@@ -2370,13 +2427,17 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
     MEASURE_END(r,SC_RENDER_NATIVE,measured);
     measured=MEASURE_BEGIN(r);
     fresh_city_row(r,p,ram,line);
+    city_notice_row(r,p,ram,line);
     MEASURE_END(r,SC_RENDER_REPAIR,measured);
     measured=MEASURE_BEGIN(r);
     if (r->split_hud || r->pan_frame || r->mouse_minimap_frame) city_hud_row(r,p,ram,line);
     if (city_live(r,p,ram) && !r->advisor_frame && u16(ram,0x1d7) &&
         (p->screenEnabled[0]&3)==3 && !u16(ram,0x379))
-        ScRendererPopulationRow(r,p,r->view,r->split_hud,line,
-            r->pixels+(size_t)(line+r->view.core_y)*r->view.width);
+    {
+        uint32_t *out=r->pixels+(size_t)(line+r->view.core_y)*r->view.width;
+        ScRendererPopulationRow(r,p,r->view,r->split_hud,line,out);
+        ScRendererYearRow(r,p,ram,r->view,line,out);
+    }
     map_preview_row(r,p,ram,line);
     ScRendererMapGenerationRow(r,p,r->view,line,
         r->pixels+(size_t)(line+r->view.core_y)*r->view.width);

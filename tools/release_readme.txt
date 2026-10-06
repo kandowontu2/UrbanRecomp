@@ -1,5 +1,5 @@
-URBAN RECOMP ENHANCED BETA 21 - LAND TYPES AND SEASONS
-=============================================================
+URBAN RECOMP ENHANCED BETA 22
+==========================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
 The runtime, assets, documentation, credits and all 19 restored songs are
@@ -16,10 +16,37 @@ GPU_PERFORMANCE.md contain build controls, validation and performance limits.
 Land-type graphics keep the original terrain textures, connected forest/shore
 edges and water animation, with deliberate soil, water/lava and canopy palettes.
 No noisy repeated replacement patterns or cut-up forest tiles remain.
-All seven custom themes now have seasonal colors driven by the saved game month,
+The seven existing custom themes have seasonal colors driven by the saved game month,
 blending between winter, spring, summer and autumn. Tropical themes stay evergreen,
 lava stays hot, and seasonal ice is visual. Pan minimaps follow the current season;
 new-map previews show January. Native cartridge seasons remain unchanged.
+Moon adds gray lunar terrain with stable year-round colors and no naturally
+generated forests. Football stadiums on Mars, Venus and Moon have dome roofs;
+their gameplay behavior remains unchanged. Short city notices retain solid
+paper, readable text and intact borders over zoomed terrain.
+
+Hidden Test City 3 now asks for map size and development speed when unsaved.
+All six sizes start with empty powered R/C/I zones on water-free map 31337,
+connected rail/roads, services, parks, 27 distributed gifts, a stadium, airport
+and dry-land port. Industry is outside, commerce buffers it, and housing has
+local jobs and parks. The placement guide covers every tool and gift.
+Its layout follows native transport, growth and employment rules. The largest
+layout's ordinary capacity is 511,159,040; this is not a measured stable peak.
+Existing City 3 saves load directly and City 1/2 slots remain intact.
+PLACEMENT_EFFECTS.md and TEST_CITY_LAYOUT.md explain the source calculations,
+natural ten-year measurements and practical limits. The native 120x100 test
+reached 310,880 after ten years with no completely empty housing; this is
+not a proof of a stable maximum. Existing saved test cities retain their layout.
+
+The calendar now reaches year 999999 with no leading zeroes. The HUD and
+budget show the complete year; full years persist in city and snapshot saves.
+Existing earlier saves are imported with their native date.
+
+Held Tab advances six full simulation frames per display update; Shift+Tab
+advances 24, and Ctrl+Shift+Tab advances 96. Development, the calendar, demand, services and vehicles speed
+up together, while restored music keeps normal tempo. Busy cities no longer
+silently truncate fast-forward to one frame. Actual acceleration depends on
+city workload and hardware; the title measures speed against the native clock.
 
 The map-selection screen has GENERATION arrows for choosing the terrain type.
 Changing generation or land type replaces the complete preview and colors
@@ -159,7 +186,7 @@ L / R        Q / W
 Start        Enter
 Select       B
 
-Tab          fast-forward (hold); Shift+Tab requests 4x the usual boost
+Tab          simulation fast-forward (hold), 6x target; Shift+Tab 24x; Ctrl+Shift+Tab 96x
 Escape       Save City during play; Back/Close in menus
 Ctrl+Shift+tilde  reveal hidden test City 3 on the load-city page
 X + arrows   pan the free city camera
@@ -217,9 +244,9 @@ URBAN RECOMP (DEUTSCH, KURZ)
 ----------------------------
 
 Eigene US-ROM (.sfc/.smc, beliebiger Name) in diesen Ordner legen und
-UrbanRecomp.exe starten. F10 öffnet das Einstellungsmenü. Deutsch: deutsche
-ROM dazulegen und "python tools/make_translations.py de" ausführen, dann im
-Launcher die Sprache wählen. Gespeicherte Städte liegen in
+UrbanRecomp.exe starten. F10 Ã¶ffnet das EinstellungsmenÃ¼. Deutsch: deutsche
+ROM dazulegen und "python tools/make_translations.py de" ausfÃ¼hren, dann im
+Launcher die Sprache wÃ¤hlen. Gespeicherte StÃ¤dte liegen in
 urbanrecomp-us.srm.
 
 Land types: Native, Basalt (lava), Amazon (extra forests), Desert, Mars, Venus,

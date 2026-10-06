@@ -2077,6 +2077,12 @@ void sc_mapgen_preview_build(ScMapPreview *p,const uint16_t *map,
     sc_mapgen_preview_raster(p,p->cells,p->reveal,120,100);
     p->active=1;
 }
+void sc_mapgen_remove_forests(ScMapGenState *st) {
+    for(unsigned i=0;i<(unsigned)st->width*st->height;++i) {
+        unsigned tile=st->map[i]&1023;
+        if(tile>=20 && tile<38)st->map[i]=0;
+    }
+}
 void sc_mapgen_preview_refresh(ScMapPreview *p,const uint16_t *map,
                                unsigned width,unsigned height,unsigned seed) {
     bool retain=p->active && p->width==width && p->height==height;

@@ -61,6 +61,8 @@ typedef SDL_Rect ScRect;
 #include "snes/cart.h"
 #include "snes/dsp1.h"
 #include "snes/interp816.h"
+extern uint64_t interp816_insns_total(void);
+extern uint64_t interp816_cycles_total(void);
 #include "sc_program.h"
 #include "types.h"
 
@@ -134,6 +136,7 @@ static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge, 3 960x800, 4 1920x1600, 5 3
 static int s_terrain_style;
 static int s_land_type;
 static ScLandGraphics s_land_graphics;
+static ScLandStadiumGraphics s_stadium_graphics;
 static bool s_rom_is_us = true;
 static bool s_journey_arming;
 static unsigned s_journey_menu_selection;
@@ -149,6 +152,7 @@ static double s_preview_cursor_x,s_preview_cursor_y;
 static bool s_city_present_pending,s_city_fade_started,s_city_black_seen;
 static bool s_test_revealed,s_test_load_pending,s_test_generate_pending,s_test_saving,s_test_swap;
 static bool s_test_menu_pending;
+static bool s_test_setup;
 static uint8_t s_test_native_backup[0x8000],s_test_names_backup[32];
 static unsigned s_test_flags_backup;
 static void test_city_restore_sram(void);
@@ -1045,6 +1049,8 @@ static void handle_pos_stuff(void) {
       s_custom_renderer.land_type=(unsigned)s_land_type;
       if(ScLandGraphicsApply(&s_land_graphics,s_world.land_type,ram_w(0xb55),host_map_screen_live(),
           PPU_bgTileAdr(g_ppu,1),g_ppu->vram,g_ppu->cgram))ScPpuVramChanged();
+      if(ScLandStadiumApply(&s_stadium_graphics,s_world.land_type,host_map_screen_live(),
+          PPU_bgTileAdr(g_ppu,1),g_ppu->vram))ScPpuVramChanged();
       s_custom_renderer.setup_size=s_world.active?(s_world.mega?5:s_world.colossal?4:s_world.giant?3:s_world.huge?2:1):0;
       s_custom_renderer.setup_page=ScRendererCitySetupVisible(g_ppu,g_ram);
       if(s_custom_renderer.setup_page==9 && !s_ui_mouse_pointer.active)
@@ -2724,8 +2730,7 @@ static void test_city_restore_sram(void) {
 static bool test_city_begin_load(void) {
   uint32_t n;const uint8_t *record=ScSram_Extra(&n);
   if(!n) {
-    s_test_generate_pending=true;
-    s_city_present_pending=true;s_city_fade_started=s_city_black_seen=false;
+    s_test_setup=true;
     return true;
   }
   ScWorld *world=malloc(sizeof *world);ScPopulation population;
@@ -4054,7 +4059,7 @@ static unsigned sc_run_city_lane(uint64_t target,long *guard) {
         if(snes->hIrqEnabled && (!snes->vIrqEnabled || snes->vPos==snes->vTimer+1)) {
             unsigned irq=4*snes->hTimer;if(irq>=snes->hPos && irq<boundary)boundary=irq;
         }
-        unsigned scale=ScWorldGuestClockScale(&s_world,0x30000|entry),budget=0;
+        unsigned scale=ScWorldGuestCpuClockScale(&s_world,c,g_ram),budget=0;
         if(extra)budget=4096;
         else if(snes->hPos && boundary>snes->hPos+2) {
             unsigned master=(boundary-snes->hPos-2)*scale,remainder=scale>1?s_map_cycle_remainder:0;
@@ -4084,7 +4089,7 @@ static unsigned sc_run_city_lane(uint64_t target,long *guard) {
         if(!cost)break;
         sc_note_executed_pc(0x30000|entry,c->mf,c->xf);++spans;
         if(!extra) {
-            unsigned master=ScWorldGuestMasterCycles(&s_world,0x30000|entry,cost*8,&s_map_cycle_remainder);
+            unsigned master=ScWorldGuestScaledCycles(cost*8,scale,&s_map_cycle_remainder);
             g_master_cycles+=master;sc_advance_beam(master);
             snes->apuCatchupCycles+=(double)master*kApuCyclesPerMaster;sc_catchup_apu(snes);
         }
@@ -4357,6 +4362,7 @@ static bool run_one_frame(void) {
           if(s_terrain_style)sc_mapgen_generate_style(&pr,&gs,0,s_terrain_style);
           else sc_mapgen_generate(&pr,&gs);
           if(s_land_type==SC_LAND_AMAZON)sc_mapgen_extra_forests(&pr,&gs);
+          if(s_land_type==SC_LAND_MOON)sc_mapgen_remove_forests(&gs);
           sc_mapgen_apply_number(&gs,number);
           s_world.journey=s_journey_arming;
         }
@@ -4450,10 +4456,17 @@ static bool run_one_frame(void) {
       if(s_test_revealed && cpu->k==3 && cpu->pc==0xe2a5 && ram_w(0x421)==2)
         cpu->pc=0xe2a9; /* generated City 3 is available even before first save */
       if(cpu->k==3 && cpu->pc==0xe2b8 && s_test_revealed && ram_w(0x421)==2) {
-        if(test_city_begin_load())ram_set_w(0x421,0);
+        if(test_city_begin_load()) {
+          if(s_test_setup) {ram_set_w(0x14,2);cpu->pc=0xe2c3;}
+          else ram_set_w(0x421,0);
+        }
         else {cpu->pc=0xe2c4;ram_set_w(0x421,2);}
       }
       if(cpu->k==3 && cpu->pc==0xc5e5 && s_test_generate_pending)cpu->pc=0xc5eb;
+      /* The unsaved test city already completed its two setup pages. Reuse
+       * the Practice initializer without its welcome/tutorial screen. This
+       * edge retains the native fade and initializer's caller stack. */
+      if(cpu->k==3 && cpu->pc==0xe246 && s_test_generate_pending)cpu->pc=0xe26d;
       if(cpu->k==3 && cpu->pc==0xcafd && s_world.test_city) {
         if(test_city_private_sram(NULL)) {s_test_saving=true;ram_set_w(0x423,1);}
         else {fprintf(stderr,"[test city] save unavailable; normal slots preserved\n");cpu->pc=0xcc16;ram_set_w(0x48,1);}
@@ -4496,6 +4509,10 @@ static bool run_one_frame(void) {
         if(getenv("SC_SETTINGS_DIAG"))fprintf(stderr,"[city setup] reset main entry %04x speed-page %d\n",cpu->pc,ScDevelopmentMenuActive());
         s_city_present_pending=s_city_fade_started=s_city_black_seen=false;
         s_size_selecting=s_speed_selecting=s_practice_size_pending=false;ScMapSizeMenuSet(false);
+        if(s_test_setup) {
+          s_size_selecting=true;s_size_game_choice=1;ScMapSizeMenuSet(true);
+          ram_set_w(0x3e,s_large_maps+1);
+        }
       }
       if((s_size_selecting || s_speed_selecting) && cpu->k==3 && cpu->pc==0xd337) cpu->pc=0xd33b;
       if((s_size_selecting || s_speed_selecting) && cpu->k==3 && cpu->pc==0xd333 && (g_ram[0xc9]&0x40)) {
@@ -4504,9 +4521,15 @@ static bool run_one_frame(void) {
           ram_set_w(0x3e,s_large_maps+1);
         } else {
           s_size_selecting=s_speed_selecting=false;ScMapSizeMenuSet(false);
-          ram_set_w(0x3e,s_size_game_choice);
+          if(s_test_setup) {
+            s_test_setup=false;ram_set_w(0x3e,0);
+            /* d333 normally executes SEP #$30 before this fade/dispatch.
+             * Retain its byte widths when Back skips directly to d366. */
+            cpu->mf=cpu->xf=true;cpu->x&=255;cpu->y&=255;cpu->pc=0xd366;
+          }
+          else ram_set_w(0x3e,s_size_game_choice);
         }
-        cpu->pc=0xd370;
+        if(cpu->pc!=0xd366)cpu->pc=0xd370;
       }
       if((ScMapSizeMenuActive() || ScDevelopmentMenuActive()) && cpu->k==2 && cpu->pc==0xbcbd) cpu->pc=0xbcd0;
       /* Resume uses its own cartridge text template, whose left edge is
@@ -4557,6 +4580,10 @@ static bool run_one_frame(void) {
           s_new_city_speed=kCityDevelopmentSpeeds[s_speed_selection-1];
           s_speed_selecting=false;selected=s_size_game_choice;ram_set_w(0x3e,selected);
           s_practice_size_pending=selected==1;
+          if(s_test_setup) {
+            s_test_setup=false;s_test_generate_pending=true;s_practice_size_pending=false;
+            s_city_present_pending=true;s_city_fade_started=s_city_black_seen=false;
+          }
           if(getenv("SC_SETTINGS_DIAG"))fprintf(stderr,"[city speed] selected %ux for new city\n",s_new_city_speed);
         }
         s_journey_menu_selection=selected;s_journey_arming=selected==3;
@@ -4955,22 +4982,25 @@ static bool run_one_frame(void) {
           test_city_restore_sram();s_test_load_pending=false;
           if(ok) {
             ScPopulationMirror(&s_population,g_ram);ScWorldMirror(&s_world,g_ram);
-            ram_set_w(0x1c5,ScWorldWidth(&s_world)-(ram_w(0x1d7)?25:30));
-            ram_set_w(0x1c9,ScWorldHeight(&s_world)-(ram_w(0x1d7)?22:26));
+            ram_set_w(0x1c5,(s_world.active?ScWorldWidth(&s_world):120)-(ram_w(0x1d7)?25:30));
+            ram_set_w(0x1c9,(s_world.active?ScWorldHeight(&s_world):100)-(ram_w(0x1d7)?22:26));
             fprintf(stderr,"[test city] loaded saved City 3, population %llu\n",(unsigned long long)s_population.value);
           }
         } else {population_saved_city(false);world_saved_city(false);}
+        if(!s_world.calendar_year)s_world.calendar_year=ram_w(0xb53);
+        ScWorldYearMirror(&s_world,g_ram);
       }
       if (cpu->pc == 0xc8dd) s_city_loading=false;
       if(cpu->pc==0xc633 && s_test_generate_pending) {
         ScTestCityStats stats;
-        bool ok=ScTestCityGenerate(&s_world,&s_population,g_ram,g_snes->cart->rom,g_snes->cart->romSize,&stats);
+        bool ok=ScTestCityGenerate(&s_world,&s_population,g_ram,g_snes->cart->rom,g_snes->cart->romSize,
+            (unsigned)s_large_maps,s_new_city_speed,&stats);
         s_test_generate_pending=false;s_practice_size_pending=false;s_journey_arming=false;
         reset_refresh_clocks();ScDevelopmentReset(&s_development);memset(&s_world_guest,0,sizeof s_world_guest);
         ScRendererResetHistory(&s_custom_renderer);
         if(!ok) {s_city_present_pending=false;fprintf(stderr,"[test city] generation failed\n");}
       }
-      if(cpu->pc==0xc63c && s_world.test_city)ram_set_w(0x38,0);
+      if(cpu->pc==0xc63c && s_world.test_city) {ram_set_w(0x38,0);ScTestCityConfigureStart(g_ram);}
       if(cpu->pc==0xc633 && s_practice_size_pending) {
         ScMapGenPrng pr={ram_w(0x59),ram_w(0x5b),ram_w(0x5d)};
         if(s_large_maps)ScWorldGenerateLand(&s_world,s_large_maps,&pr,s_terrain_style,s_land_type);
@@ -4985,6 +5015,11 @@ static bool run_one_frame(void) {
             free(forest);
           }
         }
+        if(!s_world.active && s_land_type==SC_LAND_MOON)
+          for(unsigned i=0;i<12000;++i) {
+            unsigned tile=ram_w(0x10200+2*i)&1023;
+            if(tile>=20 && tile<38)ram_set_w(0x10200+2*i,0);
+          }
         if(s_world.active) {
           ScWorldMirror(&s_world,g_ram);
           ram_set_w(0x1c5,ScWorldWidth(&s_world)-25);ram_set_w(0x1c9,ScWorldHeight(&s_world)-22);
@@ -5067,6 +5102,7 @@ static bool run_one_frame(void) {
       !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i);
     const uint32_t executed_pc=((uint32_t)cpu->k<<16)|cpu->pc;
     const bool interrupt_work=cpu->nmiWanted || (cpu->irqWanted && !cpu->i);
+    const unsigned spatial_clock_scale=interrupt_work?1:ScWorldGuestCpuClockScale(&s_world,cpu,g_ram);
     /* The clean US driver's music command write (not its upload/SFX ports).
      * Keep its following acknowledgement store consistent with the SPC-zero
      * substitution. The ROM bytes and all other port writes remain original. */
@@ -5147,9 +5183,8 @@ static bool run_one_frame(void) {
        s_rom_fnv==SC_ROM_FNV_US && !interrupt_work && cpu->k==3 &&
        ((cpu->pc>=0xa32e && cpu->pc<=0xa342) || cpu->pc==0xa395 || ScMathDivideOwns(cpu->pc) || cpu->pc==0xa462 ||
         ScMathRngOwns(cpu->pc))) {
-      /* Multiply/divide keeps the original clock on every map size. RNG is
-       * inside the existing map-scaled spatial clock range ($88f3-$90a6),
-       * so its deadline budget must include that same area and remainder. */
+      /* Per-cell arithmetic inherits the spatial caller's area scale. Global
+       * demand/budget calculations keep their original clock. */
       unsigned boundary=snes->hPos<1024?1024:1364;
       if(snes->hIrqEnabled && (!snes->vIrqEnabled || snes->vPos==snes->vTimer+1)) {
         unsigned irq=4*snes->hTimer;
@@ -5158,9 +5193,8 @@ static bool run_one_frame(void) {
       if(extra_native) fast_cycles=ScMathBatchStep(cpu,g_ram,4096);
       else if(snes->hPos && boundary>snes->hPos+2) {
         unsigned budget=boundary-snes->hPos-2;
-        bool rng_scaled=s_world.active && cpu->pc>=0x9035 && cpu->pc<=0x90a6;
-        if(rng_scaled) budget*=ScWorldCells(&s_world)/12000;
-        unsigned remainder=rng_scaled?s_map_cycle_remainder:0;
+        budget*=spatial_clock_scale;
+        unsigned remainder=spatial_clock_scale>1?s_map_cycle_remainder:0;
         if(budget>remainder) fast_cycles=ScMathBatchStep(cpu,g_ram,(budget-remainder)/8);
       }
     }
@@ -5184,7 +5218,7 @@ static bool run_one_frame(void) {
             g_snes->cart->romSize,fast_budget);
         if(fast_cycles) s_world_guest.mapped=false;
       } else if(snes->hPos && boundary>snes->hPos+2) {
-        unsigned scale=ScWorldGuestClockScale(&s_world,executed_pc);
+        unsigned scale=spatial_clock_scale;
         unsigned budget=(boundary-snes->hPos-2)*scale;
         unsigned remainder=scale>1?s_map_cycle_remainder:0;
         if(budget>remainder) {
@@ -5230,7 +5264,7 @@ static bool run_one_frame(void) {
     if (cyc <= 0) cyc = 1;
     int master = cyc * 8;
     if (s_rom_fnv==SC_ROM_FNV_US && !interrupt_work)
-      master=ScWorldGuestMasterCycles(&s_world,executed_pc,master,&s_map_cycle_remainder);
+      master=ScWorldGuestScaledCycles(master,spatial_clock_scale,&s_map_cycle_remainder);
     g_master_cycles += (uint64_t)master;
     sc_advance_beam(master);
     snes->apuCatchupCycles += (double)master * kApuCyclesPerMaster;
@@ -7638,8 +7672,12 @@ static bool save_state(const char *path) {
    * world record. Reloading then applies the theme exactly once. */
   bool themed=s_land_graphics.valid;
   unsigned land_base=s_land_graphics.base;
+  bool domed=s_stadium_graphics.valid;
+  unsigned stadium_base=s_stadium_graphics.base;
+  if(domed && ScLandStadiumApply(&s_stadium_graphics,0,false,stadium_base,g_ppu->vram))ScPpuVramChanged();
   if(themed && ScLandGraphicsApply(&s_land_graphics,0,ram_w(0xb55),false,land_base,g_ppu->vram,g_ppu->cgram))ScPpuVramChanged();
   ScMusicLock();snes_saveload(g_snes, &fs.base);ScMusicUnlock();
+  if(domed && ScLandStadiumApply(&s_stadium_graphics,s_world.land_type,true,stadium_base,g_ppu->vram))ScPpuVramChanged();
   if(themed && ScLandGraphicsApply(&s_land_graphics,s_world.land_type,ram_w(0xb55),true,land_base,g_ppu->vram,g_ppu->cgram))ScPpuVramChanged();
   interp816_saveload(g_cpu, &fs.base);
   fs.base.func(&fs.base, &s_frames, sizeof(s_frames));
@@ -7684,6 +7722,7 @@ static bool load_state(const char *path) {
   }
   s_ui_mouse_pointer=(ScMouseUiPointer){0};
   memset(&s_land_graphics,0,sizeof s_land_graphics);
+  memset(&s_stadium_graphics,0,sizeof s_stadium_graphics);
   s_custom_renderer.menu_pointer_active=false;
   s_custom_renderer.map_preview.active=0;s_preview_started=0;
   s_map_number_high=0;s_map_number_dirty=false;s_preview_type_refresh=false;
@@ -7694,6 +7733,7 @@ static bool load_state(const char *path) {
   fs.f = f;
   fs.ok = true;
   test_city_restore_sram();s_test_load_pending=s_test_generate_pending=s_test_saving=s_test_menu_pending=false;
+  s_test_setup=false;
   ScSram_Hold();   /* the saved cities on disk stay the player's */
   s_mouse_dialog=SC_MOUSE_DIALOG_NONE;
   s_save_dialog_pending=s_save_dialog_active=false;
@@ -7737,6 +7777,7 @@ static bool load_state(const char *path) {
       }
     }
   }
+  ScWorldYearMirror(&s_world,g_ram);
   g_ppu->lastBrightnessMult = 0xff;   /* rebuild the brightness tables */
   ScRendererResetCamera(&s_custom_renderer);
   ScRendererResetHistory(&s_custom_renderer);
@@ -11335,7 +11376,6 @@ int main(int argc, char **argv) {
     perf_sum[slot] += _ms; perf_total[slot]+=_ms; perf_current[slot]=_ms; if (_ms > perf_max[slot]) perf_max[slot] = _ms; } } while (0)
   uint64_t fps_window_frames = 0;
   uint64_t fps_guest_frames=0;
-  double full_frame_ms=8.0,extra_frame_ms=6.0;
   /* Recorded equivalent of holding Tab, for dummy-SDL pacing checks. */
   const bool test_fast_forward=getenv("SC_FAST_FORWARD")!=NULL;
   /* Manual frame pacer, replacing vsync (see the renderer-creation comment
@@ -12384,7 +12424,7 @@ int main(int argc, char **argv) {
     input|=g_snes->input1_currentState;
     g_snes->input1_currentState=s_rom_is_us?ScMouseUiModalInput(g_ram,input,false):input;
 
-    /* Held Tab runs up to six guest frames within the display's time budget.
+    /* Held Tab advances complete simulation frame batches.
      * Draw the last expanded image and play its audio; retain full guest
      * input, PPU, APU and calendar work in the intermediate frames. */
     /* DRAG TURBO: run extra guest frames while a mouse button is held.
@@ -12414,6 +12454,7 @@ int main(int argc, char **argv) {
      * ordinary play. Only explicit held gestures remain. */
     bool fast_forward = keys[SDL_SCANCODE_TAB] || test_fast_forward;
     bool shift_fast_forward=fast_forward && (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]);
+    bool maximum_fast_forward=shift_fast_forward && (keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL]);
     s_wait_lane_enabled=fast_forward;
     /* Ctrl accelerates scrolling 3x; Ctrl+Shift uses 10x. */
     s_scroll_multiplier=host_map_screen_live() && !s_menu_open?(int)scroll_key_multiplier(keys):1;
@@ -12457,15 +12498,15 @@ int main(int argc, char **argv) {
       fprintf(stderr,"[gpu terrain] capture allocation failed; retaining CPU renderer\n");
       s_gpu_terrain_enabled=false;ScRendererDeferTerrain(&s_custom_renderer,false);
     }
-    int frames_this_iter = fast_forward ? (shift_fast_forward?24:6) : (dragging ? s_drag_turbo : 1);
-    /* Fixed batches are an oracle for comparing identical guest frames with
-     * and without skipped pixels, independently of adaptive wall timings. */
+    int frames_this_iter = fast_forward ? (maximum_fast_forward?96:shift_fast_forward?24:6) : (dragging ? s_drag_turbo : 1);
+    /* Fixed batches let Tab advance the entire simulation, including native
+     * calendar/demand/service ticks, instead of spending only spare render
+     * time and silently collapsing to Normal on a busy city. Music retains
+     * the independent real-time worker clock. */
     static int test_tab_batch=-1;
     if(test_tab_batch<0) {const char *e=getenv("SC_TAB_TEST_BATCH");
-      test_tab_batch=e?atoi(e):0;if(test_tab_batch<1 || test_tab_batch>6) test_tab_batch=0;}
+      test_tab_batch=e?atoi(e):0;if(test_tab_batch<1 || test_tab_batch>96) test_tab_batch=0;}
     if(fast_forward && test_tab_batch) frames_this_iter=test_tab_batch;
-    const uint64_t batch_t0=SDL_GetPerformanceCounter();
-    const double frame_budget_ms=(kTargetFrameSeconds*1000.0-2.0)*(shift_fast_forward?4:1);
 
     /* SC_FRAME_TIME=<ms threshold>: log (rate-limited, 500 hits) wall-clock
      * time for any run_one_frame() call slower than the threshold -- there's
@@ -12487,13 +12528,11 @@ int main(int argc, char **argv) {
     poll_mouse_construction();
     if (!s_menu_open && !s_build_work) {
       for (int ffi = 0; ffi < frames_this_iter && !s_build_work; ffi++) {
-        /* Reserve a fully drawn final frame. Tab uses spare display time,
-         * rather than requiring six frames regardless of city workload.
-         * Intermediate frames retain native PPU/APU timing and sprite
-         * evaluation, but omit the host's expanded image composition. */
-        double spent_ms=(SDL_GetPerformanceCounter()-batch_t0)*s_perf_clock_ms;
-        bool final_frame=ffi+1==frames_this_iter ||
-            (fast_forward && !test_tab_batch && spent_ms+extra_frame_ms+full_frame_ms>frame_budget_ms);
+        /* Draw the last frame of the requested batch. Intermediate frames
+         * retain simulation, native PPU/APU timing and input, while omitting
+         * pixels that will never be displayed. Do not truncate the batch
+         * based on the last expensive simulation phase. */
+        bool final_frame=ffi+1==frames_this_iter;
         s_skip_custom_frame=fast_forward && !final_frame;
         /* Intermediate Tab frames keep sprite/beam/APU work, but their native
          * background image is never presented. The final frame is always full. */
@@ -12503,7 +12542,6 @@ int main(int argc, char **argv) {
           ScPpuSkipObjects(s_skip_custom_frame && skip_native); }
         ScPpuMeasurePixels((fast_forward || perf_on)?SDL_GetPerformanceCounter:NULL,s_perf_clock_ms);
         s_custom_frame_ms=0;
-        uint64_t guest_t0=SDL_GetPerformanceCounter();
         if (mouse_target_valid && !s_fast_cursor_enabled) {
           g_ram[0x01eb] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_x<0?0:mouse_target_x>255?255:mouse_target_x);
           g_ram[0x01ed] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_y<0?0:mouse_target_y>223?223:mouse_target_y);
@@ -12517,21 +12555,7 @@ int main(int argc, char **argv) {
         }
         ++fps_guest_frames;
         if(perf_on) ++perf_total_guests;
-        double guest_ms=(SDL_GetPerformanceCounter()-guest_t0)*s_perf_clock_ms;
         if(perf_on) {s_perf_custom_ms+=s_custom_frame_ms;s_perf_native_ms+=ScPpuPixelMilliseconds();}
-        double *estimate=s_skip_custom_frame?&extra_frame_ms:&full_frame_ms;
-        /* React immediately to an expensive simulation phase; recover the
-         * boost gradually when it ends, rather than oscillating into hitches. */
-        *estimate=guest_ms>*estimate?guest_ms:*estimate*0.9+guest_ms*0.1;
-        if(fast_forward && !s_skip_custom_frame) {
-          /* Refresh the skipped-frame estimate even at 1x. Otherwise an
-           * expensive phase could leave Tab stuck at 1x after it finishes. */
-          double skipped_ms=guest_ms-s_custom_frame_ms-ScPpuPixelMilliseconds();
-          /* The override keeps the old full-raster estimate for the oracle. */
-          {const char *e=getenv("SC_TAB_SKIP_PIXELS");if(e && *e=='0') skipped_ms+=ScPpuPixelMilliseconds();}
-          if(skipped_ms<0) skipped_ms=0;
-          extra_frame_ms=skipped_ms>extra_frame_ms?skipped_ms:extra_frame_ms*0.9+skipped_ms*0.1;
-        }
         if(final_frame) {frames_this_iter=ffi+1;break;}
         /* Extra fast-forward frames still need input re-armed exactly like
          * the top of this loop does every iteration: apply_frame_input()
@@ -12941,7 +12965,9 @@ int main(int argc, char **argv) {
                                  (double)SDL_GetPerformanceFrequency();
     if (fps_window_elapsed >= 1.0) {
       char title[128];
-      double boost=fps_window_frames?(double)fps_guest_frames/fps_window_frames:1.0;
+      /* Show effective simulation speed against the normal SNES clock,
+       * rather than claiming 6x when a busy batch lowers presentation FPS. */
+      double boost=fps_guest_frames/(fps_window_elapsed/kTargetFrameSeconds);
       if(fast_forward) snprintf(title,sizeof(title),"Urban Recomp -- %.1f fps (Tab %.1fx)",
           (double)fps_window_frames/fps_window_elapsed,boost);
       else snprintf(title, sizeof(title), "Urban Recomp -- %.1f fps",

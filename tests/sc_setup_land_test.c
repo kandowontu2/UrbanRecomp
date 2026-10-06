@@ -93,7 +93,8 @@ int main(void) {
             memset(&graphics,0,sizeof graphics);
             assert(ScLandGraphicsApply(&graphics,type,anchors[season],true,0,vram,palette));
             for(unsigned i=0;i<256;++i)season_hash[season]=season_hash[season]*33+palette[i];
-            for(unsigned earlier=0;earlier<season;++earlier)assert(season_hash[season]!=season_hash[earlier]);
+            for(unsigned earlier=0;earlier<season;++earlier)
+                assert(type==SC_LAND_MOON?season_hash[season]==season_hash[earlier]:season_hash[season]!=season_hash[earlier]);
             assert(!memcmp(vram,original,sizeof vram));
             assert(palette[20]!=palette[26] && palette[125]!=palette[126] && palette[126]!=palette[127]);
             for(unsigned tile=0;tile<38;++tile) {
@@ -111,7 +112,8 @@ int main(void) {
         for(unsigned channel=0;channel<3;++channel)
             assert(february.ground[channel]==(winter.ground[channel]*2+spring.ground[channel]+1)/3);
         for(unsigned month=1;month<=12;++month) {
-            assert(ScLandGraphicsApply(&graphics,type,month,true,0,vram,palette));
+            bool fresh=!graphics.valid;
+            assert(ScLandGraphicsApply(&graphics,type,month,true,0,vram,palette)==(fresh || type!=SC_LAND_MOON));
             assert(!ScLandGraphicsApply(&graphics,type,month,true,0,vram,palette));
             uint16_t before[256];memcpy(before,palette,sizeof before);
             ScLandGraphicsApply(&graphics,type,month%12+1,true,0,vram,palette);
@@ -142,6 +144,29 @@ int main(void) {
     ScLandGraphicsApply(&graphics,SC_LAND_DESERT,10,true,0,vram,palette);
     ScLandGraphicsApply(&graphics,0,10,false,0,vram,palette);
     assert(palette[23]==0x1234 && !memcmp(vram,original,sizeof vram));
-    puts("PASS: city setup, native texture preservation, seven four-season palettes, monthly blends/year wrap, lava warmth, native restoration and preview fades");
+    /* Dome art touches only stadium-owned CHR; menus, Earth themes and
+     * snapshots restore byte-exact native art, including live DMA updates. */
+    const unsigned chars[]={0x3b9,0x3ba,0x3bb,0x1e5,0x3bc,0x3bd,0x3be,0x1e6,
+        0x3bf,0x3c0,0x3c1,0x1e7,0x3c2,0x3c3,0x3c4,0x1e8,
+        0x2f5,0x2f6,0x2f7,0x2f8,0x2f9,0x2fa,0x2fb,0x2fc,
+        0x2fd,0x2fe,0x2ff,0x302,0x303,0x304,0x305,0x306,0x1e4};
+    ScLandStadiumGraphics stadium={0};
+    for(unsigned type=0;type<SC_LAND_TYPES;++type) {
+        bool dome=type==SC_LAND_MARS || type==SC_LAND_VENUS || type==SC_LAND_MOON;
+        assert(ScLandStadiumApply(&stadium,type,true,0,vram)==dome);
+        assert(!ScLandStadiumApply(&stadium,type,true,0,vram));
+        for(unsigned word=0;word<32768;++word) {
+            bool owned=false;for(unsigned i=0;i<SC_STADIUM_CHARS;++i)owned|=word/16==chars[i];
+            if(!owned || !dome)assert(vram[word]==original[word]);
+        }
+        assert(ScLandStadiumApply(&stadium,0,false,0,vram)==dome);
+        assert(!memcmp(vram,original,sizeof original));
+    }
+    ScLandStadiumApply(&stadium,SC_LAND_MARS,true,0,vram);
+    unsigned at=chars[0]*16;vram[at]=0xabcd;original[at]=0xabcd;
+    ScLandStadiumApply(&stadium,SC_LAND_MARS,true,0,vram);
+    ScLandStadiumApply(&stadium,0,false,0,vram);
+    assert(!memcmp(vram,original,sizeof original));
+    puts("PASS: city setup, seasonal/lunar palettes, native restoration, preview fades and stadium-only domes");
     return 0;
 }

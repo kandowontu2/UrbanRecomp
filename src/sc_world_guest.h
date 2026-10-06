@@ -44,6 +44,11 @@ unsigned ScWorldGuestMasterCycles(const ScWorld *world, uint32_t pc,
                                   unsigned master, unsigned *remainder);
 /* Same clock classification used for native spans' beam/IRQ budgets. */
 unsigned ScWorldGuestClockScale(const ScWorld *world,uint32_t pc);
+/* Arithmetic called once per spatial cell inherits its caller's area scale.
+ * Global demand/budget arithmetic keeps the native clock. Read the real saved
+ * return address in the helper frame, including after snapshot reload. */
+unsigned ScWorldGuestCpuClockScale(const ScWorld *world,const Interp816 *cpu,const uint8_t *ram);
+unsigned ScWorldGuestScaledCycles(unsigned master,unsigned scale,unsigned *remainder);
 /* Execute one verified spatial cell in C, returning its original CPU cost.
  * Zero means that the interpreter should execute the current opcode. */
 unsigned ScWorldGuestFastStep(ScWorld *world, Interp816 *cpu, uint8_t *ram,

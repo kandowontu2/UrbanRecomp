@@ -28,6 +28,7 @@ typedef struct ScWorld {
     bool test_city; /* hidden City 3; saved with the world, including save states */
     uint8_t development_speed; /* city default; zero in legacy states means 1x */
     uint8_t land_type; /* city terrain graphics; legacy records use Native */
+    uint32_t calendar_year; /* 0 imports the native year; otherwise 1..999999 */
     bool scan_spread; /* resumable, bijective city scan across distant districts */
     uint16_t scan_x, scan_y;
     uint16_t center_x,center_y;
@@ -59,6 +60,9 @@ static inline bool ScWorldContains(const ScWorld *w,int x,int y) {
     return x>=0 && y>=0 && (unsigned)x<ScWorldWidth(w) && (unsigned)y<ScWorldHeight(w);
 }
 void ScWorldReset(ScWorld *world);
+enum { SC_CALENDAR_YEAR_MAX = 999999 };
+unsigned ScWorldYear(const ScWorld *world,const uint8_t *ram);
+void ScWorldYearMirror(const ScWorld *world,uint8_t *ram);
 bool ScWorldAdvanceScan(ScWorld *world);
 void ScWorldGenerate(ScWorld *world, ScMapGenPrng *prng);
 void ScWorldGenerateHuge(ScWorld *world, ScMapGenPrng *prng);

@@ -329,6 +329,13 @@ int main(void) {
                 }
             }
         }
+        /* Lunar generation clears forest tiles, preserving all shores/water
+         * and every other tile across all styles and selectable sizes. */
+        sc_mapgen_remove_forests(again);
+        for(unsigned i=0;i<cells;++i) {
+            unsigned tile=g->state.map[i];
+            assert(again->map[i]==(tile>=20 && tile<38?0:tile));
+        }
         sc_mapgen_apply_number(&g->state,31337);
         for(unsigned i=0;i<cells;++i)assert(!g->state.map[i] || g->state.map[i]>=20);
         printf("PASS: style %u size %u, %u land, %u water, %u shore cells\n",style,size,land,water,shore);

@@ -26,7 +26,7 @@ on:
         type: string
       version:
         description: Mac package version label
-        default: v1.2.0-enhanced.21
+        default: v1.2.0-enhanced.22
         required: true
         type: string
 

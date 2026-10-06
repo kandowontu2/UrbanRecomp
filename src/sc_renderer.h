@@ -49,7 +49,7 @@ typedef struct ScRenderer {
     ScViewport view;
     ScViewport gameplay_view; /* configured HUD anchor; menus are centered */
     double map_zoom;
-    bool zoom_frame, zoom_hud;
+    bool zoom_frame, zoom_hud, land_view_frame;
     uint32_t *pixels;
     ScTerrainFrame terrain;
     bool defer_terrain;
@@ -144,6 +144,8 @@ bool ScRendererCityPoint(const ScRenderer *r, const uint8_t *ram,
 /* Draw extended values from the game's live OBJ digit/icon tiles. */
 void ScRendererPopulationRow(const ScRenderer *r, const Ppu *ppu, ScViewport view,
                              bool split, int y, uint32_t *out);
+void ScRendererYearRow(const ScRenderer *r,const Ppu *ppu,const uint8_t *ram,
+                      ScViewport view,int y,uint32_t *out);
 void ScRendererClipboardFont(ScRenderer *r,const uint8_t *font,size_t size);
 ScVideoRect ScRendererClipboardButton(ScViewport view,unsigned button);
 void ScRendererClipboardRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,

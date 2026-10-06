@@ -59,6 +59,11 @@ int main(int argc,char **argv) {
         ScMusicGuestFrame(0,false);SDL_Delay(100);before=ScMusicGetStats();SDL_Delay(250);after=ScMusicGetStats();
         assert(after.samples-before.samples>=9000 && after.samples-before.samples<=13000);
         assert(after.nonzero_samples-before.nonzero_samples>5000 && !after.write_failures);
+        /* A large fast-forward command clock must not accelerate PCM playback.
+         * The worker still produces about 44,100 output samples per second. */
+        ScMusicGuestFrame(24000000,false);SDL_Delay(100);before=ScMusicGetStats();SDL_Delay(250);after=ScMusicGetStats();
+        assert(after.samples-before.samples>=9000 && after.samples-before.samples<=13000);
+        assert(after.nonzero_samples-before.nonzero_samples>5000 && !after.write_failures);
         ScMusicGuestFrame(0,true);SDL_Delay(20);before=ScMusicGetStats();SDL_Delay(100);after=ScMusicGetStats();
         assert(after.samples==before.samples);
         ScMusicEnabled(false);ScMusicGuestFrame(0,false);SDL_Delay(100);

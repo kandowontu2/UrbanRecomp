@@ -13,16 +13,16 @@ const ScWorldField ScWorldFields[SC_WORLD_FIELDS] = {
     {0x8e28,60,50,120,100,1}, /* population density */
     {0x99e0,60,50,120,100,1}, /* transport visits */
     {0xa598,15,100,30,200,1}, /* packed power, eight cells per byte */
-    {0xab74,30,25,60,50,1},
+    {0xab74,30,25,60,50,1}, /* terrain amenities */
     {0xae62,15,13,30,25,2}, /* growth */
     {0xafe8,15,13,30,25,1}, /* police coverage */
     {0xb0ab,15,13,30,25,1}, /* fire coverage */
-    {0xb16e,15,13,30,25,2}, /* police diffusion */
-    {0xb2f4,15,13,30,25,2}, /* fire diffusion */
-    {0xb47a,15,13,30,25,2}, /* terrain quality */
+    {0xb16e,15,13,30,25,2}, /* fire diffusion */
+    {0xb2f4,15,13,30,25,2}, /* police diffusion */
+    {0xb47a,15,13,30,25,2}, /* commercial center desirability */
     {0xb600,60,50,120,100,1}, /* pollution scratch */
     {0xc1b8,60,50,120,100,1}, /* traffic scratch */
-    {0xcd70,30,25,60,50,1}, /* density scratch */
+    {0xcd70,30,25,60,50,1}, /* terrain amenity scratch */
     {0xd05e,15,13,30,25,2}, /* shared diffusion scratch */
     {0xd1e4,5001,1,20001,1,1}, /* power traversal X, one-based */
     {0xe56c,5001,1,20001,1,1}  /* power traversal Y, one-based */
@@ -90,6 +90,12 @@ static void put(uint8_t *p,unsigned v) { p[0]=(uint8_t)v; p[1]=(uint8_t)(v>>8); 
 static void put32(uint8_t *p,uint32_t v) { put(p,v); put(p+2,v>>16); }
 static uint32_t get32(const uint8_t *p) { return word(p)|((uint32_t)word(p+2)<<16); }
 void ScWorldReset(ScWorld *w) { ++state_epoch;memset(w,0,sizeof *w);ScWorldTilesTouch(w,0,SC_WORLD_MAX_TILE_BYTES); }
+unsigned ScWorldYear(const ScWorld *w,const uint8_t *r) {
+    return w && w->calendar_year?w->calendar_year:word(r+0xb53);
+}
+void ScWorldYearMirror(const ScWorld *w,uint8_t *r) {
+    if(w && w->calendar_year)put(r+0xb53,w->calendar_year>65535?65535:w->calendar_year);
+}
 bool ScWorldBounds(int x,int y) { return x>=0 && y>=0 && x<SC_WORLD_WIDTH && y<SC_WORLD_HEIGHT; }
 uint16_t ScWorldCell(const ScWorld *w,int x,int y) {
     return ScWorldContains(w,x,y)?(uint16_t)word(w->tiles+2*(y*ScWorldWidth(w)+x)):0;
@@ -112,6 +118,7 @@ static void generate_mode(ScWorld *w,ScMapGenPrng *prng,unsigned size,unsigned s
     else sc_mapgen_generate_large(prng,state);
     w->land_type=land<SC_LAND_TYPES?land:0;
     if(w->land_type==SC_LAND_AMAZON)sc_mapgen_extra_forests(prng,state);
+    if(w->land_type==SC_LAND_MOON)sc_mapgen_remove_forests(state);
     for (unsigned i=0;i<ScWorldCells(w);++i) put(w->tiles+i*2,state->map[i]);
     free(state);w->active=true;
 }
@@ -173,12 +180,12 @@ static unsigned encoded_field_size(unsigned version,unsigned f) {
     return ScWorldFieldSize(f)*(version==2?1:f<17?(version==3?4:version==4?16:version==5?64:256):2);
 }
 static size_t encoded_size(unsigned version) {
-    size_t n=version==2?48+SC_WORLD_TILE_BYTES:(version==3?64:80)+(version==3?384000:version==4?1536000:version==5?6144000:SC_WORLD_MAX_TILE_BYTES);
+    size_t n=version==2?48+SC_WORLD_TILE_BYTES:(version==3?64:version>=8?88:80)+(version==3?384000:version==4?1536000:version==5?6144000:SC_WORLD_MAX_TILE_BYTES);
     for(unsigned i=0;i<SC_WORLD_FIELDS;++i) n+=encoded_field_size(version,i);
     return n;
 }
-size_t ScWorldEncodedVersionSize(unsigned v) {return v>=2 && v<=7?encoded_size(v):0;}
-size_t ScWorldEncodedSize(void) { return encoded_size(7); }
+size_t ScWorldEncodedVersionSize(unsigned v) {return v>=2 && v<=8?encoded_size(v):0;}
+size_t ScWorldEncodedSize(void) { return encoded_size(8); }
 bool ScWorldAdvanceScan(ScWorld *w) {
     unsigned width=ScWorldWidth(w),height=ScWorldHeight(w);
     if(w->scan_spread) {
@@ -199,8 +206,8 @@ bool ScWorldAdvanceScan(ScWorld *w) {
     w->scan_x=0;return ++w->scan_y<height;
 }
 bool ScWorldEncode(const ScWorld *w,uint8_t *p,size_t size) {
-    if (size!=ScWorldEncodedSize() || w->land_type>=SC_LAND_TYPES || (w->development_speed && !ScWorldDevelopmentSpeedValid(w->development_speed))) return false;
-    memset(p,0,80); memcpy(p,"SCWORLD",7); p[7]=7;
+    if (size!=ScWorldEncodedSize() || w->calendar_year>SC_CALENDAR_YEAR_MAX || w->land_type>=SC_LAND_TYPES || (w->development_speed && !ScWorldDevelopmentSpeedValid(w->development_speed))) return false;
+    memset(p,0,88); memcpy(p,"SCWORLD",7); p[7]=8;
     put(p+8,ScWorldWidth(w)); put(p+10,ScWorldHeight(w));
     p[12]=w->active; p[13]=w->mega?4:w->colossal?3:w->giant?2:w->huge?1:0; p[14]=w->test_city; p[15]=w->scan_spread | (w->development_speed<<1); put32(p+16,w->map_anchor);
     put32(p+20,(uint32_t)size); put32(p+24,SC_WORLD_FIELDS);
@@ -211,30 +218,33 @@ bool ScWorldEncode(const ScWorld *w,uint8_t *p,size_t size) {
     p[61]=w->journey;p[62]=w->journey_notice;p[63]=w->journey_announcing|(w->journey_target<<1);
     for(unsigned i=0;i<3;++i) put32(p+64+4*i,w->field_anchor[i]);
     put32(p+76,w->field_scan);
-    memcpy(p+80,w->tiles,SC_WORLD_MAX_TILE_BYTES);
-    size_t at=80+SC_WORLD_MAX_TILE_BYTES;
+    put32(p+80,w->calendar_year);
+    memcpy(p+88,w->tiles,SC_WORLD_MAX_TILE_BYTES);
+    size_t at=88+SC_WORLD_MAX_TILE_BYTES;
     for(unsigned i=0;i<SC_WORLD_FIELDS;++i) {
         unsigned n=encoded_field_size(6,i);memcpy(p+at,w->fields[i],n);at+=n;
     }
     return true;
 }
 bool ScWorldDecode(ScWorld *w,const uint8_t *p,size_t size) {
-    if(size<48 || memcmp(p,"SCWORLD",7) || (p[7]<2 || p[7]>7)) return false;
+    if(size<48 || memcmp(p,"SCWORLD",7) || (p[7]<2 || p[7]>8)) return false;
     bool legacy=p[7]==2,huge=!legacy && p[13]!=0,giant=p[7]>=4 && p[13]>=2,colossal=p[7]>=5 && p[13]>=3,mega=p[7]>=6 && p[13]==4;
     unsigned width=mega?3840:colossal?1920:giant?960:huge?480:240,height=mega?3200:colossal?1600:giant?800:huge?400:200,bytes=width*height*2;
     if(size!=encoded_size(p[7]) || word(p+8)!=width || word(p+10)!=height ||
-        p[12]>1 || (p[7]>=5 && (p[14]>1 || (p[7]==5?p[15]>1:((p[15]>>1)!=0 && !ScWorldDevelopmentSpeedValid(p[15]>>1))) || (p[14] && (!p[12] || !colossal)))) || (!legacy && p[13]>(p[7]>=6?4:p[7]==5?3:p[7]==4?2:1)) ||
+        p[12]>1 || (p[7]>=5 && (p[14]>1 || (p[7]==5?p[15]>1:((p[15]>>1)!=0 && !ScWorldDevelopmentSpeedValid(p[15]>>1))) || (p[7]<7 && p[14] && (!p[12] || !colossal)))) || (!legacy && p[13]>(p[7]>=6?4:p[7]==5?3:p[7]==4?2:1)) ||
         (get32(p+16)>=bytes && get32(p+16)!=UINT32_MAX) ||
         get32(p+20)!=size || get32(p+24)!=SC_WORLD_FIELDS) return false;
     for(unsigned i=0;i<3;++i) if(get32(p+28+i*4)>=bytes && get32(p+28+i*4)!=UINT32_MAX) return false;
     if(!legacy && (word(p+40)>width || word(p+42)>height)) return false;
     if(!legacy && (p[7]>=7?p[60]>>1>=SC_LAND_TYPES:p[60]>1)) return false;
     if(!legacy && (p[61]>1 || p[62]>2 || p[63]>5 || (!p[61] && (p[62] || p[63])))) return false;
+    if(p[7]>=8 && (get32(p+80)>SC_CALENDAR_YEAR_MAX || get32(p+84)))return false;
     ScWorldReset(w);w->active=p[12]!=0;w->huge=huge;w->giant=giant;w->colossal=colossal;w->mega=mega;w->map_anchor=get32(p+16);
     w->test_city=p[7]>=5 && p[14]!=0;
     w->scan_spread=p[7]>=5 && (p[15]&1)!=0;
     w->development_speed=p[7]>=6?p[15]>>1:0;
     w->land_type=p[7]>=7?p[60]>>1:0;
+    w->calendar_year=p[7]>=8?get32(p+80):0;
     for(unsigned i=0;i<3;++i) w->bank_anchor[i]=get32(p+28+i*4);
     if(!legacy) {
         w->scan_x=word(p+40);w->scan_y=word(p+42);
@@ -250,7 +260,7 @@ bool ScWorldDecode(ScWorld *w,const uint8_t *p,size_t size) {
         w->journey_target=p[63]>>1;
     }
     if(p[7]>=4) {for(unsigned i=0;i<3;++i) w->field_anchor[i]=get32(p+64+4*i);w->field_scan=get32(p+76);}
-    size_t at=legacy?48:p[7]==3?64:80,n=legacy?SC_WORLD_TILE_BYTES:p[7]==3?384000:p[7]==4?1536000:p[7]==5?6144000:SC_WORLD_MAX_TILE_BYTES;
+    size_t at=legacy?48:p[7]==3?64:p[7]>=8?88:80,n=legacy?SC_WORLD_TILE_BYTES:p[7]==3?384000:p[7]==4?1536000:p[7]==5?6144000:SC_WORLD_MAX_TILE_BYTES;
     memcpy(w->tiles,p+at,n);at+=n;
     for(unsigned i=0;i<SC_WORLD_FIELDS;++i) {
         n=encoded_field_size(p[7],i);memcpy(w->fields[i],p+at,n);at+=n;
@@ -264,11 +274,11 @@ void ScWorldMirror(const ScWorld *w,uint8_t *r) {
 }
 size_t ScWorldCitiesSize(void) { return 24+2*(16+ScWorldEncodedSize()); }
 void ScWorldCitiesInit(uint8_t *p) {
-    memset(p,0,ScWorldCitiesSize()); memcpy(p,"SCWCITY",7); p[7]=7;
+    memset(p,0,ScWorldCitiesSize()); memcpy(p,"SCWCITY",7); p[7]=8;
     put32(p+8,(uint32_t)ScWorldEncodedSize()); put32(p+12,(uint32_t)ScWorldCitiesSize()); put32(p+16,2);
 }
 bool ScWorldCitiesValid(const uint8_t *p,size_t size) {
-    return size==ScWorldCitiesSize() && !memcmp(p,"SCWCITY",7) && (p[7]==6 || p[7]==7) &&
+    return size==ScWorldCitiesSize() && !memcmp(p,"SCWCITY",7) && p[7]==8 &&
         get32(p+8)==ScWorldEncodedSize() && get32(p+12)==size && get32(p+16)==2;
 }
 static uint32_t city_hash(const uint8_t *r,unsigned slot) {
@@ -303,8 +313,8 @@ bool ScWorldCityLoad(ScWorld *w,const uint8_t *p,size_t size,const uint8_t *r,un
 bool ScWorldCitiesUpgrade(uint8_t *out,const uint8_t *p,size_t size) {
     if(ScWorldCitiesValid(p,size)) {memcpy(out,p,size);return true;}
     if(size<24) return false;
-    size_t old=encoded_size(p[7]);
-    if(size!=24+2*(16+old) || memcmp(p,"SCWCITY",7) || (p[7]<2 || p[7]>5) || get32(p+8)!=old || get32(p+12)!=size || get32(p+16)!=2) return false;
+    size_t old=ScWorldEncodedVersionSize(p[7]);
+    if(size!=24+2*(16+old) || memcmp(p,"SCWCITY",7) || (p[7]<2 || p[7]>7) || get32(p+8)!=old || get32(p+12)!=size || get32(p+16)!=2) return false;
     ScWorld *w=malloc(sizeof *w);if(!w) return false;
     ScWorldCitiesInit(out);
     for(unsigned slot=0;slot<2;++slot) {

@@ -531,19 +531,30 @@ adds its own one-off frame cost. `SC_PERF=1` logs queue frames, commit time and
 average/maximum frame-stage times for performance diagnosis.
 
 Held **Tab** uses this port's fast-forward loop, independently of Mesen. It
-runs up to six guest frames per display update. **Shift+Tab** raises the frame
-limit to 24 and gives the batch four times the usual work budget; actual speed
-is limited by CPU/GPU workload and heavy batches can reduce presentation FPS.
-Both modes reserve time for the final
-rendered frame, adapting the boost to the city workload. Intermediate frames
-retain input, native PPU/APU timing and sprite work while omitting the expanded image
-composition. It also omits native background/pixel composition on intermediate
-frames, while preserving scanline timing, full sprite evaluation, overflow flags
-and OAM history. Its budget measures the actual pixel work it can skip, so it
-can recover the boost after a costly simulation phase. The title shows the
-measured Tab multiplier. Only the latest
-batch audio is queued, avoiding accumulated playback behind the picture.
+runs six complete simulation frames per display update; **Shift+Tab** runs 24,
+and **Ctrl+Shift+Tab** runs 96.
+Calendar, development, demand, power, services and vehicles advance together.
+The batch no longer collapses to a single frame when a heavy city consumes the
+render budget. These are 6x/24x/96x targets: actual acceleration is limited by CPU/GPU
+workload, and heavy batches can reduce presentation FPS. The title reports
+simulation speed relative to the native clock, measured over real elapsed time.
+Intermediate frames retain input, native PPU/APU timing, sprite evaluation,
+overflow flags and OAM history while omitting unused native pixels and expanded
+image composition. The final frame is rendered in full. Restored music keeps its
+independent real-time audio clock and normal tempo; only recent native sound
+effects are queued, avoiding accumulated playback behind the picture.
 `SC_FAST_FORWARD=1` records the same held-Tab path for dummy-SDL testing.
+
+The largest map's eighth-resolution fields are 480x400. Their native byte
+iterators now retain full-width coordinates, allowing terrain quality, police
+and fire passes to finish instead of wrapping. Shared native arithmetic helpers
+inherit spatial clock scaling from their saved caller; global calculations and
+redraw waits retain ordinary timing. This permits later calendar and density
+passes without bypassing the original growth rules.
+
+The top-toolbar View tool uses a third world graphics table. Its BG3 artwork
+now follows the same inverse projection as land at every city zoom, through
+the shared CPU/GPU terrain overlay compositor.
 
 Camera scrolling now validates the native staging cache throughout the city
 viewport, rather than repairing only its outer eight-pixel bands. Stale terrain,
@@ -841,20 +852,35 @@ three city save files together when moving them to a new folder.
 extracts the complete bundled files for inspection. Game arguments are forwarded.
 
 
-## Hidden test City 3 (Beta 12)
+## Hidden test City 3
 
-Press Ctrl+Shift+tilde on Resume Saved City to reveal the 1920x1600 test city.
-When no ordinary saves exist, the shortcut also works on the main menu and
-uses the normal fade/load-screen setup. The generated city starts with about
-62 million residents at normal zone capacities, connected power/road/rail
-networks, police/fire coverage, parks, gifts, stadium, airports and seaports.
-The ordinary simulation applies; this is not a fixed-population cheat.
+Press Ctrl+Shift+tilde on Resume Saved City to reveal Test City 3. When no
+ordinary saves exist, the shortcut also works on the main menu. An unsaved
+City 3 opens MAP SIZE, then DEVELOPMENT SPEED, supporting all six sizes from
+120x100 through 3840x3200. It then generates the selected city from code.
+A saved City 3 loads its existing size, speed and development state directly.
 
-Selecting City 3 loads its saved data when present, otherwise generates it
-from code. Escape opens the native save dialog during city play and acts as
-Back/Close in menus. Saving City 3 appends its checked full-world record inside
-the SRM without replacing the two original cartridge slots. Back up the entire
-SRM, together with the normal .world and .population sidecars for Cities 1/2.
+Generated cities use water-free map 31337. Every residential, commercial and
+industrial zone starts empty, with zero population and ordinary zone capacities.
+Power, rail, roads, funded police/fire stations, parks, 27 finite gifts,
+a stadium, airport and dry-land port are already placed. The source permits
+a dry port to lift the industrial demand cap; boats still require water.
+Native growth, employment, pollution, crime, demand, disasters and upkeep
+remain active. Taxes start at 3%; no money/growth cheat is enabled.
+
+Industry occupies the global outside band, with green-buffered commerce and
+inner residential districts. Local commerce helps housing cross the native
+density-65 apartment gate. Gifts are scored using native terrain packing and
+diffusion, then impossible residential sites are converted to commerce.
+See [PLACEMENT_EFFECTS.md](PLACEMENT_EFFECTS.md) for every placement item and
+[TEST_CITY_LAYOUT.md](TEST_CITY_LAYOUT.md) for counts, source calculations and
+natural ten-year growth measurements. Capacity is an upper bound, not a
+promise of complete occupancy or a measured stable maximum.
+
+Escape opens the native save dialog during city play and acts as Back/Close
+in menus. Saving City 3 appends its checked full-world record inside the SRM
+without replacing the two original cartridge slots. Back up the entire SRM,
+together with the normal .world and .population sidecars for Cities 1/2.
 
 Zoom changes terrain scale while HUD, minimap, overview panels and menus keep
 their normal size. Expanded-city scans distribute zone visits around the map,
@@ -876,8 +902,10 @@ and device frame. Generation determines geography; land type determines its art.
 
 Land types are Native, Basalt (dark volcanic ground and lava), Amazon (rainforest
 colors and extra forest patches), Desert (pale sand and dry scrub), Mars (red soil and
-rock), Venus (sulfur terrain and acid seas), Arctic (snow and ice), and Swamp
-(wetland soil and vegetation). These are graphical themes using ordinary terrain
+rock), Venus (sulfur terrain and acid seas), Arctic (snow and ice), Swamp
+(wetland soil and vegetation), and Moon (gray lunar dust and dark ice seas).
+Moon generates no natural forests, including Practice and Journey expansions;
+parks can still be planted. These are graphical themes using ordinary terrain
 rules: lava/acid still has water's construction rules, and themed vegetation
 still has forest's rules. Each city saves its type, including Journey expansions.
 Older saves use Native. The selection is remembered for the next new city.
@@ -905,11 +933,17 @@ not the seasonal calendar; Tab advances seasons as it advances the game clock.
 | Venus | Subtle sulfur-ground and acid-sea color shifts, without snow or freezing |
 | Arctic | Spring melt, a short summer tundra thaw, autumn cooling, deep winter snow and icy water colors |
 | Swamp | Fresh spring greens, mossy summer, amber autumn, frosted winter vegetation and banks |
+| Moon | Stable gray lunar dust and dark ice seas throughout the year, without natural forests |
 
 These are visual changes; seasonal ice retains water's construction and transport
 rules. Pan minimaps match the current season; map-selection previews show January,
 the new city's starting month. Existing city saves keep their date and theme, so
 the correct seasonal appearance returns automatically on reload.
+
+Football stadiums on Mars, Venus and Moon use enclosed dome roofs for both
+stadium artwork variants. Their normal simulation and capacity remain intact.
+Only stadium-owned character graphics change; other buildings keep their art.
+Snapshots store native graphics and reapply the city's domes on reload.
 
 Difficulty now uses four vertical rows: Easy, Medium, Hard and Super Hard.
 Super Hard starts with the same funds as Medium to offset its increased disaster
@@ -928,3 +962,19 @@ Practice uses the Easy amount for its chosen size. Scenarios and loaded city
 balances retain their own funds. Super Hard uses Hard's economic rules and halves
 its random-disaster threshold from 1200 to 600. The original probability check
 uses an inclusive RNG range, so the chances are 1/1201 and 1/601 per check.
+
+## Extended calendar
+
+The host calendar retains years through **999999** for stock and expanded
+cities. The HUD uses the original digit font without leading zeroes and moves
+the month to fit five/six digits. Budget/Tax date headings also show the full
+year. The native month rollover, January collection and simulation clock are
+retained. After 65,535, a saturated native year keeps late-game date gates true;
+the separate full year continues advancing. At 999999 the year stays at that
+limit while months and annual budgets continue.
+
+World metadata version 8 stores the full year in city sidecars, City 3's SRM
+record and snapshots. Versions 2 through 7 remain readable; old cities import
+their native date. Journey expansions preserve the full year. Tests cover
+December/January at 9,999, 65,535 and 999,999, save-slot reloads, metadata
+migration, budget digits and unscaled HUD digits/month placement.

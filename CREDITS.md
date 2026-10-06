@@ -34,6 +34,11 @@ Mac app bundles include the same notices in `Contents/Resources`.
 ## Community research and behavior references
 
 - **Truttle1:** upstream's post-load power bug and power-bit identification.
+- **Peter's SimCity SNES Guide**, **Brian Sulpher**, **FatRatKnight**,
+  **PrinceMercury** and **Cyan_of_Ages**: SNES zoning/gift strategy references.
+  Their advice is checked against the US cartridge routines in
+  [the placement-effects guide](docs/PLACEMENT_EFFECTS.md); no guide text,
+  ROM patch or map data is imported into the generated city.
 - **Selicre:** [community mouse patch](https://github.com/Selicre/simcity-mouse),
   identifying the original cursor bytes used by mouse control.
 - **Vitor Vilela:** [SimCity SA-1 Beta 2](https://www.patreon.com/vitorvilela/posts/simcity-sa-1-2-168886217),
@@ -60,3 +65,7 @@ native sound effects continue to play alongside them.
 game's developers and musicians. Game code, artwork and fonts used during play
 are loaded from the player's own US cartridge ROM. The ROM is not included.
 This is an unofficial fan project and is not affiliated with those companies.
+
+The enhanced fork's stadium dome overlays are drawn by host code over the
+player-loaded stadium artwork, using its existing palette. No cartridge
+graphics are embedded in the distribution.

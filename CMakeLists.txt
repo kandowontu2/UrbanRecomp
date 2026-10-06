@@ -678,6 +678,17 @@ add_executable(UrbanRecompTestCityTest EXCLUDE_FROM_ALL
     ${SNESRECOMP_ROOT}/runner/src/snes/interp816.c)
 target_include_directories(UrbanRecompTestCityTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+get_target_property(SC_CITY_GROWTH_SOURCES UrbanRecompTestCityTest SOURCES)
+list(FILTER SC_CITY_GROWTH_SOURCES EXCLUDE REGEX "tests/sc_test_city_test.c")
+add_executable(UrbanRecompCityGrowthTest EXCLUDE_FROM_ALL tests/sc_city_growth_test.c ${SC_CITY_GROWTH_SOURCES})
+target_include_directories(UrbanRecompCityGrowthTest PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
+sc_configure_native_program(UrbanRecompCityGrowthTest)
+if(MSVC)
+    target_compile_options(UrbanRecompCityGrowthTest PRIVATE /UNDEBUG)
+else()
+    target_compile_options(UrbanRecompCityGrowthTest PRIVATE -UNDEBUG)
+endif()
 if(MSVC)
     target_compile_options(UrbanRecompTestCityTest PRIVATE /UNDEBUG)
 else()

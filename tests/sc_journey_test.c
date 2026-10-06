@@ -248,9 +248,10 @@ int main(int argc,char **argv) {
     ram[0xba9]=60;ram[0xbaa]=50;
     memcpy(original,ram,sizeof ram);
     assert(!ScJourneyExpand(&world,ram,SC_POPULATION_MAX)); /* ordinary city */
-    world.journey=true;world.development_speed=20;assert(!ScJourneyExpand(&world,ram,99999));saved();
+    world.journey=true;world.development_speed=20;world.calendar_year=123456;assert(!ScJourneyExpand(&world,ram,99999));saved();
     ScJourneyObservePopulation(&world,100000); /* crossing is latched before a safe boundary */
     assert(ScJourneyExpand(&world,ram,99980)==1 && world.active && !world.huge);
+    assert(world.calendar_year==123456);
     assert(ScWorldDevelopmentSpeed(&world)==20);preserved(120,100,64,48,false);assert(word(ram,0x205)==101 && word(ram,0x207)==80);
     world.journey_announcing=true;saved();
     assert(!ScJourneyExpand(&world,ram,1000000)); /* finish Big celebration first */
@@ -258,6 +259,7 @@ int main(int argc,char **argv) {
     world.journey_notice=0;world.journey_announcing=false;
     memcpy(&before,&world,sizeof world);memcpy(original,ram,sizeof ram);
     assert(ScJourneyExpand(&world,ram,900000)==2 && world.huge);
+    assert(world.calendar_year==123456);
     preserved(240,200,120,104,true);saved();
     world.journey_notice=0;assert(!ScJourneyExpand(&world,ram,SC_POPULATION_MAX));
     /* Actual construction and original flood fill on newly unlocked land. */

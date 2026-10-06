@@ -686,6 +686,31 @@ int main(void) {
     assert(r.pixels[10*256+107]==0xffff0000 && r.pixels[17*256+107]==0xffff0000);
     assert(r.pixels[22*256+147]!=0xffff0000); /* no stale native counter */
     r.population=NULL;
+    /* The HUD date uses its own unscaled native OBJ font. Six digits move
+     * the month, never clip it; short years have no zero padding. */
+    ScWorld *calendar=calloc(1,sizeof *calendar);assert(calendar);r.world=calendar;
+    p->oam[23]=0x3161;
+    for(unsigned g=0;g<3;++g)p->oam[(16+g)*2+1]=0x3100|digit_tiles[g];
+    memcpy(before,p,sizeof *p);
+    const unsigned years[]={1,9,9999,10000,65535,65536,999999};
+    uint32_t date_row[448],digit_row[448];ScViewport date_view={448,224,0,0,1,0};
+    r.population=&pop;pop.live=true;
+    for(unsigned n=0;n<sizeof years/sizeof *years;++n) {
+        calendar->calendar_year=years[n];char text[8];snprintf(text,sizeof text,"%u",years[n]);
+        unsigned count=(unsigned)strlen(text);
+        for(unsigned y=0;y<8;++y) {
+            memset(date_row,0,sizeof date_row);ScRendererYearRow(&r,p,ram,date_view,12+y,date_row);
+            for(unsigned g=0;g<count+3;++g) {
+                pop.value=g<count?(unsigned)(text[g]-'0'):g-count;
+                memset(digit_row,0,sizeof digit_row);
+                ScRendererPopulationRow(&r,p,date_view,true,22+y,digit_row);
+                for(unsigned x=0;x<8;++x)assert(date_row[17+(g+(g>=count))*8+x]==digit_row[395+x]);
+            }
+            uint32_t ground=0xff000000|(uint32_t)p->brightnessMult[6]<<16|(uint32_t)p->brightnessMult[4]<<8|p->brightnessMult[1];
+            for(unsigned x=0;x<8;++x)assert(date_row[17+count*8+x]==ground);
+        }
+    }
+    assert(!memcmp(before,p,sizeof *p));free(calendar);r.world=NULL;r.population=NULL;
     /* Paste prices use the same OBJ digit table, pixels and palette as the
      * stock counter. Controls use a separately supplied original body font;
      * neither overlay changes OAM, VRAM or any other PPU state. */
@@ -817,6 +842,39 @@ int main(void) {
     p->screenEnabled[0]=20;p->screenEnabled[1]=3;p->cgadsub=3;
     for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
     assert(r.zoom_frame && r.zoom_hud && r.advisor_frame && !r.city_overlay_frame);
+    /* Nonmodal demand/road notices remain opaque UI even with city input
+     * active. Projection, GPU deferral and repairs cannot stencil land into
+     * their letters or border; low-priority city shadows stay untouched. */
+    p->screenEnabled[0]=23;p->screenEnabled[1]=4;p->bgmode=9;
+    word(ram,0x391,0);ram[0xe3]=0;word(ram,0x387,255);
+    for(int deferred=0;deferred<2;++deferred)for(int z=0;z<3;++z) {
+        r.defer_terrain=deferred;r.map_zoom=z==0?1:z==1?.25:2;
+        for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+        assert(r.city_input && !r.city_overlay_frame);
+        assert(ScRendererPixel(&r,r.view.core_x+100,100)==0xffff0000);
+    }
+    word(ram,0x387,0);
+    /* Toolbar View's BG3 graphics belong to world cells. Poison the native
+     * staging map red, then put a blue View tile at the projected world
+     * location. Both CPU and deferred composition must select that tile. */
+    word(ram,0xd7,2);word(ram,0x1df,6);word(ram,0x379,255);ram[0xe3]=255;
+    p->screenEnabled[0]=7;p->screenEnabled[1]=0;p->cgram[3]=31<<10;
+    word(rom,0x15e25,1);word(rom,0x15e25+2,2);
+    for(int y=0;y<8;++y)p->vram[16+y]=0xffff;
+    for(int deferred=0;deferred<2;++deferred)for(int z=0;z<2;++z) {
+        r.defer_terrain=deferred;r.map_zoom=z?.5:2;
+        memset(ram+0x10200,0,24000);
+        int wx=(320+56+(int)floor((100-56)/r.map_zoom))/8;
+        int wy=(320+46+(int)floor((100-46)/r.map_zoom)+1)/8;
+        word(ram,0x10200+2*(wy*120+wx),1);
+        memcpy(before,p,sizeof *p);
+        for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+        assert(r.land_view_frame && r.zoom_frame && !r.city_overlay_frame && !r.split_hud);
+        assert(ScRendererPixel(&r,r.view.core_x+100,100)==0xff0000ff);
+        assert(ScRendererPixel(&r,r.view.core_x+120,100)==0xffff0000);
+        assert(!memcmp(before,p,sizeof *p));
+    }
+    r.defer_terrain=false;r.map_zoom=.0625;
     /* Preview cells use the live BG2 palette, preserve the native box, stay
      * sharp at every city zoom, and never alter live PPU state. */
     memset(p,0,sizeof *p);memset(ram,0,0x20000);ScRendererResetHistory(&r);
