@@ -2391,8 +2391,9 @@ byte, and slot 8 holds different tiles again (`$35`/`$33`). The buffer at
 tiles and palettes over them wherever they appear.
 
 Both tile/OAM patch attempts are reverted. Host-side servicing of `$0197` bits
-6 and 7 remains. The current third row and F12 actions use the same scenario
-hooks; `SC_DISASTER=6/7` also remains usable headlessly.
+6 and 7 remains. The current third row uses the scenario hooks;
+`SC_DISASTER=6/7` also remains usable headlessly. F12 no longer exposes disaster
+triggers.
 
 ### How the page is actually drawn
 

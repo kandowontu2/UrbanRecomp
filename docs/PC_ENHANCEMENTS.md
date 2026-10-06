@@ -17,7 +17,7 @@ Type changes retain the visible preview until its complete replacement is ready,
 then publish terrain and colors together. Preview zoom/pan stays in place. Only
 new map numbers replay the initial on-screen generation reveal.
 
-F12 LAND GENERATION also selects Native (default), Procedural (the earlier
+The map-screen GENERATION selector offers Native (default), Procedural (the earlier
 replacement generator), Islands, Lakes, Rivers, Fractal, Continent, Delta or Atolls. The remembered
 choice applies to new terrain, including regeneration on the preview screen.
 Loaded cities retain their terrain. Fractal uses warped noise, a sea level
@@ -145,9 +145,8 @@ thread. Playback continues during slow simulation frames. Settings pause and
 save/load synchronize with that thread; sound commands retain their order.
 The portable release includes the restored soundtrack on this worker.
 
-F12 opens the host settings overlay; F10 remains an alias. **DEVELOPMENT SPEED**
-cycles through Off, X1, X2, X3, X5, X10, X20 and X50. Off uses the development
-speed stored for the current city; explicit F12 choices temporarily override it.
+F12 opens the host settings overlay; F10 remains an alias. Development speed
+comes from the current city's saved setup choice.
 After selecting a map size, the native-font **DEVELOPMENT SPEED** page offers
 **1x, 3x, 5x, 10x, 20x and 50x**. That default is saved per city, including save
 states, and survives Journey expansions. Older saved cities default to 1x. RCI development runs in batches
@@ -158,6 +157,12 @@ of completed decisions. Demand, power and access requirements still apply;
 faster development also means faster decline when those requirements are
 unmet. This multiplies attempted decisions, not guaranteed population growth.
 Work is bounded per frame; CPU limits can reduce the achieved rate at X50.
+
+Largest-map fast-forward keeps arithmetic and electrical traversal inside the
+connected native simulation loop. Electrical zero-clock work can run in bounded
+batches at scanline/IRQ boundaries instead of paying per-instruction dispatcher
+costs. Derived-field timing and the full 6/24/96-frame Tab cohorts are retained;
+music stays at real-time tempo. See [performance measurements](GPU_PERFORMANCE.md).
 
 
 **FIT TO SCREEN** in F12 maximizes the window and enables the adaptive renderer's
@@ -996,7 +1001,9 @@ Its buttons use the game's lettering and bevels, with separate artwork rather
 than writes into occupied sprite/tilemap slots. Mouse and ordinary native D-pad
 movement share the same full-button hitboxes. Native confirm toggles bits 6/7;
 back closes the panel normally. The host consumes these bits after closing it.
-The F12 actions retain the existing ARM TRIGGERS catch.
+Disaster triggers are available through this in-game panel; F12 has no disaster
+trigger section. Post-load power repair is always enabled. Generation is chosen
+on the map screen and development speed comes from city setup/save metadata.
 
 Manual scenario events use instruction-boundary hooks, working in compiled C
 and interpreter reference runs. The old live-ROM UFO NOP could not alter a

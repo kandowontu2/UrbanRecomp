@@ -21,7 +21,7 @@ is simply "the game".
 **Enhanced fork:** this repository builds on
 [blackerking/UrbanRecomp](https://github.com/blackerking/UrbanRecomp), preserving
 its history, credits and licenses. It adds per-city development speeds (1x,
-3x, 5x, 10x, 20x, 50x) with an optional F12 override, faster refresh of changed
+3x, 5x, 10x, 20x, 50x), faster refresh of changed
 power networks, 64-bit population accounting up to 9,999,999,999,999, map
 choices through 3840x3200, Journey mode
 with population-triggered border expansions, Copy/Paste, zoom and mouse drag
@@ -77,7 +77,7 @@ left to investigate, with the evidence already gathered for each.
 
 ## How it runs
 
-Beta 18 also offers F12 LAND GENERATION styles: Native,
+The map-selection screen offers GENERATION styles: Native,
 Procedural (the earlier generator), Islands, Lakes, Rivers and Fractal.
 Native remains the default; the choice applies to newly generated maps.
 Five-digit map-number editing waits until the mouse leaves the arrow area
@@ -154,9 +154,9 @@ and sampling every 60 frames, powered cells sit at **0 for the first
 ~400 frames**, then jump to 2888 and settle at 3043 â€” a ~6.7-second
 window with nothing powered.
 
-`FIX POWER ON LOAD` in the F10 menu (**on by default**) marks every cell
-powered once the map is in place at `03:c8dd`, letting the game's own
-power scan clear whatever is genuinely unpowered on its next pass.
+Power repair always rebuilds the actual network after loading. It respects
+plant capacity and disconnected zones across the entire active map, before
+development can treat the save codec's missing power flags as an outage.
 
 Implemented host-side in C rather than by porting Truttle1's bytes â€” this
 repo doesn't vendor third-party work, and doing it from C needs no free
@@ -320,13 +320,12 @@ are not passed to the game.
 |---|---|
 | MOUSE CURSOR | Same as F3: the host mouse moves the game's cursor. |
 | FAST TICKS | On by default. Removes the short delay the game puts between repeated steps while a button is held, so bulldozing and drawing roads continue smoothly instead of step by step. |
-| DRAG TURBO | 1 (off), 2, 3, 4 or 6 game frames per displayed frame while a mouse button is held, for faster building and dragging. |
+| DRAG TURBO | 1 (off), 2, 3, 4 or 6 game frames per displayed frame while the left or right mouse button is held. Speeds up building and the whole simulation, including the calendar. |
 | PAN SPEED | How many map tiles right-button panning may move per frame (1-8, default 1). |
 | MOUSE SPEED | Mouse sensitivity, 50-200 % (default 100). |
-| FAST CURSOR | Same as F9. |
-| CURSOR SPEED | How far the fast cursor moves per frame (2, 4, 8 or 16 pixels; default 4). |
+| FAST CURSOR | Same as F9. Adds host cursor movement for keyboard arrows/UHJK, independently of the calendar. |
+| CURSOR SPEED | How far FAST CURSOR moves per frame (2, 4, 8 or 16 pixels; default 4). |
 | REPLAY MENU | On by default. When you pick a scenario you have already won, offers STANDARD (the scenario again, with its goal and disasters) or FREE (its city as free play). |
-| FIX POWER ON LOAD | On by default: fixes the stock game's post-load power dropout, see above. |
 
 **CHEATS**
 
@@ -335,16 +334,12 @@ are not passed to the game.
 | ALL SCENARIO WON | Marks every scenario as won -- the six, the hidden Las Vegas one, and Sylt when the ninth scenario is on -- so the select screen opens its fourth column (Las Vegas and free play) and shows a win mark on every card. It writes what the game's own save path writes, and only once the game has set up its save memory. It is stored in the save file like a saved city (see Saving), and switching it off does not take the wins back. Headless: `SC_UNLOCK_ALL=1`. |
 | CHEAT NO DISASTER, CHEAT MONEY, CHEAT VALVE MAX, CHEAT WATER | The game's own debug-menu cheats, the same bits as F5-F8. Money and Valve Max are confirmed from the code that reads them; the other two bits are not yet. |
 | SET POP | Holds the population at a fixed value (off, 0, 2000, 10000, 50000, 100000, 500000, 600000), for testing the milestone messages. |
-| SET CLASS | Holds the city class (off, Village, Town, City, Capital, Metropolis, Megalopolis), which is what the milestones actually test. |
-| CLR MILESTONE | Re-arms the milestone messages, which the game shows only once each. |
+| SET CLASS | Forces the city rank (off, Village, Town, City, Capital, Metropolis, Megalopolis), independently of population. Milestones test this rank. |
+| CLR MILESTONE | Resets the one-time population announcements so they can appear again. |
 
-**DISASTER TRIGGER**
-
-| Row | What it does |
-|---|---|
-| ARM TRIGGERS | Safety catch, off by default: the rows below do nothing until it is on, so a stray selection cannot set off an earthquake. |
-| FIRE, FLOOD, PLANE CRASH, TORNADO, EARTHQUAKE, MONSTER | Start that disaster through the game's own code path, the same pending-disaster bits (`$0197`) its disaster page sets. |
-| MELTDOWN, UFO | Start the original scenario attacks manually. Meltdown requires a nuclear plant; manual UFO activation also works in an empty city. Explicit triggers run with NO DISASTER enabled. |
+Generation belongs to the map-selection screen, development speed belongs to
+city setup and each saved city, and disaster activation belongs to the game's
+Disasters panel. Power repair is always enabled.
 
 **STATE**
 
@@ -419,7 +414,7 @@ place it normally. Earned gifts in a full queue are retained.
 
 The in-game **Disasters** panel has temporary **NUKE** and **UFO** buttons below
 the original six. Select an event, then close the panel to start it. NUKE needs
-an existing nuclear plant. F12 retains its **ARM TRIGGERS** safety catch. These
+an existing nuclear plant. These
 explicit events also work with **CHEAT NO DISASTER** enabled; that setting
 continues suppressing automatic disasters.
 

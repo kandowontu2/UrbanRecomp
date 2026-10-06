@@ -1,5 +1,33 @@
 # Vulkan and native C performance work
 
+## Beta 22 largest-map fast-forward — 2026-10-06
+
+The largest generated Test City 3 has 664,935 R/C/I zones. With 50x development,
+held Tab (six complete guest frames per display), and 1/128 city zoom, three
+alternating reference and optimized replays each advanced 300 guest frames and
+presented 50 frames. SDL's dummy software renderer disabled GPU terrain and
+compute; the normal dedicated music worker stayed enabled. Per-kernel timers
+were disabled during these measurements.
+
+| Measurement | Previous dispatch path | Connected arithmetic/power path |
+|---|---:|---:|
+| Mean simulation + raster time per display | 119.39 ms | 108.06 ms |
+| Extra zone attempts per elapsed second, including startup | 43,823 | 46,980 |
+
+This is a modest 9.5% reduction in simulation time and about 7.2% more extra
+attempts per second on this machine. It does not establish 60 FPS or an actual
+50x development rate on the largest map. Complete fast-forward cohorts, the
+native calendar and each city's saved development speed remain intact.
+
+The optimization connects shared arithmetic and electrical traversal to the
+native city loop. Only electrical traversal receives a bounded allowance for
+work that retires zero beam clocks near scanline/IRQ boundaries. Other families
+retain their existing timing policy. A 2,400-frame largest-map replay using
+96-frame Ctrl+Shift+Tab cohorts matches PPU, native CPU, beam clocks, RAM, world
+fields and final pixels against the previous path. Sound runs synchronously in
+that exact comparison; production music remains at real-time tempo. Independent
+math, development/power gating, calendar/service and renderer tests also pass.
+
 ## Beta 19 native CPU migration — 2026-10-05
 
 The release executable now links the register/save ABI without the 65816

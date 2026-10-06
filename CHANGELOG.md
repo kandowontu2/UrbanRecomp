@@ -2,6 +2,15 @@
 
 ## 1.2.0 Enhanced Beta 22 — 2026-10-06
 
+- Reduce large-map Tab overhead by keeping shared arithmetic and electrical
+  traversal in the connected native simulation loop. Batch electrical work that
+  retires no beam clocks at scanline/IRQ boundaries; retain derived-field
+  timing, complete fast-forward cohorts and real-time music. Add opt-in
+  development/census and per-kernel timing diagnostics.
+- Simplify F12: remove Land Generation, Development Speed, Fix Power on Load
+  and the entire disaster-trigger section. Keep generation in map selection,
+  use each city's saved development speed and always repair power after load.
+  Manual disasters remain in the native Disasters panel.
 - Fix manual UFO and nuclear-meltdown activation for the native compiled build.
   Explicit triggers bypass random-disaster suppression and the UFO population
   gate without editing ROM, population or cheat values, then restore scenario

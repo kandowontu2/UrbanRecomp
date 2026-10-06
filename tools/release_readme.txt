@@ -47,7 +47,7 @@ it is dimmed. Click a gift or choose with arrows/Enter and place it normally.
 Queued earned gifts are preserved.
 The actual Disasters panel has temporary NUKE and UFO buttons in a third row.
 Select one and close the panel to run the attack. A nuclear plant is required
-for NUKE. F12 keeps ARM TRIGGERS; explicit UFO/meltdown commands also work
+for NUKE. Explicit UFO/meltdown commands also work
 with NO DISASTER enabled. Automatic disasters keep their normal restrictions.
 
 Held Tab advances six full simulation frames per display update; Shift+Tab
@@ -55,13 +55,15 @@ advances 24, and Ctrl+Shift+Tab advances 96. Development, the calendar, demand, 
 up together, while restored music keeps normal tempo. Busy cities no longer
 silently truncate fast-forward to one frame. Actual acceleration depends on
 city workload and hardware; the title measures speed against the native clock.
+Large-map arithmetic/electrical work stays in a connected simulation loop,
+with bounded electrical zero-clock batches reducing scanline-boundary overhead.
 
 The map-selection screen has GENERATION arrows for choosing the terrain type.
 Changing generation or land type replaces the complete preview and colors
 together, retaining preview zoom/pan instead of clearing and rebuilding it.
 Click the arrows (or type), or move Up from NEXT and use Left/Right. Down
 returns to NEXT. Enter/the confirm button also activates the selected arrow.
-F12 LAND GENERATION offers Native (default), Procedural (the earlier
+The map-screen GENERATION selector offers Native (default), Procedural (the earlier
 generator), Islands, Lakes, Rivers, Fractal, Continent, Delta and Atolls. The saved choice applies
 to newly generated terrain; existing cities keep their land. Map 31337
 remains water-free with every style and size.
@@ -138,8 +140,7 @@ Select map size before starting a city/Practice: 120x100, 240x200, 480x400,
 960x800, 1920x1600 or 3840x3200. Journey starts at Normal map size and expands
 at 100,000 and 1,000,000 residents, with Dr. Wright celebrations.
 The DEVELOPMENT SPEED page after map size offers 1x, 3x, 5x, 10x, 20x and 50x.
-The default is saved per city. F12 OFF uses that city's default; X1/X2/X3/X5/
-X10/X20/X50 temporarily override it. Calendar/budget scheduling remains normal.
+The selected speed is saved per city. Calendar/budget scheduling remains normal.
 Older saves load at 1x and migrate automatically when saved with this build.
 Mouse drag panning shows the original-size minimap with the live camera marker.
 Fit to Screen increases visible land at the chosen tile scale.
@@ -196,8 +197,7 @@ Middle mouse hold and drag to pan; pointer is hidden and captured
 Shift+1..0   save state to slot 1-0, 1..0 load it
 F3           mouse moves the game cursor
 F9           fast cursor
-F12 / F10    settings menu: development speed, fit to screen, GPU terrain,
-             cheats, disaster triggers,
+F12 / F10    settings menu: fit to screen, GPU terrain, input options, cheats,
              save states -- the game pauses while it is open
 
 

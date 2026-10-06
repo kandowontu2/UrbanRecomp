@@ -126,7 +126,8 @@ static ScFleet *s_fleet;
 static ScWorld s_world;
 static ScWorldGuest s_world_guest;
 static bool s_perf_detail;
-static double s_perf_clock_ms,s_perf_raster_ms,s_perf_power_ms;
+static double s_perf_clock_ms,s_perf_raster_ms,s_perf_power_ms,s_perf_batches_ms,s_perf_population_ms;
+static uint64_t *s_kernel_ticks,*s_kernel_calls;
 static uint64_t s_perf_spatial_cells;
 static uint64_t s_perf_native_development_calls;
 static bool s_skip_custom_frame;
@@ -2219,7 +2220,6 @@ static unsigned long long s_tick_frames_max, s_tick_start_frame, s_tick_start_op
  * Truttle1's PowerBugPatch identified the original dropout; no patch bytes
  * are redistributed. The host solve also respects plant capacity and every
  * expanded-map cell instead of temporarily powering the stock 12,000 cells. */
-static bool s_power_fix = true;
 static bool s_mute_city_warnings;
 static uint32_t s_power_fix_hits;
 static void restore_loaded_power(void);
@@ -2579,9 +2579,8 @@ static const char *s_scenario_event_what;            /* defined with the menu */
 static void arm_scenario_event(unsigned idx, uint16_t countdown, const char *what);
 static void service_disaster_menu8(void);
 
-/* SC_SCENARIO_EVENT=<meltdown|ufo>@<frame>: the headless twin of the F10
- * MELTDOWN / UFO rows, so the trigger can be verified without a human at the
- * window. */
+/* SC_SCENARIO_EVENT=<meltdown|ufo>@<frame>: replay the in-game Disaster
+ * menu's scenario attacks without interacting with a desktop window. */
 static int      s_scen_event_idx = -1;
 static uint16_t s_scen_event_cd;
 static uint64_t s_scen_event_frame;
@@ -2611,7 +2610,6 @@ static int s_development_override; /* 0 = use the saved city default */
 #define s_development_speed (s_development_override?s_development_override:(int)ScWorldDevelopmentSpeed(&s_world))
 static ScMouseDialog s_mouse_dialog;
 static const int kDevelopmentSpeeds[] = {0, 1, 2, 3, 5, 10, 20, 50};
-static const char *const kDevelopmentSpeedNames[] = {"OFF", "X1", "X2", "X3", "X5", "X10", "X20", "X50"};
 static ScDevelopment s_development;
 static ScDevelopmentBatches *s_development_batches;
 static bool s_development_batch_reference;
@@ -4028,15 +4026,19 @@ static unsigned sc_run_development_lane(long *guard) {
 
 static uint64_t s_city_lane_entries,s_city_lane_spans;
 static bool city_lane_site(const Interp816 *c) {
-    static int field_reference=-1;
+    static int field_reference=-1,math_reference=-1,power_reference=-1;
     if(field_reference<0) {const char *e=getenv("SC_FIELD_LANE_REFERENCE");field_reference=e && *e=='1';}
+    if(math_reference<0) {const char *e=getenv("SC_MATH_LANE_REFERENCE");math_reference=e && *e=='1';}
+    if(power_reference<0) {const char *e=getenv("SC_POWER_LANE_REFERENCE");power_reference=e && *e=='1';}
     unsigned p=c->pc;
     if(c->k!=3 || c->db!=3 || c->waiting || c->stopped || c->nmiWanted || (c->irqWanted && !c->i))return false;
     if(p==0x9255 || p==0x9301 || p==0x93b7)return false;
     return (p>=0x8297 && p<=0x84ea) || (p>=0x88f3 && p<0x90a7) ||
         (p>=0x90c5 && p<=0x9a92) || (!field_reference && p>=0x9a93 && p<=0xa299) ||
         (p>=0xa29a && p<=0xa2b9) ||
-        (p>=0xa493 && p<0xa6b8) || (p>=0xa70c && p<0xa7e0) || ScMathDivideOwns(p);
+        (!math_reference && p>=0xa2f5 && p<=0xa492) ||
+        (p>=0xa493 && p<0xa6b8) || (p>=0xa70c && p<0xa7e0) || ScMathDivideOwns(p) ||
+        (!power_reference && ScPowerTraversalOwns((uint16_t)p));
 }
 /* Keep the spatial simulation in its connected C lane until a beam event or
  * a host-owned census boundary. This removes the menu/save/construction
@@ -4044,9 +4046,10 @@ static bool city_lane_site(const Interp816 *c) {
  * largest maps. Prepared world hooks still run at each span, including GPU
  * submission, full-width centroid carries and redirected field iterators. */
 static unsigned sc_run_city_lane(uint64_t target,long *guard) {
-    static int reference=-1,diagnostic=-1;
+    static int reference=-1,diagnostic=-1,zero_clock_reference=-1;
     if(reference<0) {const char *e=getenv("SC_CITY_LANE_REFERENCE");reference=e && *e=='1';}
     if(diagnostic<0)diagnostic=getenv("SC_SPATIAL_KERNELS") || getenv("SC_MATH_REFERENCE");
+    if(zero_clock_reference<0) {const char *e=getenv("SC_ZERO_CLOCK_REFERENCE");zero_clock_reference=e && *e=='1';}
     if(reference || !s_world.giant || s_addr_trace_count || s_pc_capture_after!=-1 || s_dump_pc_armed ||
        diagnostic || !city_lane_site(g_cpu))return 0;
     Interp816 *c=g_cpu;Snes *snes=g_snes;const uint8_t *rom=snes->cart->rom;size_t size=snes->cart->romSize;
@@ -4065,15 +4068,30 @@ static unsigned sc_run_city_lane(uint64_t target,long *guard) {
             if(!city_lane_site(c))break;
         }
         unsigned entry=c->pc;bool extra=s_development.repeating;
+        uint64_t kernel_start=s_kernel_ticks?SDL_GetPerformanceCounter():0;
         unsigned boundary=snes->hPos<1024?1024:1364;
         if(snes->hIrqEnabled && (!snes->vIrqEnabled || snes->vPos==snes->vTimer+1)) {
             unsigned irq=4*snes->hTimer;if(irq>=snes->hPos && irq<boundary)boundary=irq;
         }
         unsigned scale=ScWorldGuestCpuClockScale(&s_world,c,g_ram),budget=0;
+        bool zero_clock_budget=false;
         if(extra)budget=4096;
         else if(snes->hPos && boundary>snes->hPos+2) {
             unsigned master=(boundary-snes->hPos-2)*scale,remainder=scale>1?s_map_cycle_remainder:0;
             if(master>remainder)budget=(master-remainder)/8;
+        }
+        /* Expanded-map instructions often retire zero beam clocks. At the
+         * line start or final two clocks before an event, batch only the
+         * work that still rounds to zero. The next indivisible instruction
+         * keeps the original event overrun and observes the same CPU/WRAM.
+         * Otherwise these edges execute one at a time despite a large area
+         * scale, paying the scheduler overhead for every scratch operation.
+         * Only the electrical traversal uses this additional allowance.
+         * Other simulation families retain their established beam budgets. */
+        if(!extra && !budget && scale>1 && !zero_clock_reference &&
+           ScPowerTraversalOwns((uint16_t)entry) &&
+           s_map_cycle_remainder<2*scale) {
+            budget=(2*scale-1-s_map_cycle_remainder)/8;zero_clock_budget=true;
         }
         if(s_native_bind_eager)ScWorldGuestBeginPrepared(&s_world_guest,&s_world,c,rom,size);
         else {s_world_guest.mapped=false;if(s_bank_profile)++s_native_bind_deferred;}
@@ -4083,10 +4101,10 @@ static unsigned sc_run_city_lane(uint64_t target,long *guard) {
             if(!cost && entry==0x987f)cost=ScWorldGuestHouseSiteStep(&s_world,c,g_ram,rom,size,512);
             if(!cost)cost=ScDevelopmentNativeBatch(&s_development,&s_world,c,g_ram,rom,size);
         }
-        if(!cost && ((entry>=0x9035 && entry<=0x90a6) || ScMathDivideOwns(entry)))
+        if(!cost && ((entry>=0x9035 && entry<=0x90a6) || (entry>=0xa2f5 && entry<=0xa492)))
             cost=ScMathBatchStep(c,g_ram,budget);
         if(!cost && budget)cost=ScWorldGuestBatchStep(&s_world,c,g_ram,rom,size,budget);
-        if(!cost && (c->pc!=0x9dca || (c->a&1023)<0x28 || budget>=192 || extra))
+        if(!cost && (c->pc!=0x9dca || (c->a&1023)<0x28 || (!zero_clock_budget && budget>=192) || extra))
             cost=ScWorldGuestFastStep(&s_world,c,g_ram,rom,size);
         if(!cost)cost=ScMathInstructionStep(c,g_ram);
         if(!cost)cost=ScWorldGuestInstructionStep(&s_world,c,g_ram,rom,size);
@@ -4096,6 +4114,7 @@ static unsigned sc_run_city_lane(uint64_t target,long *guard) {
             if(s_bank_profile)++s_native_bind_fallback;}
           cost=ScProgramStep(c);
         }
+        if(s_kernel_ticks) {s_kernel_ticks[entry]+=SDL_GetPerformanceCounter()-kernel_start;++s_kernel_calls[entry];}
         if(!cost)break;
         sc_note_executed_pc(0x30000|entry,c->mf,c->xf);++spans;
         if(!extra) {
@@ -4112,6 +4131,7 @@ static bool run_one_frame(void) {
 #ifdef SC_AOT_TIER
   if (s_fiber_mode) return run_one_frame_fiber();
 #endif
+  uint64_t prep_start=s_perf_detail?SDL_GetPerformanceCounter():0;
   if(s_rom_is_us && !s_development_batch_reference && !s_development_batches && host_map_screen_live())
     s_development_batches=ScDevelopmentBatchesCreate();
   if(s_development_batches && host_map_screen_live() && !ram_w(0xd7) && !ram_w(0x379) &&
@@ -4121,6 +4141,8 @@ static bool run_one_frame(void) {
         SDL_GetPerformanceCounter,SDL_GetPerformanceFrequency(),4.0,ScProgramStep);
     s_development.extra_attempts+=done;
   }
+  if(s_perf_detail)s_perf_batches_ms+=(SDL_GetPerformanceCounter()-prep_start)*s_perf_clock_ms;
+  prep_start=s_perf_detail?SDL_GetPerformanceCounter():0;
   unsigned population_cells=s_world.active?ScWorldCells(&s_world):12000;
   if (s_population_game_speed!=g_ram[0x193] || s_population_clock_cells!=population_cells) {
     s_population_game_speed=g_ram[0x193];
@@ -4139,6 +4161,7 @@ static bool run_one_frame(void) {
           (unsigned long long)s_frames,s_development_speed,
           (unsigned long long)prior,(unsigned long long)s_population.value);
   }
+  if(s_perf_detail)s_perf_population_ms+=(SDL_GetPerformanceCounter()-prep_start)*s_perf_clock_ms;
   if (s_rom_is_us && host_map_screen_live() && !ram_w(0xd7)) refresh_fast_power(false);
   else {
     s_population_clock.observed=s_power_refresh.clock.observed=false;
@@ -4895,7 +4918,7 @@ static bool run_one_frame(void) {
       }
     }
     if (s_replay_menu) replay_menu_hook(cpu->k, cpu->pc);
-    if (s_power_fix && cpu->k == 0x03 &&
+    if (cpu->k == 0x03 &&
         (cpu->pc == 0xc8dd || cpu->pc == 0xce61)) apply_power_fix();
     /* LC_LZ5 decompressor instrumentation -- see the SC_DECOMP_TRACE comment
      * above bus_read for the decoded calling convention and why the samples
@@ -8307,12 +8330,6 @@ static void setting_adjust(SettingDesc *d,int direction) {
     }
   }
   if (d->field==&s_large_maps) save_large_map_setting();
-  if (d->field==&s_terrain_style)save_terrain_setting();
-  if(d->field==&s_terrain_style && s_rom_is_us && ram_w(0x14)==5 &&
-      s_custom_renderer.map_preview.active) {
-    s_preview_type_refresh=true;
-    s_map_number_dirty=true;ram_set_w(0xb31,0x80);s_map_mouse_refresh_pending=true;
-  }
   if(getenv("SC_SETTINGS_DIAG") && d->field)
     fprintf(stderr,"[settings] %s value %d direction %d\n",d->label,
         d->kind==kSettingCycle?*(int *)d->field:(int)setting_get(d),direction);
@@ -8345,25 +8362,6 @@ static void menu_action_load_slot1(void) {
  * bit (see docs/ROM_MAP.md); bits 0 and 1 are still unidentified and are
  * labelled by number so the menu never asserts something unproven. Naming
  * them after a guess is how the $0199 mistake happened. */
-/* ARM TRIGGERS: a safety catch in front of the disaster rows.
- *
- * Requested after a stray selection set one off mid-game. The rows sit right
- * under the cheats in a menu navigated with the D-pad, and firing an
- * earthquake by accident is not recoverable without a save state. Off by
- * default, so the triggers do nothing until deliberately armed. */
-static bool s_disaster_armed;
-
-static bool disaster_triggers_armed(const char *what) {
-  if (s_disaster_armed) return true;
-  fprintf(stderr, "[menu] %s ignored -- ARM TRIGGERS is off\n", what);
-  return false;
-}
-
-static void trigger_disaster_bit(unsigned bit, const char *what) {
-  g_ram[0x0197] |= (uint8_t)(1u << bit);
-  fprintf(stderr, "[menu] set $0197 bit %u (%s) -> $0197=%02x, frame %llu\n",
-          bit, what, g_ram[0x0197], (unsigned long long)s_frames);
-}
 /* Scenario events: MELTDOWN and UFO are NOT $0197 bits.
  *
  * They are dispatched from 03:b96f on the per-scenario countdown $0c0d,
@@ -8638,21 +8636,6 @@ static void service_disaster_menu8(void) {
   else if(v&0x80) {g_ram[0x197]=(uint8_t)(v&~0x80u);arm_scenario_event(6,16,"UFO (in-game menu)");}
 }
 
-static void menu_trigger_meltdown(void) {
-  if (disaster_triggers_armed("nuclear meltdown")) arm_scenario_event(4, 1, "nuclear meltdown");
-}
-/* Manual UFO activation uses the native attack and animation, while the
- * instruction-boundary hook bypasses its scenario-only population gate. */
-static void menu_trigger_ufo(void) {
-  if (disaster_triggers_armed("UFO")) arm_scenario_event(6, 16, "UFO");
-}
-
-static void menu_trigger_fire(void) { if (disaster_triggers_armed("fire")) trigger_disaster_bit(0, "fire"); }
-static void menu_trigger_flood(void) { if (disaster_triggers_armed("flood")) trigger_disaster_bit(1, "flood"); }
-static void menu_trigger_plane(void) { if (disaster_triggers_armed("plane crash")) trigger_disaster_bit(2, "plane crash"); }
-static void menu_trigger_tornado(void) { if (disaster_triggers_armed("tornado")) trigger_disaster_bit(3, "tornado"); }
-static void menu_trigger_quake(void) { if (disaster_triggers_armed("earthquake")) trigger_disaster_bit(4, "earthquake"); }
-static void menu_trigger_monster(void) { if (disaster_triggers_armed("monster")) trigger_disaster_bit(5, "monster"); }
 
 /* This table is the whole "extension" mechanism, mirroring ar-recomp's own
  * randomizer/HD-replacements pattern: each row is one self-contained
@@ -8660,9 +8643,6 @@ static void menu_trigger_monster(void) { if (disaster_triggers_armed("monster"))
  * no separate plugin/registration system needed. Adding a new toggle or
  * action means adding one row here -- render_settings_menu() below never
  * needs to change. */
-static const int kTerrainStyles[]={0,1,2,3,4,5,6,7,8};
-static const char *const kTerrainStyleNames[]={"NATIVE","PROCEDURAL","ISLANDS","LAKES","RIVERS","FRACTAL",
-    "CONTINENT","DELTA","ATOLLS"};
 static SettingDesc s_settings[] = {
   /* Labels are kept short enough that the longest one plus its ON/OFF
    * value still fits the menu box at the current font size -- see
@@ -8671,10 +8651,6 @@ static SettingDesc s_settings[] = {
   { "FIT TO SCREEN",         kSettingAction, NULL, 0, menu_action_fit_screen, NULL, 0 },
   { "GPU TERRAIN",           kSettingBool, &s_gpu_terrain_enabled, 0, NULL, NULL, 0 },
   { "MOUSE CURSOR",          kSettingBool, &s_mouse_enabled,       0,    NULL, NULL, 0 },
-  { "LAND GENERATION",       kSettingCycle, &s_terrain_style, 0, NULL,
-    kTerrainStyles, SC_TERRAIN_STYLES, kTerrainStyleNames },
-  { "DEVELOPMENT SPEED",     kSettingCycle, &s_development_override, 0, NULL,
-    kDevelopmentSpeeds, 8, kDevelopmentSpeedNames },
   { "FAST TICKS",            kSettingBool, &s_fast_ticks,          0,    NULL, NULL, 0 },
   { "DRAG TURBO",            kSettingCycle, &s_drag_turbo,          0,    NULL,
     kDragTurbos, (int)(sizeof(kDragTurbos) / sizeof(kDragTurbos[0])) },
@@ -8686,7 +8662,6 @@ static SettingDesc s_settings[] = {
   { "CURSOR SPEED",          kSettingCycle, &s_fast_cursor_step,   0,    NULL,
     kFastCursorSteps, (int)(sizeof(kFastCursorSteps) / sizeof(kFastCursorSteps[0])) },
   { "REPLAY MENU",           kSettingBool, &s_replay_menu,         0,    NULL, NULL, 0 },
-  { "FIX POWER ON LOAD",     kSettingBool, &s_power_fix,           0,    NULL, NULL, 0 },
   { "CHEATS",                kSettingHeader, NULL, 0, NULL, NULL, 0 },
   { "MUTE CITY WARNINGS",     kSettingBool, &s_mute_city_warnings, 0, NULL, NULL, 0 },
   { "ALL SCENARIO WON",      kSettingBool, &s_unlock_all,          0,    NULL, NULL, 0 },
@@ -8699,16 +8674,6 @@ static SettingDesc s_settings[] = {
   { "SET CLASS",             kSettingCycle, &s_class_override,      0,    NULL,
     kClassOverrides, (int)(sizeof(kClassOverrides) / sizeof(kClassOverrides[0])) },
   { "CLR MILESTONE",         kSettingAction, NULL, 0, menu_action_clear_milestones, NULL, 0 },
-  { "DISASTER TRIGGER",      kSettingHeader, NULL, 0, NULL, NULL, 0 },
-  { "ARM TRIGGERS",          kSettingBool, &s_disaster_armed,      0,    NULL, NULL, 0 },
-  { "FIRE",                  kSettingAction, NULL, 0, menu_trigger_fire,     NULL, 0 },
-  { "FLOOD",                 kSettingAction, NULL, 0, menu_trigger_flood,    NULL, 0 },
-  { "PLANE CRASH",           kSettingAction, NULL, 0, menu_trigger_plane,    NULL, 0 },
-  { "TORNADO",               kSettingAction, NULL, 0, menu_trigger_tornado,  NULL, 0 },
-  { "EARTHQUAKE",            kSettingAction, NULL, 0, menu_trigger_quake,    NULL, 0 },
-  { "MONSTER",               kSettingAction, NULL, 0, menu_trigger_monster,  NULL, 0 },
-  { "MELTDOWN",              kSettingAction, NULL, 0, menu_trigger_meltdown, NULL, 0 },
-  { "UFO",                   kSettingAction, NULL, 0, menu_trigger_ufo,      NULL, 0 },
   { "STATE",                 kSettingHeader, NULL, 0, NULL, NULL, 0 },
   { "SAVE STATE 1",          kSettingAction, NULL, 0, menu_action_save_slot1, NULL, 0 },
   { "LOAD STATE 1",          kSettingAction, NULL, 0, menu_action_load_slot1, NULL, 0 },
@@ -8875,10 +8840,7 @@ static void render_settings_menu(SDL_Renderer *renderer) {
         int cv = *(int *)d->field;
         int idx = -1;
         for (int k = 0; k < d->value_count; k++) if (d->values[k] == cv) idx = k;
-        if(d->field==&s_development_override && !cv) {
-          snprintf(numbuf,sizeof numbuf,"OFF (CITY X%u)",ScWorldDevelopmentSpeed(&s_world));
-          val=numbuf;
-        } else if (d->value_names && idx >= 0) {
+        if (d->value_names && idx >= 0) {
           val = d->value_names[idx];
         } else if (cv < 0) {
           val = "OFF"; /* negative sentinel, so 0 stays a real selectable value */
@@ -11255,6 +11217,11 @@ int main(int argc, char **argv) {
   const char *perf_exit_text=getenv("SC_PERF_EXIT_AT");
   const uint64_t perf_exit_frame=perf_exit_text?strtoull(perf_exit_text,NULL,0):0;
   s_perf_detail=perf_on;s_perf_clock_ms=1000.0/SDL_GetPerformanceFrequency();
+  const char *kernel_clock_path=getenv("SC_KERNEL_CLOCK_PATH");
+  if(kernel_clock_path && *kernel_clock_path) {
+    s_kernel_ticks=calloc(65536,sizeof *s_kernel_ticks);s_kernel_calls=calloc(65536,sizeof *s_kernel_calls);
+    if(!s_kernel_ticks || !s_kernel_calls) {free(s_kernel_ticks);free(s_kernel_calls);s_kernel_ticks=s_kernel_calls=NULL;}
+  }
   const char *render_profile=getenv("SC_RENDER_PROFILE");
   s_custom_renderer.measure_clock=render_profile && *render_profile=='1'?SDL_GetPerformanceCounter:NULL;
   enum { kPerfInput, kPerfEmu, kPerfAudio, kPerfDraw, kPerfSleep, kPerfPresent,
@@ -12927,10 +12894,11 @@ int main(int argc, char **argv) {
           fprintf(stderr, "  %s %.2f/%.2f", kPerfName[k], perf_sum[k] / perf_frames, perf_max[k]);
           perf_sum[k] = perf_max[k] = 0;
         }
-        fprintf(stderr,"  raster %.2f native %.2f host %.2f power %.2f spatial %llu C-development %llu boost %.2fx\n",s_perf_raster_ms/perf_frames,
+        fprintf(stderr,"  raster %.2f native %.2f host %.2f power %.2f spatial %llu C-development %llu batches %.2f census %.2f boost %.2fx\n",s_perf_raster_ms/perf_frames,
             s_perf_native_ms/perf_frames,s_perf_custom_ms/perf_frames,
             s_perf_power_ms/perf_frames,(unsigned long long)s_perf_spatial_cells,
-            (unsigned long long)s_perf_native_development_calls,boost);
+            (unsigned long long)s_perf_native_development_calls,s_perf_batches_ms/perf_frames,s_perf_population_ms/perf_frames,boost);
+        s_perf_batches_ms=s_perf_population_ms=0;
         s_perf_native_ms=s_perf_custom_ms=0;
         s_perf_native_development_calls=0;
         s_perf_raster_ms=s_perf_power_ms=0;s_perf_spatial_cells=0;
@@ -12950,6 +12918,16 @@ int main(int argc, char **argv) {
         (unsigned long long)stats.write_failures);
   }
   ScMusicStop();
+  if(s_kernel_ticks) {
+    FILE *profile=fopen(kernel_clock_path,"w");
+    if(profile) {
+      fputs("pc,calls,ms\n",profile);
+      for(unsigned p=0;p<65536;++p)if(s_kernel_calls[p])
+        fprintf(profile,"03:%04x,%llu,%.6f\n",p,(unsigned long long)s_kernel_calls[p],s_kernel_ticks[p]*s_perf_clock_ms);
+      fclose(profile);
+    }
+    free(s_kernel_ticks);free(s_kernel_calls);s_kernel_ticks=s_kernel_calls=NULL;
+  }
   ScConstructionFree(s_build_work);s_build_work=NULL;
   if(perf_frame_file) fclose(perf_frame_file);
   if(bank_frame_file) fclose(bank_frame_file);

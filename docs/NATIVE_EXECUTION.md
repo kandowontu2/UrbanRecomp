@@ -72,3 +72,21 @@ main-loop interpreter counter:
 The recorded results are in [performance evidence](GPU_PERFORMANCE.md).
 Removing the decoder does not itself establish a general FPS improvement;
 most common paths were already compiled in Beta 18.
+
+## Simulation profiling
+
+`SC_PERF=1` separates development batches, population census, power and pixel
+work in the frame-time log. `SC_PERF_FRAME_PATH` records per-display timings;
+`SC_KERNEL_CLOCK_PATH` optionally records connected simulation entries as CSV
+with PC, call count and milliseconds. Per-kernel timers add profiling overhead
+and should be disabled for timing comparisons.
+
+`SC_MATH_LANE_REFERENCE=1`, `SC_POWER_LANE_REFERENCE=1` and
+`SC_ZERO_CLOCK_REFERENCE=1` independently disable Beta 22's connected arithmetic,
+electrical traversal and electrical zero-clock batching additions. They are developer
+comparison controls. Deterministic state comparisons disable time-bounded extra
+development with `SC_DEVELOPMENT_BATCH_REFERENCE=1`, use the same guest-frame
+cohort and compare PPU, CPU, beam, RAM and world data. Dedicated music-worker
+state follows wall time. Set `SC_MUSIC_THREAD=0` for longer exact replays that
+cross sound-command handshakes, synchronizing SPC execution to the guest clock.
+Production timing runs retain the default real-time music worker.
