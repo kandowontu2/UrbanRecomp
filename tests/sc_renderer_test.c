@@ -6,6 +6,23 @@
 #include <stdio.h>
 #include <math.h>
 static void word(uint8_t *data,unsigned at,unsigned value) { data[at]=value; data[at+1]=value>>8; }
+static void disaster_buttons_test(void) {
+    ScRenderer *r=calloc(1,sizeof *r);Ppu *p=calloc(1,sizeof *p);
+    uint8_t ram[0x20000]={0};uint32_t row[256];assert(r && p);
+    r->rom_is_us=r->clipboard_font_valid=true;ScViewport view={256,224,0,0,1,0};
+    for(unsigned i=0;i<32;++i)p->brightnessMult[i]=(uint8_t)(i*8);
+    memset(r->clipboard_font,255,sizeof r->clipboard_font);
+    word(ram,0x1df,2);word(ram,0x379,255);word(ram,0xab5,65535);
+    for(unsigned i=0;i<256;++i)row[i]=0xdeadbeef;
+    ScRendererDisasterRow(r,p,view,ram,124,row);
+    assert(row[39]==0xdeadbeef && row[120]==0xdeadbeef && row[62]!=0xdeadbeef && row[100]==row[62]);
+    uint32_t fill=row[62];ram[0x197]=64;ScRendererDisasterRow(r,p,view,ram,124,row);
+    assert(row[62]!=fill && row[100]==fill);
+    for(unsigned i=0;i<256;++i)row[i]=0xdeadbeef;
+    word(ram,0x1df,1);ScRendererDisasterRow(r,p,view,ram,124,row);
+    for(unsigned i=0;i<256;++i)assert(row[i]==0xdeadbeef);
+    free(p);free(r);
+}
 static void free_camera_test(void) {
     ScRenderer *r=calloc(1,sizeof *r);ScWorld *world=calloc(1,sizeof *world);
     assert(r && world);world->active=world->huge=world->giant=world->colossal=true;
@@ -106,6 +123,7 @@ static void free_camera_test(void) {
     puts("PASS: fractional host camera, no idle drift, preserved zoom/native camera and full 1920x1600/3840x3200 bounds");
 }
 int main(void) {
+    disaster_buttons_test();
     free_camera_test();
     Ppu *p=calloc(1,sizeof(*p)), *before=malloc(sizeof(*p));
     uint8_t *ram=calloc(1,0x20000), *rom=calloc(1,0x80000);

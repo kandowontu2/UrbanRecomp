@@ -344,7 +344,7 @@ are not passed to the game.
 |---|---|
 | ARM TRIGGERS | Safety catch, off by default: the rows below do nothing until it is on, so a stray selection cannot set off an earthquake. |
 | FIRE, FLOOD, PLANE CRASH, TORNADO, EARTHQUAKE, MONSTER | Start that disaster through the game's own code path, the same pending-disaster bits (`$0197`) its disaster page sets. |
-| MELTDOWN, UFO | The two scenario-only events. The UFO only appears in a city of at least 84,488 people; in a smaller city nothing happens. |
+| MELTDOWN, UFO | Start the original scenario attacks manually. Meltdown requires a nuclear plant; manual UFO activation also works in an empty city. Explicit triggers run with NO DISASTER enabled. |
 
 **STATE**
 
@@ -412,6 +412,16 @@ Its full map is stored inside the SRM; keep the whole SRM when backing it up.
 the source. [Layout calculations and ten-year measurements](docs/TEST_CITY_LAYOUT.md)
 explain the revised city and its limits. The calendar supports years through
 **999999**, without leading zeroes, in the HUD, budget and saved cities.
+
+**Shift-click the toolbox ? image** to select any of the 15 gifts for debugging,
+including when the image is dimmed. Click a gift or use arrows and Enter, then
+place it normally. Earned gifts in a full queue are retained.
+
+The in-game **Disasters** panel has temporary **NUKE** and **UFO** buttons below
+the original six. Select an event, then close the panel to start it. NUKE needs
+an existing nuclear plant. F12 retains its **ARM TRIGGERS** safety catch. These
+explicit events also work with **CHEAT NO DISASTER** enabled; that setting
+continues suppressing automatic disasters.
 
 Ctrl+mouse-wheel zoom can expose terrain spanning up to **32768x32768** native
 pixels, enough to fit the complete 1920Ã—1600 test city inside a widescreen

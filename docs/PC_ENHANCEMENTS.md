@@ -978,3 +978,34 @@ record and snapshots. Versions 2 through 7 remain readable; old cities import
 their native date. Journey expansions preserve the full year. Tests cover
 December/January at 9,999, 65,535 and 999,999, save-slot reloads, metadata
 migration, budget digits and unscaled HUD digits/month placement.
+
+## Manual disasters and debug gifts
+
+Shift-click anywhere on the original 16x16 toolbox ? image (guest x32..47,
+y158..173) to open all 15 gift choices, including when native availability is
+dimmed. The picker pauses the guest, consumes its opening/selection click, and
+accepts mouse, Up/Down and Enter. Selection enters the original gift-tool palette
+transition, bypassing only its four-inventory-slot chooser. Gift construction,
+price, water-only landfill behavior and inventory consumption remain native.
+A full earned-gift queue temporarily lends one slot; placement, cancellation or
+opening Save restores that earned gift. Otherwise the debug choice occupies a
+free native slot and persists like a queued gift.
+
+The real Disaster panel has a temporary third row labelled NUKE and UFO.
+Its buttons use the game's lettering and bevels, with separate artwork rather
+than writes into occupied sprite/tilemap slots. Mouse and ordinary native D-pad
+movement share the same full-button hitboxes. Native confirm toggles bits 6/7;
+back closes the panel normally. The host consumes these bits after closing it.
+The F12 actions retain the existing ARM TRIGGERS catch.
+
+Manual scenario events use instruction-boundary hooks, working in compiled C
+and interpreter reference runs. The old live-ROM UFO NOP could not alter a
+compiled branch. Explicit triggers bypass the random-disaster gate and UFO's
+84,488 population gate without faking population or clearing the saved cheat.
+They retain the original attack/animation and restore mode, scenario index and
+its previous countdown after the original DEC acknowledges completion.
+Manual meltdown finds the native first nuclear center (tile 0x27c) with full map
+coordinates, then invokes the original demolition/radiation/news routine.
+The no-plant path remains a no-op. Regression runs cover all six map sizes,
+including a nuclear plant near the far corner, and check plant removal,
+radiation, news and state restoration against both original CPU and native C.

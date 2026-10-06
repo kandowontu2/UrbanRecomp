@@ -64,6 +64,8 @@ typedef SDL_Rect ScRect;
 extern uint64_t interp816_insns_total(void);
 extern uint64_t interp816_cycles_total(void);
 #include "sc_program.h"
+#include "sc_scenario_event.h"
+#include "sc_debug_gift.h"
 #include "types.h"
 
 /* â”€â”€ globals the shared runner device sources reference â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -157,6 +159,10 @@ static uint8_t s_test_native_backup[0x8000],s_test_names_backup[32];
 static unsigned s_test_flags_backup;
 static void test_city_restore_sram(void);
 static bool s_save_dialog_pending,s_save_dialog_active;
+static ScDebugGift s_debug_gift;
+static unsigned s_debug_gift_pending;
+static bool s_debug_gift_skip_dialog,s_debug_gift_open,s_debug_gift_click_owned;
+static int s_debug_gift_selected;
 static Interp816 s_save_dialog_return;
 static unsigned s_save_dialog_phase;
 static uint16_t s_save_dialog_page,s_save_dialog_x,s_save_dialog_y;
@@ -2567,7 +2573,9 @@ static bool sc_fiber_active(void) { return false; }
 static int      s_disaster_bit = -1;
 static uint64_t s_disaster_frame;
 
-static void scenario_event_tick(void);            /* defined with the menu */
+static void scenario_event_tick(void);
+static ScScenarioEvent s_scenario_event;
+static const char *s_scenario_event_what;            /* defined with the menu */
 static void arm_scenario_event(unsigned idx, uint16_t countdown, const char *what);
 static void service_disaster_menu8(void);
 
@@ -3738,6 +3746,8 @@ static bool sc_program_host_boundary(const Interp816 *cpu) {
     if(s_save_dialog_active && cpu->pc==0xad54) return true;
     if(ScTileLookupOwns(cpu->pc)) return true;
     switch(cpu->pc) {
+    case 0xaecc: /* temporary native Disaster menu hitboxes */
+    case 0x8f05: /* debug gift: native palette update without the four-slot dialog */
     case 0x8907: /* common city initialization before any HUD/palette uploads */
     case 0x8948: /* city entry fade-in */
     case 0xf1ed: /* map generation */
@@ -4182,10 +4192,29 @@ static bool run_one_frame(void) {
       if(s_save_dialog_phase==1) {s_save_dialog_phase=2;cpu->mf=false;cpu->a=1;cpu->pc=0xad8f;}
       else cpu->pc=0xae22;
     }
+    if(s_rom_is_us)ScScenarioMenuStep(cpu,g_ram);
+    if(s_debug_gift_skip_dialog && s_rom_is_us && cpu->k==1 && cpu->pc==0x8f05) {
+      s_debug_gift_skip_dialog=false;cpu->pc=0x8f12;
+    }
+    if(s_debug_gift_pending && s_rom_is_us && cpu->k==1 && cpu->pc==0x8976 &&
+       cpu->dp==0 && cpu->db==0 && !ram_w(0xd7) && !ram_w(0x379) &&
+       !g_ram[0x391] && !g_ram[0xe3] && !s_build_work && !s_city_loading &&
+       !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i)) {
+      unsigned gift=s_debug_gift_pending;s_debug_gift_pending=0;
+      ScDebugGiftGrant(&s_debug_gift,g_ram,gift);
+      ram_set_w(0x20d,15);ram_set_w(0x1dd,15);g_ram[0x28b+15]&=0x7f;
+      s_debug_gift_skip_dialog=true;
+      unsigned return_pc=(cpu->pc-1)&65535;
+      cpu->write(cpu->mem,cpu->sp--,return_pc>>8);
+      cpu->write(cpu->mem,cpu->sp--,return_pc&255);cpu->pc=0x8e3d;
+      sc_charge_master_cycles(g_snes,6*8);
+      fprintf(stderr,"[debug gift] selected %u: %s\n",gift,ScDebugGiftNames[gift-1]);
+    }
     if(s_save_dialog_pending && s_rom_is_us && cpu->k==1 && cpu->pc==0x8976 &&
        cpu->dp==0 && cpu->db==0 &&
        !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3] &&
        !s_city_loading && !cpu->nmiWanted && !(cpu->irqWanted && !cpu->i)) {
+      ScDebugGiftRestore(&s_debug_gift,g_ram);
       s_save_dialog_pending=false;s_save_dialog_active=true;s_save_dialog_return=*cpu;
       s_save_dialog_phase=1;
       s_save_dialog_page=ram_w(0x1df);s_save_dialog_x=ram_w(0x1eb);s_save_dialog_y=ram_w(0x1ed);
@@ -4946,6 +4975,7 @@ static bool run_one_frame(void) {
       if (cpu->pc == 0xada9) ScPopulationReport(&s_population, g_ram, true);
     }
     if (s_rom_fnv == SC_ROM_FNV_US) {
+      ScScenarioEventStep(&s_scenario_event,cpu,g_ram,&s_world);
       if(cpu->k==3 && cpu->pc==0xc8a1) {
         s_loading_slot=ram_w(0x421)==1?0:1;s_city_loading=true;
       }
@@ -7737,6 +7767,9 @@ static bool load_state(const char *path) {
   ScSram_Hold();   /* the saved cities on disk stay the player's */
   s_mouse_dialog=SC_MOUSE_DIALOG_NONE;
   s_save_dialog_pending=s_save_dialog_active=false;
+  memset(&s_scenario_event,0,sizeof s_scenario_event);
+  memset(&s_debug_gift,0,sizeof s_debug_gift);
+  s_debug_gift_pending=0;s_debug_gift_skip_dialog=s_debug_gift_open=s_debug_gift_click_owned=false;
   s_escape_back_frames=0;
   ScMusicLock();snes_saveload(g_snes, &fs.base);ScMusicResetLocked();ScMusicUnlock();
   interp816_saveload(g_cpu, &fs.base);
@@ -8342,15 +8375,14 @@ static void trigger_disaster_bit(unsigned bit, const char *what) {
  * So a trigger has to set three words together, and two of them identify the
  * city -- leaving $003e/$0040 changed would tell the game it is playing a
  * different scenario, which would corrupt the win check and the next save.
- * Arm them, then restore as soon as the ROM has taken the countdown to zero
+ * Arm them, then restore once the ROM consumes the pending event countdown
  * with its own DEC $0c0d at 03:b9c9. That is the ROM reporting the event has
  * fired, so the restore is self-timing rather than a guessed frame delay --
  * simulation ticks are many frames apart and vary with game speed.
  *
  * Deliberately NOT a freeze: the values are set once and the ROM is left to
  * consume them, so execution stays on paths the game really takes. */
-/* The loaded ROM image, so the UFO population gate can be lifted for the
- * duration of a triggered event. Set in main() once the ROM is read. */
+/* Original cartridge data used by private construction transactions. */
 static uint8_t *s_rom_data;
 static uint32_t s_rom_size;
 static void commit_mouse_construction(void) {
@@ -8564,186 +8596,53 @@ static void refresh_fast_power(bool bitmap_available) {
         (unsigned long long)s_frames,s_development_speed,s_power_refresh.clock.budget/2.0);
 }
 
-static struct {
-  bool        armed;
-  uint16_t    saved_3e, saved_40;
-  uint16_t    armed_cd;
-  bool        gate_lifted;
-  const char *what;
-} s_scenario_event;
-
 static uint16_t ram_w(uint32_t a) { return (uint16_t)(g_ram[a] | (g_ram[a+1] << 8)); }
 static void ram_set_w(uint32_t a, uint16_t v) {
   g_ram[a] = (uint8_t)(v & 0xff); g_ram[a+1] = (uint8_t)(v >> 8);
 }
-
-/* The UFO checks the city population before it will appear:
- *
- *   03:b9b3  LDA $0ba5 ; CMP #$4c08 ; LDA $0ba7 ; SBC #$0001
- *   03:b9bf  BCC $b9c4          ; under 84,488 -> skip the UFO
- *   03:b9c1  JSR $bcb8
- *
- * NOP the branch (90 03 -> EA EA) so the call is reached regardless. Patching
- * the CODE rather than writing a fake population is the conservative choice:
- * $0ba5/$0ba7 are live simulation state that taxes, milestones and the win
- * check all read, so faking them even for one tick would change the game in
- * ways nothing here could bound. Two bytes of branch, by contrast, affect
- * exactly this decision.
- *
- * Scoped to the armed window and reverted with the rest of the trigger, so a
- * real Las Vegas game still has its gate. Byte-checked before writing, the
- * same as the boot-time patches.
- *
- * Interpreter-tier only: a compiled body for 03:b96f would already have the
- * branch baked in, so this has no effect in the AOT build. The windowed build
- * this menu lives in is the interpreter, so that is not a limitation here. */
-#define SC_UFO_GATE_OFF 0x1b9bfu    /* 03:b9bf, headerless LoROM file offset */
-
-/* cart_init() does `cart->rom = malloc(); memcpy(...)`, so the cart holds its
- * OWN copy and the buffer read_file() returned is not what executes. The
- * boot-time patches above work only because they run before the cart is
- * built. Anything patched later has to go to cart->rom, or it silently does
- * nothing -- which is exactly what the first version of this did. */
 static uint8_t *sc_live_rom(void) {
   if (g_snes && g_snes->cart && g_snes->cart->rom) return g_snes->cart->rom;
   return s_rom_data;
 }
-
-static bool lift_ufo_population_gate(void) {
-  uint8_t *rom = sc_live_rom();
-  if (!rom || SC_UFO_GATE_OFF + 1 >= s_rom_size) return false;
-  uint8_t *p = rom + SC_UFO_GATE_OFF;
-  if (p[0] != 0x90 || p[1] != 0x03) {
-    fprintf(stderr, "[menu] UFO gate: unexpected bytes %02x %02x at 03:b9bf, not patching\n", p[0], p[1]);
-    return false;
-  }
-  p[0] = 0xea; p[1] = 0xea;
-  fprintf(stderr, "[menu] UFO gate lifted (03:b9bf BCC -> NOP NOP)\n");
-  return true;
-}
-
-static void restore_ufo_population_gate(void) {
-  uint8_t *rom = sc_live_rom();
-  if (!rom || SC_UFO_GATE_OFF + 1 >= s_rom_size) return;
-  uint8_t *p = rom + SC_UFO_GATE_OFF;
-  p[0] = 0x90; p[1] = 0x03;
-  fprintf(stderr, "[menu] UFO gate restored\n");
-}
-
 static void arm_scenario_event(unsigned idx, uint16_t countdown, const char *what) {
-  if (s_scenario_event.armed) {
+  if (!ScScenarioEventArm(&s_scenario_event,g_ram,&s_world,idx,countdown)) {
     fprintf(stderr, "[menu] %s: a scenario event is already armed\n", what);
     return;
   }
-  s_scenario_event.saved_3e = ram_w(0x3e);
-  s_scenario_event.saved_40 = ram_w(0x40);
-  s_scenario_event.what     = what;
-  s_scenario_event.armed    = true;
-  ram_set_w(0x3e, 3);
-  ram_set_w(0x40, (uint16_t)idx);
-  ram_set_w(0x0c0d, countdown);
-  s_scenario_event.armed_cd = countdown;
-  s_scenario_event.gate_lifted = (idx == 6) ? lift_ufo_population_gate() : false;
-  fprintf(stderr, "[menu] armed %s: $3e=3 $0040=%u $0c0d=%u (saved $3e=%u $0040=%u), frame %llu\n",
+  s_scenario_event_what=what;
+  if(idx==6 || idx==4)ScRendererResetCamera(&s_custom_renderer);
+  if(idx==4 && s_scenario_event.nuclear_x>=0) {
+    ram_set_w(0x400,(uint16_t)s_scenario_event.nuclear_x);
+    ram_set_w(0x402,(uint16_t)s_scenario_event.nuclear_y);
+  }
+  fprintf(stderr, "[menu] armed %s: $3e=3 $0040=%u $0c0d=%u (saved $3e=%u $0040=%u $0c0d=%u), frame %llu\n",
           what, idx, (unsigned)countdown,
-          (unsigned)s_scenario_event.saved_3e, (unsigned)s_scenario_event.saved_40,
+          (unsigned)s_scenario_event.mode, (unsigned)s_scenario_event.scenario,
+          (unsigned)s_scenario_event.countdown,(unsigned long long)s_frames);
+}
+static void scenario_event_tick(void) {
+  if(!ScScenarioEventTick(&s_scenario_event,g_ram))return;
+  fprintf(stderr, "[menu] %s fired; restored $3e=%u $0040=%u $0c0d=%u at frame %llu\n",
+          s_scenario_event_what,(unsigned)s_scenario_event.mode,
+          (unsigned)s_scenario_event.scenario,(unsigned)s_scenario_event.countdown,
           (unsigned long long)s_frames);
 }
 
-/* Restore once the ROM has counted the event out. Called once per frame. */
-static void scenario_event_tick(void) {
-  if (!s_scenario_event.armed) return;
-  /* Restore on the ROM's first DEC $0c0d, not on the countdown reaching
-   * zero. Both arms decrement on the tick they fire, so this is one tick
-   * either way for the meltdown (1 -> 0) but sixteen for the UFO
-   * (16 -> 0), and leaving $0040 forced for sixteen ticks would have the
-   * game think it is in the wrong scenario for most of a minute. */
-  if (ram_w(0x0c0d) == s_scenario_event.armed_cd) return;
-  ram_set_w(0x3e, s_scenario_event.saved_3e);
-  ram_set_w(0x40, s_scenario_event.saved_40);
-  if (s_scenario_event.gate_lifted) {
-    restore_ufo_population_gate();
-    s_scenario_event.gate_lifted = false;
-  }
-  s_scenario_event.armed = false;
-  fprintf(stderr, "[menu] %s fired; restored $3e=%u $0040=%u at frame %llu\n",
-          s_scenario_event.what, (unsigned)s_scenario_event.saved_3e,
-          (unsigned)s_scenario_event.saved_40, (unsigned long long)s_frames);
-}
-
-/* SC_DISASTER_MENU8=1: put the meltdown and the UFO on the GAME'S OWN
- * disaster page, not just the F10 menu.
- *
- * The page (01:aa39, screen mode $01df == 2) walks $0197 as a checkbox list:
- *
- *   01:aa3e  ASL A ; ASL A     ; 2 shifts, so only bits 5..0 reach the walker
- *   01:aa45  LDY #$0005        ; 6 rows
- *   01:aa77  LDA $01a95c,X     ; bit-mask table
- *
- * Two things make this cheap. The mask table at 01:a95c already runs to
- * $0200, so bits 6 and 7 have masks sitting there unused; and the input path
- * does SBC #$0008 with only a negative check, so row indices 0-7 are already
- * accepted. Only the render side is capped at six.
- *
- * Dropping the two shifts lets all eight bits reach the walker, and bumping
- * the count to 8 draws two more checkboxes.
- *
- * The new bits are serviced HERE rather than by extending 03:b8ae. That
- * ladder is a fixed chain ending in PLD/RTS at 03:b914 with no room for two
- * more arms, and the meltdown and UFO are not ladder disasters anyway -- they
- * are the $0c0d scenario events, which already have a verified trigger above.
- * So the ROM patch only has to make the bits SETTABLE; the host reads them.
- *
- * OPT-IN because two things about it are unverified: whether rows 6 and 7 land
- * inside the menu box or on top of whatever is below it, and that they will
- * have no LABELS -- the row text comes from the page-setup dispatch
- * (01:aabf JSR ($9d1a,X)), not from the checkbox renderer, so the two new rows
- * draw a checkbox with nothing beside it until that is extended too. */
-static bool s_disaster_menu8;
-
-/* The disaster page cannot be widened in place -- slots 6 and 7 are IN USE.
- *
- * Attempted and reverted: raise the row count, then position the two new rows
- * by writing their bytes in the buffer at $7e2063 + row*16. Both failed, and
- * the second failed destructively.
- *
- * A clean dump shows slots 6/7 holding `e0 00 32 80` -- byte 3 a palette or
- * attribute byte -- and slot 8 holding different tiles again ($35/$33). The
- * buffer is shared with other UI elements, so writing checkbox tiles and
- * palettes there corrupts them wherever they appear. Reported from play as
- * "Speed, Options and Disasters are all colourful even when not selected",
- * which is exactly that.
- *
- * Two methodology notes, both of which cost real time here:
- *
- *   - Sweeping the position byte over $60-$88 rendered NOTHING at any value.
- *     Verifying that a WRAM write landed is not verifying a pixel changed.
- *   - Replaying a save state already parked on a page never re-runs that
- *     page setup, so it is blind to any setup-time change. Several
- *     screenshots taken that way proved nothing either way.
- *
- * The page is drawn by 01:d94f, which blits four 16-word rows from ROM tables
- * at 01:d8af/d8cf/d8ef/... into the tilemap at $7e2440. Adding entries means
- * authoring new table rows there, not moving bytes in the sprite buffer. */
-
-
+/* The temporary third Disaster row is host artwork plus native hit-testing.
+ * Bits 6/7 remain queued until the real modal menu closes. This avoids writing
+ * into occupied OAM slots or changing the original six disaster buttons. */
 static void service_disaster_menu8(void) {
-  if (!s_disaster_menu8) return;
-  uint8_t v = g_ram[0x0197];
-  if (v & 0x40) { g_ram[0x0197] = (uint8_t)(v & ~0x40u);
-                  arm_scenario_event(4, 1,  "nuclear meltdown (in-game menu)"); }
-  else if (v & 0x80) { g_ram[0x0197] = (uint8_t)(v & ~0x80u);
-                       arm_scenario_event(6, 16, "UFO (in-game menu)"); }
+  if(!s_rom_is_us || ram_w(0x379) || ram_w(0xab5) || ram_w(0xd7) || s_scenario_event.armed)return;
+  uint8_t v=g_ram[0x197];
+  if(v&0x40) {g_ram[0x197]=(uint8_t)(v&~0x40u);arm_scenario_event(4,1,"nuclear meltdown (in-game menu)");}
+  else if(v&0x80) {g_ram[0x197]=(uint8_t)(v&~0x80u);arm_scenario_event(6,16,"UFO (in-game menu)");}
 }
 
 static void menu_trigger_meltdown(void) {
   if (disaster_triggers_armed("nuclear meltdown")) arm_scenario_event(4, 1, "nuclear meltdown");
 }
-/* The UFO additionally passes a population gate at 03:b9b3 -- a 32-bit
- * compare of ($0ba7:$0ba5) against $0001_4c08 -- so it will not appear in a
- * city under 84,488 people. Measured: on a small free-play city the arm is
- * reached and the gate rejects it, so the menu row is not broken, the city is
- * just too small. */
+/* Manual UFO activation uses the native attack and animation, while the
+ * instruction-boundary hook bypasses its scenario-only population gate. */
 static void menu_trigger_ufo(void) {
   if (disaster_triggers_armed("UFO")) arm_scenario_event(6, 16, "UFO");
 }
@@ -8895,7 +8794,8 @@ static int text_width(int px, const char *s) {
 
 typedef struct SettingsLayout { int px, line_h, pad, x, y, w, h; } SettingsLayout;
 static SettingsLayout settings_layout(int out_w, int out_h) {
-  const int lines = (int)kSettingCount + 6 + (s_menu_preview ? 4 : 0);
+  const int lines = s_debug_gift_open?SC_DEBUG_GIFT_COUNT+6:
+      (int)kSettingCount + 6 + (s_menu_preview ? 4 : 0);
   int px = out_h / (6 * (lines + 1));
   if (px > 4) px = 4;
   if (px < 1) px = 1;
@@ -8911,9 +8811,9 @@ static int settings_mouse_row(SDL_Window *window, SDL_Renderer *renderer, double
   SettingsLayout r=settings_layout(dw,dh);
   int first_y=r.y+r.pad+2*r.line_h;
   if (x<r.x+r.pad || x>=r.x+r.w-r.pad || y<first_y ||
-      y>=first_y+(int)kSettingCount*r.line_h) return -1;
+      y>=first_y+(s_debug_gift_open?SC_DEBUG_GIFT_COUNT:(int)kSettingCount)*r.line_h) return -1;
   int row=(int)((y-first_y)/r.line_h);
-  return s_settings[row].kind==kSettingHeader ? -1 : row;
+  return !s_debug_gift_open && s_settings[row].kind==kSettingHeader ? -1 : row;
 }
 
 static void render_settings_menu(SDL_Renderer *renderer) {
@@ -8938,8 +8838,20 @@ static void render_settings_menu(SDL_Renderer *renderer) {
   SDL_RenderDrawRect(renderer, &bg);
 
   int ty = menu_y + pad;
-  draw_text(renderer, menu_x + pad, ty, px, "SETTINGS");
+  draw_text(renderer, menu_x + pad, ty, px, s_debug_gift_open?"DEBUG GIFTS":"SETTINGS");
   ty += line_h * 2;
+  if(s_debug_gift_open) {
+    for(unsigned i=0;i<SC_DEBUG_GIFT_COUNT;++i) {
+      bool selected=(int)i==s_debug_gift_selected;
+      SDL_SetRenderDrawColor(renderer,255,255,selected?0:255,255);
+      if(selected)draw_text(renderer,menu_x+pad,ty,px,">");
+      draw_text(renderer,menu_x+pad+4*px,ty,px,ScDebugGiftNames[i]);ty+=line_h;
+    }
+    SDL_SetRenderDrawColor(renderer,180,180,180,255);
+    draw_text(renderer,menu_x+pad,ty+line_h/2,px>1?px-1:1,"ENTER OR CLICK SELECT");
+    draw_text(renderer,menu_x+pad,ty+line_h*3/2,px>1?px-1:1,"ESC OR F12 CLOSE");
+    SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_NONE);return;
+  }
 
   for (size_t i = 0; i < kSettingCount; i++) {
     SettingDesc *d = &s_settings[i];
@@ -10947,24 +10859,6 @@ int main(int argc, char **argv) {
    * this patch: a 90s-timeout retest completed in 40s with byte-identical
    * baseline output. Re-verify with a generous timeout if this is ever
    * in doubt again.) */
-  /* SC_DISASTER_MENU8=1 -- see service_disaster_menu8(). Two byte patches:
-   * drop the pair of ASLs so all eight $0197 bits reach the row walker, and
-   * raise the row count from 6 to 8. Byte-checked, and applied here because
-   * cart_init() copies the ROM -- a patch after that lands in a buffer nobody
-   * reads. */
-  if (getenv("SC_DISASTER_MENU8")) {
-    /* The row-count patch is GONE. Raising LDY #$0005 to #$0007 and dropping
-     * the two ASLs did give the page eight bits to walk, and it wrecked the
-     * colours on the Speed, Options and Disasters pages: slots 6 and 7 of the
-     * buffer at $7e2063 are not free, so the extra rows wrote checkbox tiles
-     * and palettes over other UI elements. See the note above.
-     *
-     * What is left is only the host-side servicing of bits 6 and 7, which
-     * touches no ROM and keeps SC_DISASTER=6/7 usable as a headless trigger.
-     * The F10 MELTDOWN and UFO rows remain the working way to fire these. */
-    s_disaster_menu8 = true;
-    fprintf(stderr, "disaster bits 6/7 serviced host-side (no ROM patch)\n");
-  }
   {
     uint32_t off = 0x40fb; /* 00:c0fb's STA $7e21b5 (long), file offset = addr-0x8000 (bank 0) */
     if (s_rom_is_us && off + 3 < rom_size && rom_data[off] == 0x8f && rom_data[off+1] == 0xb5 &&
@@ -11394,6 +11288,28 @@ int main(int argc, char **argv) {
     }
     if(perf_on) memset(perf_current,0,sizeof perf_current);
     SDL_Event ev;
+    /* Owned SDL mouse-event replays for host overlays. Canvas coordinates
+     * use the same presented view as SC_MOUSE_INPUT; no system pointer warp. */
+    { const char *events=getenv("SC_MOUSE_EVENTS");static unsigned tick;
+      if(events) {
+        unsigned at,down;double x,y;int used;
+        while(sscanf(events,"%u:%lf:%lf:%u%n",&at,&x,&y,&down,&used)==4) {
+          if(at==tick) {
+            int ww,wh,dw,dh;SDL_GetWindowSize(window,&ww,&wh);SDL_GetRendererOutputSize(renderer,&dw,&dh);
+            ScViewport v=s_custom_video.enabled?s_custom_renderer.view:ScVideoViewport(&s_custom_video,dw,dh);
+            SDL_Event click={0};click.type=down?SDL_MOUSEBUTTONDOWN:SDL_MOUSEBUTTONUP;
+            click.button.button=SDL_BUTTON_LEFT;click.button.windowID=SDL_GetWindowID(window);
+            if(dw>0 && dh>0 && v.width>0 && v.height>0) {
+              click.button.x=(s_destination.x+x*s_destination.w/v.width)*ww/dw;
+              click.button.y=(s_destination.y+y*s_destination.h/v.height)*wh/dh;
+              SDL_PushEvent(&click);
+            }
+          }
+          events+=used;if(*events++!=',')break;
+        }
+        ++tick;
+      }
+    }
     /* Owned regression windows exercise the actual SDL wheel/pinch routing.
      * SC_ZOOM_EVENTS=tick:kind:amount:ctrl[:window_x:window_y],...;
      * kind is w (wheel) or p (pinch).
@@ -11494,7 +11410,7 @@ int main(int argc, char **argv) {
         }
         if(getenv("SC_SAVE_DIALOG_DIAG")) fprintf(stderr,"[escape save] key frame %llu mode=%u city=%u modal=%u/%u/%u/%u dialog=%u\n",
             (unsigned long long)s_frames,ram_w(0x14),ram_w(0x3e),ram_w(0xd7),ram_w(0x379),g_ram[0x391],g_ram[0xe3],s_mouse_dialog);
-        if(s_menu_open) s_menu_open=false;
+        if(s_menu_open) {s_menu_open=false;s_debug_gift_open=false;}
         else if(s_rom_is_us && g_ram[0x14]==0 && ram_w(0x3e) &&
             !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3] &&
             s_mouse_dialog==SC_MOUSE_DIALOG_NONE && !s_save_dialog_active) {
@@ -11626,10 +11542,18 @@ int main(int argc, char **argv) {
        * of each needing its own memorized hotkey. */
       if (ev.type == SDL_KEYDOWN && (SC_EVENT_SCANCODE(ev) == SDL_SCANCODE_F10 ||
           SC_EVENT_SCANCODE(ev) == SDL_SCANCODE_F12) && !ev.key.repeat) {
-        s_menu_open = !s_menu_open;
+        s_menu_open = !s_menu_open;s_debug_gift_open=false;
         fprintf(stderr, "[F10/F12] settings menu %s\n", s_menu_open ? "OPEN" : "CLOSED");
       }
-      if (s_menu_open && ev.type == SDL_KEYDOWN) {
+      if(s_menu_open && s_debug_gift_open && ev.type==SDL_KEYDOWN) {
+        SDL_Scancode code=SC_EVENT_SCANCODE(ev);
+        if(code==SDL_SCANCODE_UP)s_debug_gift_selected=(s_debug_gift_selected+14)%15;
+        if(code==SDL_SCANCODE_DOWN)s_debug_gift_selected=(s_debug_gift_selected+1)%15;
+        if(code==SDL_SCANCODE_RETURN) {
+          s_debug_gift_pending=(unsigned)s_debug_gift_selected+1;
+          s_menu_open=s_debug_gift_open=false;s_debug_gift_click_owned=true;
+        }
+      } else if (s_menu_open && ev.type == SDL_KEYDOWN) {
         switch (SC_EVENT_SCANCODE(ev)) {
           case SDL_SCANCODE_UP:
             /* Step until a non-header lands under the cursor. Bounded by
@@ -11664,8 +11588,16 @@ int main(int argc, char **argv) {
         double y=ev.type==SDL_MOUSEMOTION?ev.motion.y:ev.button.y;
         int row=settings_mouse_row(window,renderer,x,y);
         if(row>=0) {
-          s_menu_selected=row;
-          if(ev.type==SDL_MOUSEBUTTONDOWN) setting_activate(&s_settings[row]);
+          if(s_debug_gift_open) {
+            s_debug_gift_selected=row;
+            if(ev.type==SDL_MOUSEBUTTONDOWN) {
+              s_debug_gift_pending=(unsigned)row+1;
+              s_menu_open=s_debug_gift_open=false;s_debug_gift_click_owned=true;
+            }
+          } else {
+            s_menu_selected=row;
+            if(ev.type==SDL_MOUSEBUTTONDOWN)setting_activate(&s_settings[row]);
+          }
         }
       }
       /* F4: dump WRAM to a fixed path right now, on demand -- for pinning
@@ -12289,6 +12221,19 @@ int main(int argc, char **argv) {
         s_build_pending=false;s_clip_tool=s_clip_pending=0;s_clip_drag=false;
       }
       bool pressed=mouse_raw_left && !previous_left;
+      if(pressed && mouse_target_valid && (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]) &&
+          ScDebugGiftButton(mouse_target_x,mouse_target_y) && s_mouse_enabled && s_rom_is_us &&
+          host_map_screen_live() && ram_w(0x1d7) && !ram_w(0xd7) && !ram_w(0x379) &&
+          s_mouse_dialog==SC_MOUSE_DIALOG_NONE && !s_build_active && !s_build_pending && !s_clip_pending) {
+        s_menu_open=s_debug_gift_open=true;s_debug_gift_selected=0;
+        s_debug_gift_click_owned=true;mouse_clip_consumed=true;mouse_edge_input=0;
+        pressed=false;
+        fprintf(stderr,"[debug gift] picker opened, including disabled gifts button\n");
+      }
+      if(s_debug_gift_click_owned) {
+        mouse_clip_consumed=true;mouse_edge_input=0;
+        if(!mouse_raw_left)s_debug_gift_click_owned=false;
+      }
       if(pressed && mouse_clip_hit && !s_build_active && !s_build_pending && !s_clip_pending) {
         unsigned tool=(unsigned)mouse_clip_button+1;
         if(tool==1 || s_clipboard.count) {
@@ -12525,6 +12470,7 @@ int main(int argc, char **argv) {
      * (and therefore `texture` below) simply isn't touched this iteration,
      * so whatever was last rendered stays on screen underneath the overlay. */
     bool guard_tripped = false;
+    if(!s_debug_gift_pending && !s_debug_gift_skip_dialog)ScDebugGiftTick(&s_debug_gift,g_ram);
     poll_mouse_construction();
     if (!s_menu_open && !s_build_work) {
       for (int ffi = 0; ffi < frames_this_iter && !s_build_work; ffi++) {

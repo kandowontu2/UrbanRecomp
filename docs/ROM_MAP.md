@@ -2250,27 +2250,28 @@ an instruction.
 between the two runs. If OAM carries the sprite but its tiles are absent, the
 graphics reading is confirmed.
 
-### Skipping the UFO population gate
+### Manual activation in the native build (2026-10-06)
 
-The `UFO` menu row lifts the gate for the duration of the event by NOPping the
-branch itself (`03:b9bf`, `90 03` -> `EA EA`), then putting it back.
+The current trigger sets the native branch carry at 03:b9bf while its manual
+UFO event is armed. Live ROM patches do not change compiled C branches, which
+made the earlier NOP implementation ineffective in native releases. Population
+and ROM bytes stay unchanged. The manual dispatcher also passes 03:b85e when
+NO DISASTER suppresses automatic events. It returns at 03:b86e after the one
+scenario event instead of processing additional random disasters that tick.
 
-Patching the **code** rather than writing a fake population is the conservative
-choice: `$0ba5`/`$0ba7` are live simulation state that taxes, milestones and the
-win check all read, so faking them even briefly would change the game in ways
-nothing here could bound. Two bytes of branch affect exactly this decision.
+The handler retains forced Las Vegas identity throughout the whole approach
+because bank 00:c3f8 compares scenario index 6 before drawing the UFO. The native
+DEC 03:b9c9 acknowledges completion; only then do mode, scenario and the prior
+countdown return. A real windowed native replay now shows the UFO sprite flying
+over free play. Zero-population native and interpreter tests reach its approach
+state with NO DISASTER enabled, without changing population, cheat or ROM data.
 
-> **`cart_init()` copies the ROM.** `cart->rom = malloc(); memcpy(...)`, so the
-> buffer `read_file()` returned is *not* what executes. The boot-time patches
-> work only because they run before the cart is built. A patch applied later
-> must go to `cart->rom` or it silently does nothing — which is exactly what the
-> first version of this did: the gate reported "lifted" and the UFO still did
-> not appear.
-
-Note the forced state lasts as long as the event does. The UFO handler spins at
-`03:bcc5` for the whole approach, so `DEC $0c0d` — and with it the restore —
-comes ~2,800 frames later. Measured end to end: armed at 65873, restored at
-68647, with `$3e`, `$0040` and the gate all put back.
+Manual nuclear activation finds the same first 0x27c center as the native scan
+using full-width coordinates, then enters 03:bd61. All six sizes have native and
+original CPU tests for demolition, radiation, the type-8 dated news entry,
+no-plant behavior and scenario restoration. The real Disaster menu now adds
+separately rendered temporary NUKE/UFO buttons, selected through 01:aecc and
+native bit masks 6/7. It does not extend the checkbox walker into occupied OAM.
 
 ### Triggering both from the F10 menu
 
@@ -2341,6 +2342,12 @@ no airport, so the plane crash has nothing to crash.
 
 ## Putting the meltdown and UFO on the game's own disaster page
 
+The following records the earlier tile/OAM patch experiments. The current
+implementation adds a separate host-rendered third row, hooks native confirm
+hit-testing at `01:aecc`, and services bits 6/7 only after the panel closes.
+It needs no environment option or cartridge patch. The original six buttons
+and shared tile/OAM buffers retain their existing contents.
+
 `SC_DISASTER_MENU8=1`. The page is `01:aa39` (screen mode `$01df == 2`), which
 walks `$0197` as a checkbox list:
 
@@ -2383,9 +2390,9 @@ byte, and slot 8 holds different tiles again (`$35`/`$33`). The buffer at
 `$7e2063` is shared with other UI elements, so the extra rows write checkbox
 tiles and palettes over them wherever they appear.
 
-Both attempts are reverted. What remains is host-side servicing of `$0197` bits
-6 and 7, which touches no ROM and keeps `SC_DISASTER=6/7` usable headlessly; the
-F10 rows remain the working way to fire either event.
+Both tile/OAM patch attempts are reverted. Host-side servicing of `$0197` bits
+6 and 7 remains. The current third row and F12 actions use the same scenario
+hooks; `SC_DISASTER=6/7` also remains usable headlessly.
 
 ### How the page is actually drawn
 

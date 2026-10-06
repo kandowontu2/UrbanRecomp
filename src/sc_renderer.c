@@ -1,4 +1,5 @@
 #include "sc_renderer.h"
+#include "sc_scenario_event.h"
 #include "sc_mouse_ui.h"
 #include "sc_city_setup.h"
 #include "sc_land_type.h"
@@ -1947,6 +1948,27 @@ static void clipboard_text(const ScRenderer *r,const Ppu *p,ScViewport v,
         }
     }
 }
+static uint32_t disaster_ink(const Ppu *p,unsigned rgb) {
+    return 0xff000000u|((uint32_t)p->brightnessMult[((rgb>>16)&255)>>3]<<16)|
+        ((uint32_t)p->brightnessMult[((rgb>>8)&255)>>3]<<8)|p->brightnessMult[(rgb&255)>>3];
+}
+void ScRendererDisasterRow(const ScRenderer *r,const Ppu *p,ScViewport v,const uint8_t *ram,int y,uint32_t *out) {
+    if(!r->rom_is_us || !r->clipboard_font_valid || !ScScenarioMenuLive(ram) || PPU_forcedBlank(p) ||
+       y<SC_DISASTER_BUTTON_Y || y>=SC_DISASTER_BUTTON_Y+SC_DISASTER_BUTTON_H+4)return;
+    uint32_t paper=disaster_ink(p,0x302000),dark=disaster_ink(p,0x505070),light=disaster_ink(p,0xe8e8ff);
+    for(int x=40;x<120;++x)out[v.core_x+x]=(x==40 || x==119 || y>=SC_DISASTER_BUTTON_Y+SC_DISASTER_BUTTON_H+2)?0xff000000:paper;
+    for(unsigned b=0;b<2;++b) {
+        int left=b?82:44,dy=y-SC_DISASTER_BUTTON_Y;
+        if(dy>=SC_DISASTER_BUTTON_H)continue;
+        bool selected=(ram[0x197]&(64u<<b))!=0;
+        uint32_t fill=disaster_ink(p,selected?0xffff80:0xb0b0d0),ink=disaster_ink(p,0x000080);
+        for(int dx=0;dx<SC_DISASTER_BUTTON_W;++dx)
+            out[v.core_x+left+dx]=(dy<2 || dx<2)?light:(dy>=SC_DISASTER_BUTTON_H-2 || dx>=SC_DISASTER_BUTTON_W-2)?dark:fill;
+        const char *label=b?"UFO":"NUKE";
+        clipboard_text(r,p,v,label,v.core_x+left+(SC_DISASTER_BUTTON_W-(b?24:32))/2,
+            SC_DISASTER_BUTTON_Y+8,y,out,ink);
+    }
+}
 void ScRendererHudPointer(ScRenderer *r,const Ppu *p) {
     if(r->pointer_hidden || !r->pointer_active || !r->pointer_hud || !r->city_input || r->advisor_frame || r->map_hold) return;
     /* 01:c641 emits the original 16px HUD hand using tile $31ec. Follow the
@@ -2459,6 +2481,8 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         }
         MEASURE_END(r,SC_RENDER_ROWS,measured);
         measured=MEASURE_BEGIN(r);
+        for(int y=SC_DISASTER_BUTTON_Y;y<SC_DISASTER_BUTTON_Y+SC_DISASTER_BUTTON_H+4;++y)
+            ScRendererDisasterRow(r,p,r->view,ram,y,r->pixels+(size_t)(y+r->view.core_y)*r->view.width);
         city_pointer(r,p,ram);
         /* The selector's OAM starts with map pins, not a cursor. Use its
          * shared native menu hand across the entire expanded canvas. */

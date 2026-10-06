@@ -220,7 +220,7 @@ int main(int argc,char **argv) {
   assert(ScConstructionRefreshPower(ram,&world,rom,sizeof rom));powered=0;
   for(int y=300;y<325;++y) for(int x=300;x<400;++x) powered+=(ScWorldCell(&world,x,y)&0x8000)!=0;
   assert(powered==2000);
-  for(unsigned huge=0;huge<2;++huge) for(unsigned gift=1;gift<=14;++gift) {
+  for(unsigned huge=0;huge<2;++huge) for(unsigned gift=1;gift<=15;++gift) {
     reset(100000);ScWorldReset(&world);world.active=true;world.huge=huge;
     ram[0x3f5]=gift;put(0x3f3,0);
     int x=huge?460:200,y=huge?380:180;

@@ -151,6 +151,7 @@ ScVideoRect ScRendererClipboardButton(ScViewport view,unsigned button);
 void ScRendererClipboardRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,
     unsigned tool,bool available,uint64_t price,int y,uint32_t *out);
 /* Restore the live HUD hand above host-added COPY/PASTE labels. */
+void ScRendererDisasterRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,const uint8_t *ram,int y,uint32_t *out);
 void ScRendererHudPointer(ScRenderer *r,const Ppu *ppu);
 uint32_t ScRendererHandPixel(const Ppu *ppu,int x,int y);
 /* Distinguish the visible map panel from waiting/name pages during setup. */

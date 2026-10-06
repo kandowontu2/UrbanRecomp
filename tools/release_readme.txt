@@ -42,6 +42,14 @@ The calendar now reaches year 999999 with no leading zeroes. The HUD and
 budget show the complete year; full years persist in city and snapshot saves.
 Existing earlier saves are imported with their native date.
 
+Shift-click the toolbox ? button for an all-15-gifts debug picker, even when
+it is dimmed. Click a gift or choose with arrows/Enter and place it normally.
+Queued earned gifts are preserved.
+The actual Disasters panel has temporary NUKE and UFO buttons in a third row.
+Select one and close the panel to run the attack. A nuclear plant is required
+for NUKE. F12 keeps ARM TRIGGERS; explicit UFO/meltdown commands also work
+with NO DISASTER enabled. Automatic disasters keep their normal restrictions.
+
 Held Tab advances six full simulation frames per display update; Shift+Tab
 advances 24, and Ctrl+Shift+Tab advances 96. Development, the calendar, demand, services and vehicles speed
 up together, while restored music keeps normal tempo. Busy cities no longer
@@ -138,16 +146,6 @@ Fit to Screen increases visible land at the chosen tile scale.
 Ctrl+wheel zoom-out now reaches twice as far, exposing terrain spanning up
 to 65536 native pixels across the view. The entire 3840x3200 map can fit in
 the default widescreen view and Fit to Screen. HUD and menus stay the same size.
-
-Hidden TEST CITY 3: press Ctrl+Shift+tilde on Resume Saved City to reveal
-the 1920x1600 developed test city. With no saved cities, the same shortcut
-works on the main menu. It starts with about 62 million residents at normal
-zone capacities, connected power/road/rail networks, police/fire, parks,
-gifts, stadium, airports and coastal seaports. The usual simulation applies.
-Select City 3 to load its SRM record or generate it if no record exists.
-Escape opens Save?; choose Yes to save City 3 without replacing City 1 or 2.
-The hidden city's full map is appended inside the SRM. Keep that entire file
-when backing it up. Long-term maximum population is still being tested.
 
 All 19 restored PCM tracks play with their authored loops and native sound
 effects. Credits: Pinci / Church of Kondo (restoration), Relikk (PCM set).
