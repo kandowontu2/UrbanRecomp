@@ -93,7 +93,51 @@ static unsigned geographic_check(ScMapGenState *st,unsigned seed,unsigned size) 
 static int compare_keys(const void *a,const void *b) {
     uint32_t x=*(const uint32_t *)a,y=*(const uint32_t *)b;return (x>y)-(x<y);
 }
+static void island_building_check(const ScMapGenState *st,unsigned style,unsigned seed) {
+    unsigned w=st->width,h=st->height,land=0,districts=0;
+    unsigned *sums=calloc((size_t)(w+1)*(h+1),sizeof *sums);assert(sums);
+    for(unsigned y=0;y<h;++y) {
+        unsigned row=0;
+        for(unsigned x=0;x<w;++x) {
+            unsigned tile=st->map[y*w+x];bool water=tile>0 && tile<20;
+            row+=water;land+=!water;
+            sums[(y+1)*(w+1)+x+1]=sums[y*(w+1)+x+1]+row;
+        }
+    }
+    /* Twelve-cell squares fit several zones, transport and services. Count
+     * complete district footprints, not merely a high total of narrow land. */
+    for(unsigned y=12;y<=h;++y)for(unsigned x=12;x<=w;++x) {
+        unsigned water=sums[y*(w+1)+x]-sums[(y-12)*(w+1)+x]-
+            sums[y*(w+1)+x-12]+sums[(y-12)*(w+1)+x-12];
+        districts+=water==0;
+    }
+    free(sums);
+    printf("%s seed %u %ux%u: land %.1f%% district footprints %.1f%%\n",
+        sc_mapgen_style_name(style),seed,w,h,land*100.0/(w*h),districts*100.0/(w*h));
+    assert(land*100>(uint64_t)w*h*35 && land*100<(uint64_t)w*h*90);
+    assert(districts*100>(uint64_t)w*h*(style==SC_TERRAIN_ISLANDS?25:20));
+}
+static void amazon_forests(void) {
+    ScMapGenState *st=calloc(1,sizeof *st);assert(st);
+    const unsigned sizes[]={0,2,5};
+    for(unsigned k=0;k<3;++k) {
+        sc_mapgen_generate_numbered(st,sizes[k],42);
+        unsigned cells=(st->width?st->width:120)*(st->height?st->height:100);
+        uint16_t *before=malloc(cells*2);assert(before);memcpy(before,st->map,cells*2);
+        unsigned old=0,now=0;ScMapGenPrng pr={0x1234,0xabcd,0x9abc};
+        sc_mapgen_extra_forests(&pr,st);
+        for(unsigned i=0;i<cells;++i) {
+            unsigned a=before[i]&1023,b=st->map[i]&1023;
+            if(a && a<20)assert(st->map[i]==before[i]);
+            old+=a>=20;now+=b>=20;
+        }
+        assert(now>old);printf("PASS: Amazon size %u forests %u -> %u, water and shores preserved\n",sizes[k],old,now);
+        free(before);
+    }
+    free(st);
+}
 int main(void) {
+    amazon_forests();
     setvbuf(stdout,NULL,_IONBF,0);
     uint32_t *keys=malloc(100000*sizeof *keys);assert(keys);
     for(unsigned n=0;n<100000;++n)keys[n]=sc_mapgen_number_key(n);
@@ -105,6 +149,17 @@ int main(void) {
     assert(sc_mapgen_number_nav(9,2)==11 && sc_mapgen_number_nav(11,1)==9);
     assert(sc_mapgen_number_nav(10,4)==11 && sc_mapgen_number_nav(10,8)==1);
     assert(sc_mapgen_number_nav(0,4)==1 && sc_mapgen_number_nav(1,4)==2);
+    assert(sc_mapgen_number_nav(0,8)==15 && sc_mapgen_number_nav(1,8)==0);
+    assert(sc_mapgen_number_nav(14,8)==12 && sc_mapgen_number_nav(15,8)==13);
+    assert(sc_mapgen_number_nav(14,4)==0 && sc_mapgen_number_nav(15,4)==0);
+    assert(sc_mapgen_number_nav(12,1)==13 && sc_mapgen_number_nav(13,2)==12);
+    assert(sc_mapgen_number_nav(12,4)==14 && sc_mapgen_number_nav(13,4)==15);
+    assert(!strcmp(sc_mapgen_style_name(SC_TERRAIN_NATIVE),"NATIVE"));
+    assert(!strcmp(sc_mapgen_style_name(SC_TERRAIN_PROCEDURAL),"PROCEDURAL"));
+    assert(!strcmp(sc_mapgen_style_name(SC_TERRAIN_FRACTAL),"FRACTAL"));
+    assert(!strcmp(sc_mapgen_style_name(SC_TERRAIN_CONTINENT),"CONTINENT"));
+    assert(!strcmp(sc_mapgen_style_name(SC_TERRAIN_DELTA),"DELTA"));
+    assert(!strcmp(sc_mapgen_style_name(SC_TERRAIN_ATOLLS),"ATOLLS"));
     /* Captured before making geometry configurable: both generator branches. */
     const uint64_t stock[]={
         UINT64_C(0x10f44bf362cfb8d0), UINT64_C(0xc28eaef5a4198d7a), UINT64_C(0xfacbce6031f24840), UINT64_C(0xd9c432a61de84d0c),
@@ -218,6 +273,30 @@ int main(void) {
         assert(!memcmp(g->state.map,again->map,12000*2));
         uint64_t current=hash(g->state.map,12000);assert(current!=last);last=current;
     }
+    /* Small Fractal maps must offer useful building space for every seed,
+     * rather than allowing a low noise patch to become almost all ocean. */
+    for(unsigned size=0;size<2;++size)for(unsigned seed=0;seed<16;++seed) {
+        ScMapGenPrng p={0x1234^seed,0xabcd+seed*137,0};
+        sc_mapgen_generate_style(&p,&g->state,size,SC_TERRAIN_FRACTAL);
+        unsigned w=g->state.width,h=g->state.height,water=0,buildable=0;
+        for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
+            unsigned tile=g->state.map[y*w+x];water+=tile>0 && tile<20;
+            if(x+2>=w || y+2>=h)continue;
+            bool land=true;
+            for(unsigned dy=0;dy<3;++dy)for(unsigned dx=0;dx<3;++dx) {
+                unsigned t=g->state.map[(y+dy)*w+x+dx];if(t>0 && t<20)land=false;
+            }
+            buildable+=land;
+        }
+        assert(water*100>w*h*18 && water*100<w*h*52 && buildable*100>w*h*35);
+    }
+    for(unsigned size=0;size<3;++size)for(unsigned seed=0;seed<16;++seed)
+        for(unsigned type=0;type<2;++type) {
+            unsigned style=type?SC_TERRAIN_ATOLLS:SC_TERRAIN_ISLANDS;
+            ScMapGenPrng p={0x1234^seed,0xabcd+seed*137,0};
+            sc_mapgen_generate_style(&p,&g->state,size,style);
+            island_building_check(&g->state,style,seed);
+        }
     /* Each opt-in style remains deterministic and valid at every selectable
      * size; the default's cartridge fingerprints above are unchanged. */
     for(unsigned size=0;size<6;++size)for(unsigned style=1;style<SC_TERRAIN_STYLES;++style) {
@@ -232,6 +311,18 @@ int main(void) {
             land+=!tile || tile>=20;water+=tile>0 && tile<20;shore+=tile>=4 && tile<20;
         }
         assert(land && water && shore && g->before==g->after);
+        if(style==SC_TERRAIN_ISLANDS || style==SC_TERRAIN_ATOLLS)
+            island_building_check(&g->state,style,0);
+        if(style>=SC_TERRAIN_FRACTAL || style==SC_TERRAIN_ISLANDS) {
+            unsigned w=g->state.width,h=g->state.height;
+            for(unsigned y=1;y+1<h;++y)for(unsigned x=1;x+1<w;++x) {
+                unsigned at=y*w+x;if(g->state.map[at]!=1)continue;
+                const unsigned neighbors[]={at-1,at+1,at-w,at+w};
+                for(unsigned n=0;n<4;++n) {
+                    unsigned tile=g->state.map[neighbors[n]];assert(tile>0 && tile<20);
+                }
+            }
+        }
         sc_mapgen_apply_number(&g->state,31337);
         for(unsigned i=0;i<cells;++i)assert(!g->state.map[i] || g->state.map[i]>=20);
         printf("PASS: style %u size %u, %u land, %u water, %u shore cells\n",style,size,land,water,shore);

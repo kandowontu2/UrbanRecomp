@@ -90,3 +90,13 @@ Credits: Pinci / Church of Kondo for restoration, Relikk for the PCM set;
 its original creators and rights holders. The MSU-1 ROM patch is not included.
 See `CREDITS.md` for project and research acknowledgments. Software licenses
 above apply to their respective software components, not to these music files.
+
+
+### Enhanced terrain graphic sets
+
+The Native land type retains the original cartridge artwork. Basalt, Amazon,
+Desert, Mars, Venus, Arctic and Swamp use palette treatments implemented in
+`src/sc_land_type.c` for this enhanced fork, retaining the cartridge terrain
+textures, connected edge masks and animation. Terrain interpretation and menu
+lettering also use the user's cartridge data at runtime. No additional
+third-party terrain assets are bundled.

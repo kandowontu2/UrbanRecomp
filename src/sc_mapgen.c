@@ -313,6 +313,12 @@ void sc_mapgen_feature_scatter(ScMapGenPrng *p, ScMapGenState *st) {
     sc_mapgen_fit_pass(p, st);   /* JSR $f502 again -- sees the first's output */
 }
 
+void sc_mapgen_extra_forests(ScMapGenPrng *p,ScMapGenState *st) {
+    ScMapGenState *previous=g_sc_mapgen_cur;g_sc_mapgen_cur=st;
+    sc_mapgen_feature_scatter(p,st);sc_mapgen_feature_scatter(p,st);
+    g_sc_mapgen_cur=previous;
+}
+
 /* ── Feature: path through the centre ──────────────────────────────────────
  *
  * 01:f5b9:
@@ -1820,6 +1826,149 @@ static void style_water_edges(ScMapGenState *st) {
            (y && !st->map[i-w]) || (y+1<h && !st->map[i+w]))st->map[i]=3;
     }
 }
+static uint32_t style_seed(ScMapGenPrng *p) {
+    uint32_t hi=sc_mapgen_prng_step(p);
+    return (hi<<16)|sc_mapgen_prng_step(p);
+}
+static void style_prune_water(ScMapGenState *st) {
+    unsigned w=map_width(st),h=map_height(st),cells=w*h;
+    uint8_t *water=malloc(cells);if(!water)return;
+    for(unsigned i=0;i<cells;++i)water[i]=(uint8_t)st->map[i];
+    /* The cartridge cannot draw shores on opposite/three/four land edges.
+     * Remove those one-tile nubs before its fitter turns them into shoreless
+     * squares. Stable passes also clean the ends left by removing a nub. */
+    for(;;) {
+        unsigned changed=0;
+        for(unsigned y=1;y+1<h;++y)for(unsigned x=1;x+1<w;++x) {
+            unsigned at=y*w+x;if(!water[at])continue;
+            unsigned mask=(!water[at-1])|((!water[at+w])<<1)|
+                ((!water[at+1])<<2)|((!water[at-w])<<3);
+            if(mask==5 || mask==10 || mask==7 || mask==11 || mask==13 || mask==14 || mask==15) {
+                st->map[at]=0;++changed;
+            }
+        }
+        if(!changed)break;
+        for(unsigned i=0;i<cells;++i)water[i]=(uint8_t)st->map[i];
+    }
+    free(water);
+}
+static void style_fractal(ScMapGenState *st,uint32_t seed,bool continent) {
+    unsigned w=map_width(st),h=map_height(st),gw=w/4+1,gh=h/4+1;
+    uint16_t *field=malloc((size_t)gw*gh*sizeof *field);
+    if(!field)return;
+    unsigned histogram[256]={0},base=continent?256:96;
+    /* Warp the octave coordinates before combining them: bays and peninsulas
+     * bend together instead of exposing the noise lattice. Four-cell samples
+     * retain tile-scale coast detail without evaluating every octave per tile. */
+    for(unsigned y=0;y<gh;++y)for(unsigned x=0;x<gw;++x) {
+        unsigned px=x*4+512,py=y*4+512;
+        unsigned ux=(uint64_t)px*65536/192,uy=(uint64_t)py*65536/192;
+        int amplitude=continent?64:40;
+        int dx=((int)geo_noise(ux,uy,1,seed^0x561d9u)-32768)*amplitude/65536;
+        int dy=((int)geo_noise(ux,uy,1,seed^0x81527u)-32768)*amplitude/65536;
+        unsigned nx=(uint64_t)(px+dx)*65536/base,ny=(uint64_t)(py+dy)*65536/base;
+        unsigned value=(geo_noise(nx,ny,1,seed)*8+geo_noise(nx,ny,2,seed^0x51c17u)*4+
+            geo_noise(nx,ny,4,seed^0xbadbeefu)*2+geo_noise(nx,ny,8,seed^0x7654321u))/15;
+        field[y*gw+x]=(uint16_t)value;++histogram[value>>8];
+    }
+    /* Pick sea level from this map, not an absolute noise value. Small maps
+     * no longer inherit a low patch that turns practically everything to sea. */
+    unsigned percent=(continent?18:28)+geo_hash(seed^0x72b13u)%(continent?10:14);
+    unsigned target=(uint64_t)gw*gh*percent/100,total=0,level=0;
+    for(unsigned i=0;i<256;++i) {
+        total+=histogram[i];if(total>=target) {level=i*256+128;break;}
+    }
+    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
+        unsigned at=(y/4)*gw+x/4,tx=(x&3)*16384,ty=(y&3)*16384;
+        int a=geo_lerp(field[at],field[at+1],tx);
+        int b=geo_lerp(field[at+gw],field[at+gw+1],tx);
+        st->map[y*w+x]=geo_lerp(a,b,ty)<(int)level?1:0;
+    }
+    free(field);
+    uint8_t *water=malloc((size_t)w*h);
+    if(water) {
+        for(unsigned i=0;i<w*h;++i)water[i]=(uint8_t)st->map[i];
+        for(unsigned y=1;y+1<h;++y)for(unsigned x=1;x+1<w;++x) {
+            unsigned count=0;
+            for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)count+=water[(y+dy)*w+x+dx];
+            st->map[y*w+x]=count>=5?1:0;
+        }
+        free(water);
+    }
+}
+static void style_delta_reach(uint8_t *water,unsigned w,unsigned h,bool vertical,bool flip,
+    int ax,int ay,int bx,int by,uint32_t seed,int radius) {
+    int extent=vertical?(int)h:(int)w;
+    if(flip) {ay=extent-1-ay;by=extent-1-by;}
+    geo_reach(water,w,h,vertical?ax:ay,vertical?ay:ax,
+        vertical?bx:by,vertical?by:bx,seed,radius);
+}
+static void style_delta(ScMapGenState *st,uint32_t seed) {
+    unsigned w=map_width(st),h=map_height(st);
+    bool vertical=(seed&1)!=0,flip=(seed&2)!=0;
+    unsigned length=vertical?h:w,span=vertical?w:h;
+    uint8_t *water=calloc((size_t)w*h,1);if(!water)return;
+    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
+        unsigned major=vertical?y:x,minor=vertical?x:y;
+        if(flip)major=length-1-major;
+        unsigned depth=18+geo_noise((uint64_t)minor*65536/64,0,1,seed)*14/65536;
+        if(major+depth>=length)water[y*w+x]=1;
+    }
+    unsigned channels=(span+159)/160;
+    for(unsigned c=0;c<channels;++c) {
+        uint32_t rng=geo_hash(seed^c*374761393u);
+        unsigned left=c*span/channels,right=(c+1)*span/channels;
+        int center=left+(right-left)/2+(int)(geo_next(&rng)%33)-16,previous=center;
+        unsigned depth=80+geo_next(&rng)%80,fork=length>depth?length-depth:length/3;
+        for(unsigned major=32;major<fork+32;major+=32) {
+            unsigned end=major>fork?fork:major;
+            int next=center+((int)geo_noise((uint64_t)end*65536/96,0,1,rng)-32768)*80/65536;
+            style_delta_reach(water,w,h,vertical,flip,previous,major-32,next,end,geo_next(&rng),4);
+            previous=next;if(end==fork)break;
+        }
+        /* Distributaries share a fork and meet the same coast. Curving the
+         * arms independently leaves irregular, usable islands between them. */
+        unsigned arms=3+geo_next(&rng)%3;
+        for(unsigned a=0;a<arms;++a) {
+            int mouth=left+(a+1)*(right-left)/(arms+1)+(int)(geo_next(&rng)%13)-6;
+            uint32_t reach=geo_next(&rng);int radius=3+geo_next(&rng)%2;
+            style_delta_reach(water,w,h,vertical,flip,previous,fork,mouth,length-1,reach,radius);
+        }
+    }
+    for(unsigned i=0;i<w*h;++i)st->map[i]=water[i];
+    free(water);
+}
+static void style_atolls(ScMapGenState *st,uint32_t seed) {
+    unsigned w=map_width(st),h=map_height(st);
+    for(unsigned i=0;i<w*h;++i)st->map[i]=1;
+    unsigned count=w==120?1:w*h/15000+1;
+    for(unsigned island=0;island<count;++island) {
+        uint32_t rng=geo_hash(seed^island*374761393u);
+        int cx=w==120?60:52+geo_next(&rng)%(w-104);
+        int cy=h==100?50:52+geo_next(&rng)%(h-104);
+        /* Broad island interiors leave room for districts and infrastructure,
+         * rather than a thin shoreline ring that only fits a few zones. */
+        int radius=w==120?46:52+geo_next(&rng)%17;
+        int lagoon=w==120?10:12+geo_next(&rng)%8;
+        int lx=(int)(geo_next(&rng)%13)-6,ly=(int)(geo_next(&rng)%13)-6;
+        int stretch=(int)(geo_next(&rng)%13)-6;
+        bool west=(rng&1)!=0;int mouth=(int)(geo_next(&rng)%13)-6;
+        for(int dy=-radius-15;dy<=radius+15;++dy)for(int dx=-radius-15;dx<=radius+15;++dx) {
+            int x=cx+dx,y=cy+dy;if(!map_bounds(st,x,y))continue;
+            unsigned rough=geo_noise((uint64_t)(x+128)*65536/24,(uint64_t)(y+128)*65536/24,1,rng);
+            int outer=radius+((int)rough-32768)*18/65536;
+            int inner=lagoon+((int)rough-32768)*4/65536;
+            int rx=outer+stretch,ry=outer-stretch;
+            bool land=dx*dx*ry*ry+dy*dy*rx*rx<rx*rx*ry*ry &&
+                (dx-lx)*(dx-lx)+(dy-ly)*(dy-ly)>inner*inner;
+            /* Open the lagoon to shipping instead of sealing it in a circle. */
+            int bend=ly+mouth*abs(dx-lx)/radius+
+                ((int)geo_noise((uint64_t)(x+128)*65536/32,0,1,rng^0x5b18u)-32768)*16/65536;
+            if((west?dx<lx:dx>lx) && abs(dy-bend)<3)land=false;
+            if(land)sc_mapgen_write_cell(st,x,y,0);
+        }
+    }
+}
 void sc_mapgen_generate_style(ScMapGenPrng *p,ScMapGenState *st,unsigned size,unsigned style) {
     if(style==SC_TERRAIN_PROCEDURAL) {sc_mapgen_generate_alternate(p,st,size);return;}
     if(style<SC_TERRAIN_ISLANDS || style>=SC_TERRAIN_STYLES) {
@@ -1831,22 +1980,28 @@ void sc_mapgen_generate_style(ScMapGenPrng *p,ScMapGenState *st,unsigned size,un
     memset(st->map,0,sizeof st->map);g_sc_mapgen_cur=st;
     if(style==SC_TERRAIN_ISLANDS) {
         for(unsigned i=0;i<cells;++i)st->map[i]=1;
-        unsigned islands=cells/1200+1;
+        unsigned islands=size?cells/9500+1:1;
         for(unsigned i=0;i<islands;++i) {
-            int cx=12+native_coordinate(p,st,w-25),cy=12+native_coordinate(p,st,h-25);
-            int radius=7+sc_mapgen_rand_below(p,9);
-            uint32_t seed=((uint32_t)sc_mapgen_prng_step(p)<<16)|sc_mapgen_prng_step(p);
-            /* Overlapping, jittered land discs make unequal island chains. */
+            int cx=size?32+native_coordinate(p,st,w-65):60;
+            int cy=size?32+native_coordinate(p,st,h-65):50;
+            int radius=(size?32:39)+sc_mapgen_rand_below(p,size?17:5);
+            uint32_t seed=style_seed(p);
+            /* Connected, overlapping lobes create substantial islands with
+             * space for whole neighborhoods. Larger maps add more islands. */
             for(unsigned lobe=0;lobe<3;++lobe) {
-                int lx=cx+(int)sc_mapgen_rand_below(p,radius*2)-radius;
-                int ly=cy+(int)sc_mapgen_rand_below(p,radius*2)-radius;
-                int r=radius-(int)lobe*2;
-                for(int dy=-r;dy<=r;++dy)for(int dx=-r;dx<=r;++dx)
-                    if(map_bounds(st,lx+dx,ly+dy) &&
-                       dx*dx+dy*dy<=r*r+(int)(geo_hash(seed+(dx+r)/3+(dy+r)/3*31337)%13))
-                        sc_mapgen_write_cell(st,lx+dx,ly+dy,0);
+                int lx=cx+(int)sc_mapgen_rand_below(p,radius)-radius/2;
+                int ly=cy+(int)sc_mapgen_rand_below(p,radius)-radius/2;
+                int r=radius-(int)lobe*3;
+                for(int dy=-r-4;dy<=r+4;++dy)for(int dx=-r-4;dx<=r+4;++dx) {
+                    int x=lx+dx,y=ly+dy;if(!map_bounds(st,x,y))continue;
+                    unsigned rough=geo_noise((uint64_t)(x+128)*65536/24,
+                        (uint64_t)(y+128)*65536/24,1,seed);
+                    int coast=r+((int)rough-32768)*8/65536;
+                    if(dx*dx+dy*dy<=coast*coast)sc_mapgen_write_cell(st,x,y,0);
+                }
             }
         }
+        style_prune_water(st);
         style_water_edges(st);
     } else if(style==SC_TERRAIN_LAKES) {
         sc_mapgen_feature_clusters(p,st);sc_mapgen_feature_clusters(p,st);
@@ -1861,28 +2016,11 @@ void sc_mapgen_generate_style(ScMapGenPrng *p,ScMapGenState *st,unsigned size,un
             sc_mapgen_feature_path(p,st);
         }
     } else {
-        /* Fractional Brownian terrain: four noise octaves produce nested
-         * bays, peninsulas and islands. Samples use world-cell distances. */
-        uint32_t seed=((uint32_t)sc_mapgen_prng_step(p)<<16)|sc_mapgen_prng_step(p);
-        unsigned level=29000+sc_mapgen_rand_below(p,6000);
-        for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
-            unsigned nx=(uint64_t)x*65536/96,ny=(uint64_t)y*65536/96;
-            unsigned height=(geo_noise(nx,ny,1,seed)*8+geo_noise(nx,ny,2,seed^0x51c17u)*4+
-                geo_noise(nx,ny,4,seed^0xbadbeefu)*2+geo_noise(nx,ny,8,seed^0x7654321u))/15;
-            st->map[y*w+x]=height<level?1:0;
-        }
-        /* A few-cell smoothing removes single-cell flecks the shoreline
-         * tiles cannot represent, without enlarging landforms with the map. */
-        uint8_t *water=malloc(cells);
-        if(water) {
-            for(unsigned i=0;i<cells;++i)water[i]=(uint8_t)st->map[i];
-            for(unsigned y=1;y+1<h;++y)for(unsigned x=1;x+1<w;++x) {
-                unsigned n=0;
-                for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)n+=water[(y+dy)*w+x+dx];
-                st->map[y*w+x]=n>=5?1:0;
-            }
-            free(water);
-        }
+        uint32_t seed=style_seed(p);
+        if(style==SC_TERRAIN_DELTA)style_delta(st,seed);
+        else if(style==SC_TERRAIN_ATOLLS)style_atolls(st,seed);
+        else style_fractal(st,seed,style==SC_TERRAIN_CONTINENT);
+        style_prune_water(st);
         style_water_edges(st);
     }
     sc_mapgen_shoreline(p,st);sc_mapgen_feature_scatter(p,st);
@@ -1896,11 +2034,19 @@ unsigned sc_mapgen_number_digit(unsigned number,unsigned digit,int direction) {
     return number-old*place[digit]+value*place[digit];
 }
 unsigned sc_mapgen_number_nav(unsigned choice,unsigned directions) {
-    if(choice>11)choice=1;
+    if(choice>15)choice=1;
+    if(choice>=12) {
+        unsigned first=choice>=14?14:12;
+        if(directions&1)return first+1;
+        if(directions&2)return first;
+        if(directions&4)return choice>=14?0:choice+2;
+        if(directions&8)return choice>=14?choice-2:choice;
+        return choice;
+    }
     if(directions&1) return choice>=4?choice-2:choice;
     if(directions&2) return choice>=2 && choice<10?choice+2:choice;
     if(directions&4) return choice<2 || !(choice&1)?choice+1:choice;
-    if(directions&8) return choice==0?0:choice==1 || (choice>=2 && !(choice&1))?1:choice-1;
+    if(directions&8) return choice==0?15:choice==1?0:(choice>=2 && !(choice&1))?1:choice-1;
     return choice;
 }
 void sc_mapgen_generate_numbered(ScMapGenState *st,unsigned size,unsigned number) {
@@ -1908,6 +2054,11 @@ void sc_mapgen_generate_numbered(ScMapGenState *st,unsigned size,unsigned number
     ScMapGenPrng p={(uint16_t)key,(uint16_t)(key>>16),0};
     sc_mapgen_generate_geographic(&p,st,size);
     sc_mapgen_apply_number(st,number);
+}
+const char *sc_mapgen_style_name(unsigned style) {
+    static const char *const names[]={"NATIVE","PROCEDURAL","ISLANDS","LAKES","RIVERS","FRACTAL",
+        "CONTINENT","DELTA","ATOLLS"};
+    return names[style<SC_TERRAIN_STYLES?style:0];
 }
 void sc_mapgen_apply_number(ScMapGenState *st,unsigned number) {
     if(number!=31337)return;

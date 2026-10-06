@@ -1,5 +1,7 @@
 #include "sc_renderer.h"
 #include "sc_mouse_ui.h"
+#include "sc_city_setup.h"
+#include "sc_land_type.h"
 #include "sc_native_ppu.h"
 #include "sc_obj.h"
 #include "snes/ppu.h"
@@ -2020,6 +2022,19 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
                 out[target]=composite_color(p,ci,ci<192?6:4,0,5,ox+x);
         }
     }
+    if(r->world && r->world->land_type && y>=56 && y<81) {
+        unsigned width=r->world->active?ScWorldWidth(r->world):120;
+        unsigned height=r->world->active?ScWorldHeight(r->world):100;
+        unsigned wy=(unsigned)(y-56)*height/25;
+        for(unsigned x=0;x<30;++x) {
+            unsigned wx=x*width/30;
+            unsigned tile=r->world->active?ScWorldCell(r->world,wx,wy):u16(ram,0x10200+(wy*120+wx)*2);
+            if((tile&0x3ff)<38) {
+                int at=core+200+shift+x;
+                out[at]=ScLandPreviewColor(r->world->land_type,tile&0x3ff,out[at],PPU_brightness(p),u16(ram,0xb55));
+            }
+        }
+    }
     ScVideoRect marker=ScRendererMinimapView(r,ram);
     int row=y+r->view.core_y,white=p->brightnessMult[31];
     uint32_t ink=PPU_forcedBlank(p)?0xff000000:0xff000000|(white*0x010101);
@@ -2048,7 +2063,8 @@ static void map_preview_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y)
     uint32_t *row=r->pixels+(size_t)(y+r->view.core_y)*r->view.width;
     unsigned palette=((bg_word(p,1,48,y+1)>>10)&7)*16;
     if(y==88)for(unsigned cell=0;cell<38;++cell)
-        r->preview_colors[cell]=color(p,palette+rom_read(r,0x02948e + (cell>=0x14?0x14:cell)));
+        r->preview_colors[cell]=ScLandPreviewColor(r->land_type,cell,
+            color(p,palette+rom_read(r,0x02948e + (cell>=0x14?0x14:cell))),PPU_brightness(p),1);
     for(unsigned x=0;x<120;++x) {
         unsigned cell=sc_mapgen_preview_cell(&r->map_preview,x,y-88);
         /* Native tree lookup entries also encode animation phases. A fixed
@@ -2056,13 +2072,164 @@ static void map_preview_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y)
          * than letting a tree variant acquire the water palette colour. */
         unsigned ink=palette+rom_read(r,0x02948e + (cell>=0x14?0x14:cell));
         unsigned object=ScObjPixel(p,48+x);
-        if((p->screenEnabled[0]&16) && (object&255))ink=object&255;
-        row[r->view.core_x+48+x]=color(p,ink);
+        uint32_t c=ScLandPreviewColor(r->land_type,cell,color(p,ink),PPU_brightness(p),1);
+        if((p->screenEnabled[0]&16) && (object&255))c=color(p,object&255);
+        row[r->view.core_x+48+x]=c;
     }
 }
 uint32_t ScRendererHandPixel(const Ppu *p,int x,int y) {
     unsigned ci=sprite_word_pixel(p,0x3f9e,16,x,y);
     return ci?color(p,ci):0;
+}
+/* Resolve the device's backgrounds in native priority order, without copying
+ * an OAM hand from the old caption position into the moved caption. */
+static uint32_t map_device_pixel(const Ppu *p,int x,int y) {
+    unsigned samples[2]={0,0};int owners[2]={5,5};
+    for(unsigned sub=0;sub<2;++sub) {
+        unsigned rank=0;
+        for(unsigned layer=0;layer<3;++layer) {
+            if(!(p->screenEnabled[sub]&(1u<<layer)) ||
+                ((p->screenWindowed[sub]&(1u<<layer)) && window_contains(p,layer,x)))continue;
+            bool high=false;unsigned ci=bg_sample(p,layer,x,y+1,&high);
+            unsigned z=layer==0?(high?12:8):layer==1?(high?11:7):
+                high?(PPU_bg3priority(p)?15:3):1;
+            if(ci && z>rank) {samples[sub]=ci;owners[sub]=(int)layer;rank=z;}
+        }
+    }
+    return composite_color(p,samples[0],owners[0],samples[1],owners[1],x);
+}
+unsigned ScRendererCitySetupVisible(const Ppu *p,const uint8_t *ram) {
+    unsigned mode=u16(ram,0x14);
+    if(mode!=8 && mode!=9 && mode!=21 && mode!=22)return 0;
+    for(int y=32;y<80;y+=8)for(int x=72;x<144;x+=8) {
+        unsigned tile=bg_word(p,2,x,y+1)&1023;
+        if(tile==0x1a8)return 9;
+        if(tile==0x1f0)return 22;
+    }
+    return 0;
+}
+static void setup_text(const ScRenderer *r,const char *s,int x,int top,int y,
+        ScViewport v,uint32_t *row,uint32_t ink) {
+    if(y<top || y>=top+8)return;
+    for(;*s;++s) {
+        for(int dx=0;dx<8;++dx)
+            if(r->setup_font[(unsigned char)*s&127][y-top]&(128u>>dx))row[v.core_x+x+dx]=ink;
+        x+=ScCitySetupGlyphAdvance(r->setup_font,(unsigned char)*s);
+    }
+}
+void ScRendererCitySetupRow(const ScRenderer *r,const Ppu *p,ScViewport v,
+        const uint8_t *ram,int y,uint32_t *row) {
+    if(!r->rom_is_us || !r->setup_font_valid || !r->setup_page || PPU_forcedBlank(p))return;
+    unsigned blue=0,bright=0;int bluest=0,whitest=0;
+    for(unsigned i=0;i<32;++i) {
+        unsigned c=p->cgram[i],red=c&31,green=c>>5&31,b=c>>10&31;
+        int score=2*(int)b-(int)red-(int)green;
+        if(score>bluest) {blue=i;bluest=score;}
+        if((int)(red+green+b)>whitest) {bright=i;whitest=red+green+b;}
+    }
+    uint32_t ink=color(p,blue),light=color(p,bright),paper=color(p,bg_sample(p,1,60,48,NULL));
+    unsigned level=u16(ram,0xb57);if(level>=4)level=0;
+    if(r->setup_page==9) {
+        /* Keep the title and its native bevel; remove the three cramped rows. */
+        if(y>=62 && y<80)for(int x=72;x<192;++x)row[v.core_x+x]=paper;
+    } else if(y>=46 && y<54) {
+        for(int x=64;x<192;++x)row[v.core_x+x]=paper;
+        char money[20];snprintf(money,sizeof money,"$%u",ScCityStartingFunds(r->setup_size,level));
+        setup_text(r,ScCityDifficultyName(level),76,48,y,v,row,ink);
+        setup_text(r,money,172-(int)ScCitySetupTextWidth(r->setup_font,money),48,y,v,row,ink);
+    }
+        if(y>=104 && y<200) {
+            uint32_t device=color(p,bg_sample(p,1,20,y,NULL));
+            for(int x=24;x<232;++x)row[v.core_x+x]=device;
+            if(y<184)for(int x=32;x<224;++x) {
+                uint32_t c=paper;
+                if(y==104 || x==32)c=color(p,bg_sample(p,1,239,40,NULL));
+                if(y==183 || x==223)c=color(p,bg_sample(p,1,16,40,NULL));
+                row[v.core_x+x]=c;
+            }
+            for(unsigned i=0;i<4;++i) {
+                int top=SC_DIFFICULTY_Y+i*SC_DIFFICULTY_SPACING;char label[32],money[20];
+                bool selected=i==level;
+                if(selected && y>=top-2 && y<top+10)
+                    for(int x=56;x<200;++x)row[v.core_x+x]=ink;
+                snprintf(label,sizeof label,"%u %s",i+1,ScCityDifficultyName(i));
+                snprintf(money,sizeof money,"$%u",ScCityStartingFunds(r->setup_size,i));
+                setup_text(r,label,64,top,y,v,row,selected?light:ink);
+                setup_text(r,money,164-(int)ScCitySetupTextWidth(r->setup_font,money),top,y,v,row,selected?light:ink);
+            }
+        }
+    /* Move the actual cartridge END key below the four choices. */
+    if(y>=184 && y<200)for(int x=0;x<24;++x) {
+        unsigned ci=bg_sample(p,0,208+x,160+y-184+1,NULL);
+        if(!ci)ci=bg_sample(p,1,208+x,160+y-184+1,NULL);
+        row[v.core_x+200+x]=color(p,ci);
+    }
+    setup_text(r,"END",202,188,y,v,row,light);
+    for(int slot=0;slot<=127;slot+=127) {
+        if(p->oam[slot*2+1]!=0x3f9e)continue;
+        int ox=sprite_x(p,slot),dy=y-(p->oam[slot*2]>>8);
+        if(dy<0 || dy>=16)continue;
+        for(int x=0;x<16;++x) {
+            int at=ox+x;unsigned ci=sprite_word_pixel(p,0x3f9e,16,x,dy);
+            if(ci && at>=0 && at<256)row[v.core_x+at]=color(p,ci);
+        }
+    }
+}
+void ScRendererMapGenerationRow(const ScRenderer *r,const Ppu *p,ScViewport v,int y,uint32_t *row) {
+    if(!r->map_preview_frame || !r->rom_is_us || !r->clipboard_font_valid || y<24 || y>=72)return;
+    /* Keep the original caption art, with an eight-pixel left margin. The
+     * generation name has four pixels of space to either arrow even for
+     * PROCEDURAL, the longest choice. */
+    if(y>=28 && y<68) {
+        uint32_t caption[104];
+        for(int x=0;x<104;++x)caption[x]=map_device_pixel(p,72+x,y);
+        uint32_t paper=color(p,bg_sample(p,1,232,40,NULL));
+        /* The last two columns are the original device's shaded right edge.
+         * Keep them intact, with the generation arrow entirely inside it. */
+        for(int x=y>=31 && y<64?24:128;x<238;++x)row[v.core_x+x]=paper;
+        if(y>=31 && y<64)memcpy(row+v.core_x+24,caption,sizeof caption);
+        unsigned ink=0;int bluest=0;
+        for(int yy=40;yy<56;++yy)for(int xx=80;xx<168;++xx) {
+            unsigned candidate=bg_sample(p,2,xx,yy,NULL),c=p->cgram[candidate&255];
+            int blue=(c>>10)&31,score=2*blue-(int)(c&31)-(int)((c>>5)&31);
+            if(candidate && score>bluest) {ink=candidate;bluest=score;}
+        }
+        uint32_t lettering=color(p,ink);
+        for(int type=0;type<2;++type) {
+        int top=type?SC_MAP_LAND_Y:SC_MAP_GENERATION_Y;
+        const char *heading=type?"LAND TYPE":"GENERATION";
+        clipboard_text(r,p,v,heading,v.core_x+SC_MAP_GENERATION_CENTER_X-(int)strlen(heading)*4,top-10,y,row,lettering);
+        const char *style=type?ScLandTypeName(r->land_type):sc_mapgen_style_name(r->terrain_style);
+        clipboard_text(r,p,v,style,v.core_x+SC_MAP_GENERATION_CENTER_X-(int)strlen(style)*4,top,y,row,lettering);
+        if(y>=top && y<top+8)for(int x=0;x<8;++x) {
+            int dy=y-top;
+            /* Native arrow colors, with a transparent background and the
+             * same downward shadow on both sides. Rotating a complete BG
+             * cell also rotated its mismatched paper and adjacent arrow. */
+            static const uint8_t masks[2][8]={
+                {0x10,0x18,0x1c,0x1e,0x1c,0x18,0x10,0},
+                {0x08,0x18,0x38,0x78,0x38,0x18,0x08,0}};
+            uint32_t light=map_device_pixel(p,219,176);
+            uint32_t shadow=map_device_pixel(p,219,180);
+            for(int side=0;side<2;++side) {
+                int at=v.core_x+(side?SC_MAP_GENERATION_RIGHT_X:SC_MAP_GENERATION_LEFT_X)+x;
+                if(masks[side][dy]&(1u<<x))row[at]=light;
+                else if(dy && (masks[side][dy-1]&(1u<<x)))row[at]=shadow;
+            }
+        }
+        }
+    }
+    /* The keyboard hand is emitted by the cartridge. The free mouse hand is
+     * also restored here when it crosses the freshly composed header. */
+    for(int slot=0;slot<=127;slot+=127) {
+        if(p->oam[slot*2+1]!=0x3f9e)continue;
+        int ox=sprite_x(p,slot),dy=y-(p->oam[slot*2]>>8);
+        if(dy<0 || dy>=16)continue;
+        for(int x=0;x<16;++x) {
+            int target=ox+x;unsigned ink=sprite_word_pixel(p,0x3f9e,16,x,dy);
+            if(ink && target>=24 && target<240)row[v.core_x+target]=color(p,ink);
+        }
+    }
 }
 static void map_number_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
     (void)ram;
@@ -2211,6 +2378,10 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         ScRendererPopulationRow(r,p,r->view,r->split_hud,line,
             r->pixels+(size_t)(line+r->view.core_y)*r->view.width);
     map_preview_row(r,p,ram,line);
+    ScRendererMapGenerationRow(r,p,r->view,line,
+        r->pixels+(size_t)(line+r->view.core_y)*r->view.width);
+    ScRendererCitySetupRow(r,p,r->view,ram,line,
+        r->pixels+(size_t)(line+r->view.core_y)*r->view.width);
     map_number_row(r,p,ram,line);
     MEASURE_END(r,SC_RENDER_HUD,measured);
     if (line==223) {
@@ -2233,7 +2404,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         /* Screen 2 also covers the title's exit fade. Its OBJ bank still
          * contains logo graphics, not the shared menu hand. */
         if(r->menu_pointer_active && !r->title_live &&
-           (ScMouseUiArrowScreen(ram) || ScSelector_OnScreen(ram[0x14])) &&
+           (ScMouseUiArrowScreen(ram) || ScSelector_OnScreen(ram[0x14]) || r->map_preview_frame) &&
            !PPU_forcedBlank(p) && (p->screenEnabled[0]&16))
             for(int y=0;y<16;++y)for(int x=0;x<16;++x) {
                 unsigned ci=sprite_word_pixel(p,0x3f9e,16,x,y);

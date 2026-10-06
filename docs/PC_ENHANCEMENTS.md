@@ -7,11 +7,23 @@ enhancements. Windows packages are available from
 
 ## Implemented
 
-F12 LAND GENERATION selects Native (default), Procedural (the earlier
-replacement generator), Islands, Lakes, Rivers or Fractal. The remembered
+The map-selection screen's GENERATION arrows select Native (default),
+Procedural, Islands, Lakes, Rivers, Fractal, Continent, Delta or Atolls. Move Up from NEXT to the
+selector, then use Left/Right to change the type; Down returns to NEXT.
+Click either arrow to cycle backward/forward, or click the type to cycle
+forward. Enter or the game's confirm button activates the selected arrow.
+The preview regenerates and the choice is remembered for new cities.
+
+F12 LAND GENERATION also selects Native (default), Procedural (the earlier
+replacement generator), Islands, Lakes, Rivers, Fractal, Continent, Delta or Atolls. The remembered
 choice applies to new terrain, including regeneration on the preview screen.
-Loaded cities retain their terrain. Fractal uses several noise octaves and
-shoreline fitting; Islands starts with water and builds scattered landforms.
+Loaded cities retain their terrain. Fractal uses warped noise, a sea level
+balanced against each map, and shoreline fitting for usable land and irregular
+bays. Continent favors broad mainland; Delta branches connected rivers into
+a coast; Atolls builds broad islands around smaller lagoons, with curved
+openings to the sea and room for complete districts. Islands starts with water
+and builds large connected landmasses instead of small scattered discs.
+Feature sizes stay in world cells as the map grows, adding more islands.
 All styles support every size and the water-free map-number 31337 exception.
 
 120x100 maps use the original cartridge generator, including its river walks,
@@ -850,3 +862,66 @@ entry fade starts and has reached black, including palette-based fades.
 The completed view then fades in at the selected zoom with fixed-size HUD.
 Both generated and saved City 3 use this presentation gate; save-state loads
 reset it. The normal menu exit fade remains visible.
+
+
+## Land types and city difficulty
+
+The map-selection header has GENERATION and LAND TYPE rows. Use the left/right
+arrows or click the value to cycle; keyboard/gamepad Up/Down moves between rows
+and the original map controls. Both rows retain the original cartridge lettering
+and device frame. Generation determines geography; land type determines its art.
+
+Land types are Native, Basalt (dark volcanic ground and lava), Amazon (rainforest
+colors and extra forest patches), Desert (pale sand and dry scrub), Mars (red soil and
+rock), Venus (sulfur terrain and acid seas), Arctic (snow and ice), and Swamp
+(wetland soil and vegetation). These are graphical themes using ordinary terrain
+rules: lava/acid still has water's construction rules, and themed vegetation
+still has forest's rules. Each city saves its type, including Journey expansions.
+Older saves use Native. The selection is remembered for the next new city.
+
+The themes retain the original terrain pixels, connected shoreline and forest
+masks, and animated water. Explicit soil, bank, water and canopy color ramps
+replace the earlier noisy eight-pixel patterns, flat lava and clipped vegetation.
+Red, yellow, orange, metal and other unrelated palette colors stay native.
+The renderer adjusts the small terrain palette rather than rewriting terrain
+CHR every frame; CPU and GPU paths use the same themed palette.
+
+Custom land types follow the saved in-game month. Seasonal palette anchors are
+January (winter), April (spring), July (summer) and October (autumn); the intervening
+months blend toward the next anchor, including December to January. Colors remain
+still when the calendar is paused. Development multipliers affect development,
+not the seasonal calendar; Tab advances seasons as it advances the game clock.
+
+| Land type | Seasonal appearance |
+| --- | --- |
+| Native | Original cartridge seasonal colors, untouched |
+| Basalt | Fresh ash-green vegetation, autumn olive tones, light winter frost; lava stays hot |
+| Amazon | Evergreen rainforest with wet winter/spring and warmer, drier autumn colors |
+| Desert | Fresh spring scrub, warm summer sand, dry autumn scrub, cool winter tones |
+| Mars | Rusty summer ground and rocks, pale winter frost |
+| Venus | Subtle sulfur-ground and acid-sea color shifts, without snow or freezing |
+| Arctic | Spring melt, a short summer tundra thaw, autumn cooling, deep winter snow and icy water colors |
+| Swamp | Fresh spring greens, mossy summer, amber autumn, frosted winter vegetation and banks |
+
+These are visual changes; seasonal ice retains water's construction and transport
+rules. Pan minimaps match the current season; map-selection previews show January,
+the new city's starting month. Existing city saves keep their date and theme, so
+the correct seasonal appearance returns automatically on reload.
+
+Difficulty now uses four vertical rows: Easy, Medium, Hard and Super Hard.
+Super Hard starts with the same funds as Medium to offset its increased disaster
+rate. Starting funds scale with map dimensions:
+
+| Map | Easy | Medium | Hard | Super Hard |
+| --- | ---: | ---: | ---: | ---: |
+| 120x100 | $20,000 | $10,000 | $5,000 | $10,000 |
+| 240x200 | $40,000 | $20,000 | $10,000 | $20,000 |
+| 480x400 | $80,000 | $40,000 | $20,000 | $40,000 |
+| 960x800 | $160,000 | $80,000 | $40,000 | $80,000 |
+| 1920x1600 | $320,000 | $160,000 | $80,000 | $160,000 |
+| 3840x3200 | $640,000 | $320,000 | $160,000 | $320,000 |
+
+Practice uses the Easy amount for its chosen size. Scenarios and loaded city
+balances retain their own funds. Super Hard uses Hard's economic rules and halves
+its random-disaster threshold from 1200 to 600. The original probability check
+uses an inclusive RNG range, so the chances are 1/1201 and 1/601 per check.

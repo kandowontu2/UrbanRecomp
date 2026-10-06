@@ -76,6 +76,7 @@ add_executable(UrbanRecomp
     src/sc_world.c
     src/sc_world_guest.c src/sc_postpass.c src/sc_sweep.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c src/sc_infrastructure.c
     src/sc_journey.c
+    src/sc_city_setup.c
     src/sc_development.c src/sc_development_batches.c
     src/sc_population.c
     src/sc_mouse_ui.c
@@ -98,7 +99,7 @@ add_executable(UrbanRecomp
         src/sc_decomp.c
     src/sc_video.c
     $<$<BOOL:${SC_HAVE_LAUNCHER}>:${CMAKE_SOURCE_DIR}/src/sc_mods.c>
-    src/sc_renderer.c
+    src/sc_renderer.c src/sc_land_type.c
     src/sc_terrain.c src/sc_native_ppu.c src/sc_obj.c src/sc_gpu_terrain.c src/sc_gpu_fields.c
 )
 
@@ -334,21 +335,21 @@ if(BUILD_TESTING)
     add_test(NAME simcity_video COMMAND sc_video_test ${CMAKE_CURRENT_BINARY_DIR}/sc-test-video.ini)
     list(APPEND SC_RENDER_TESTS sc_video_test)
     endif()
-    add_executable(sc_renderer_test tests/sc_renderer_test.c src/sc_renderer.c src/sc_terrain.c src/sc_native_ppu.c src/sc_obj.c src/sc_video.c
+    add_executable(sc_renderer_test tests/sc_renderer_test.c src/sc_renderer.c src/sc_land_type.c src/sc_terrain.c src/sc_native_ppu.c src/sc_obj.c src/sc_video.c
                    src/sc_selector.c src/sc_titlesign.c src/sc_world.c src/sc_mapgen.c)
     target_include_directories(sc_renderer_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
     add_test(NAME simcity_renderer COMMAND sc_renderer_test)
-    add_executable(sc_scroll_renderer_test tests/sc_scroll_renderer_test.c src/sc_renderer.c src/sc_terrain.c src/sc_native_ppu.c src/sc_obj.c
+    add_executable(sc_scroll_renderer_test tests/sc_scroll_renderer_test.c src/sc_renderer.c src/sc_land_type.c src/sc_terrain.c src/sc_native_ppu.c src/sc_obj.c
                    src/sc_video.c src/sc_selector.c src/sc_titlesign.c src/sc_world.c src/sc_mapgen.c)
     target_include_directories(sc_scroll_renderer_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
     list(APPEND SC_RENDER_TESTS sc_scroll_renderer_test)
     add_test(NAME simcity_scroll_renderer COMMAND sc_scroll_renderer_test)
-    add_executable(sc_terrain_test tests/sc_terrain_test.c src/sc_renderer.c src/sc_terrain.c src/sc_native_ppu.c src/sc_obj.c
+    add_executable(sc_terrain_test tests/sc_terrain_test.c src/sc_renderer.c src/sc_land_type.c src/sc_terrain.c src/sc_native_ppu.c src/sc_obj.c
                    src/sc_video.c src/sc_selector.c src/sc_titlesign.c src/sc_world.c src/sc_mapgen.c)
     target_include_directories(sc_terrain_test PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
     list(APPEND SC_RENDER_TESTS sc_terrain_test)
     add_test(NAME simcity_deferred_terrain COMMAND sc_terrain_test)
-    add_executable(UrbanRecompGpuTest EXCLUDE_FROM_ALL tests/sc_terrain_test.c src/sc_renderer.c
+    add_executable(UrbanRecompGpuTest EXCLUDE_FROM_ALL tests/sc_terrain_test.c src/sc_renderer.c src/sc_land_type.c
                    src/sc_terrain.c src/sc_native_ppu.c src/sc_obj.c src/sc_gpu_terrain.c src/sc_gpu_fields.c src/sc_video.c src/sc_selector.c src/sc_titlesign.c src/sc_world.c src/sc_mapgen.c)
     target_include_directories(UrbanRecompGpuTest PRIVATE src ${CMAKE_BINARY_DIR} ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
     target_compile_definitions(UrbanRecompGpuTest PRIVATE SC_TEST_GPU=1)
@@ -540,7 +541,7 @@ if(SC_GEN_SOURCES)
         src/sc_fiberdrive.c
     src/sc_video.c
     $<$<BOOL:${SC_HAVE_LAUNCHER}>:${CMAKE_SOURCE_DIR}/src/sc_mods.c>
-    src/sc_renderer.c
+    src/sc_renderer.c src/sc_land_type.c
     src/sc_terrain.c src/sc_native_ppu.c src/sc_obj.c src/sc_gpu_terrain.c src/sc_gpu_fields.c
         ${SNESRECOMP_ROOT}/runner/src/cpu_state.c
         ${SNESRECOMP_ROOT}/runner/src/common_cpu_infra.c
@@ -704,6 +705,15 @@ target_include_directories(UrbanRecompMathTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
 
 add_executable(UrbanRecompMouseUiTest EXCLUDE_FROM_ALL tests/sc_mouse_ui_test.c src/sc_mouse_ui.c)
+add_executable(UrbanRecompSetupLandTest EXCLUDE_FROM_ALL tests/sc_setup_land_test.c src/sc_city_setup.c src/sc_land_type.c)
+add_executable(UrbanRecompLandSaveTest EXCLUDE_FROM_ALL tests/sc_land_save_test.c src/sc_world.c src/sc_mapgen.c)
+target_include_directories(UrbanRecompLandSaveTest PRIVATE src)
+target_include_directories(UrbanRecompSetupLandTest PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
+if(NOT MSVC)
+    target_compile_options(UrbanRecompSetupLandTest PRIVATE -UNDEBUG -Wall -Wextra)
+    target_compile_options(UrbanRecompLandSaveTest PRIVATE -UNDEBUG -Wall -Wextra)
+    target_link_libraries(UrbanRecompLandSaveTest PRIVATE m)
+endif()
 target_include_directories(UrbanRecompMouseUiTest PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 add_executable(UrbanRecompPopulationTest EXCLUDE_FROM_ALL
@@ -817,7 +827,7 @@ target_include_directories(UrbanRecompSpriteTest PRIVATE
 # requires a functioning SDL3 GPU renderer and is run explicitly on GPU hosts.
 if(SNESRECOMP_SDL_BACKEND STREQUAL "SDL3")
     add_executable(UrbanRecompGpuFieldsTest EXCLUDE_FROM_ALL tests/sc_gpu_fields_test.c
-        src/sc_gpu_fields.c src/sc_gpu_terrain.c src/sc_renderer.c src/sc_terrain.c
+        src/sc_gpu_fields.c src/sc_gpu_terrain.c src/sc_renderer.c src/sc_land_type.c src/sc_terrain.c
         src/sc_native_ppu.c src/sc_obj.c src/sc_video.c src/sc_selector.c src/sc_titlesign.c
         src/sc_world.c src/sc_mapgen.c)
     target_include_directories(UrbanRecompGpuFieldsTest PRIVATE src ${CMAKE_BINARY_DIR} ${SNESRECOMP_RUNNER_INCLUDE_DIRS})

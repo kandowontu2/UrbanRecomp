@@ -1,5 +1,57 @@
 # Enhanced fork changelog
 
+## 1.2.0 Enhanced Beta 21 — 2026-10-06
+
+- Add four seasonal palettes to all seven custom land types, with monthly blends
+  between January/April/July/October anchors driven by the saved city calendar.
+  Amazon stays evergreen through wet/dry shifts; Desert has warmer summer sand
+  and seasonal scrub; Mars gains winter frost; Venus retains sulfur/acid colors;
+  Arctic has a brief summer thaw and deep winter snow; Swamp turns amber in
+  autumn and frosts in winter. Basalt vegetation/rock changes while lava stays
+  hot. Native seasons remain untouched. Pan minimaps use the current month and
+  map-selection previews show the January starting season. Reloads restore the
+  correct season without new save fields or changes to simulation rules.
+
+- Rework land-type graphics around the native terrain textures, animated water
+  and connected shore/forest masks. Remove noisy repeated tile patterns and
+  cut-up vegetation. Use deliberate soil, water and canopy color ramps, with
+  textured lava, softer rainforest colors, sand, rust, snow and wetland tones.
+  Preserve unrelated red, yellow, orange and metal colors.
+
+- Add a second LAND TYPE row below GENERATION with Native, Basalt, Amazon,
+  Desert, Mars, Venus, Arctic and Swamp. Preserve the full map-device frame,
+  original lettering, clean beveled arrows, keyboard navigation and mouse hits.
+- Add terrain graphic sets for dark volcanic rock/lava, rainforest, dunes,
+  Martian soil/rock, sulfur terrain/acid seas, snow/ice and wetlands. Amazon
+  adds extra native forest patches. Previews and pan minimaps match the terrain;
+  land type stays with the city through saves, reloads and Journey expansions.
+  Existing saves retain Native graphics.
+- Add Super Hard to a four-row difficulty selector. It starts with Medium's $10,000
+  on 120x100 and doubles Hard's random-disaster probability (threshold 600
+  rather than 1200, using the original RNG); other rules inherit Hard safely.
+- Double starting funds per map-size step, from the original amounts up to
+  32 times on 3840x3200. Selection and confirmation display the actual amount.
+
+- Add a GENERATION selector to the map-selection device, using the original
+  caption frame, cartridge lettering, beveled arrows and hand cursor. Cycle
+  Native, Procedural, Islands, Lakes, Rivers and Fractal with mouse clicks or
+  keyboard/gamepad controls, and regenerate the preview for the selected type.
+- Preserve the map-selection caption's complete native bevel and background
+  priorities, with outward-facing generation arrows and a clear caption gap.
+- Remove the decorative SNES emblem from the map-selection header.
+- Shift the map-selection caption further left and reserve equal four-pixel
+  gaps between generation names and their arrows, including PROCEDURAL.
+- Preserve the map-selection device's shaded right frame edge and inset the
+  generation controls so the arrow cannot overwrite the border.
+- Draw clean side-arrow silhouettes in native highlight/shadow colors, without
+  rotated background patches or fragments of neighboring number arrows.
+- Rework Fractal with warped coastlines and a map-balanced sea level, avoiding
+  almost entirely flooded small maps. Add Continent, Delta and Atolls terrain
+  styles to map selection and F12, retaining native shoreline and forest tiles.
+- Make Islands landmasses substantially larger and connected, and replace thin
+  Atolls rings with broad buildable islands, smaller lagoons and curved sea
+  entrances. Check full district footprints across seeds and all map sizes.
+
 ## 1.2.0 Enhanced Beta 20 — macOS startup revision — 2026-10-05
 
 - Normalize optional copier headers before native ROM fingerprint checks,

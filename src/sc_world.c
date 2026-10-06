@@ -1,4 +1,5 @@
 #include "sc_world.h"
+#include "sc_land_type.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -99,7 +100,7 @@ bool ScWorldPutCell(ScWorld *w,int x,int y,uint16_t v) {
     if(word(w->tiles+at)!=v) {put(w->tiles+at,v);ScWorldTilesTouch(w,at,2);}
     return true;
 }
-static void generate_mode(ScWorld *w,ScMapGenPrng *prng,unsigned size,unsigned style) {
+static void generate_mode(ScWorld *w,ScMapGenPrng *prng,unsigned size,unsigned style,unsigned land) {
     ScMapGenState *state=calloc(1,sizeof *state);
     if(!state) return;
     ScWorldReset(w); w->huge=size>=2;w->giant=size>=3;w->colossal=size>=4;w->mega=size==5;
@@ -109,10 +110,12 @@ static void generate_mode(ScWorld *w,ScMapGenPrng *prng,unsigned size,unsigned s
     else if(size==3) sc_mapgen_generate_giant(prng,state);
     else if(size==2) sc_mapgen_generate_huge(prng,state);
     else sc_mapgen_generate_large(prng,state);
+    w->land_type=land<SC_LAND_TYPES?land:0;
+    if(w->land_type==SC_LAND_AMAZON)sc_mapgen_extra_forests(prng,state);
     for (unsigned i=0;i<ScWorldCells(w);++i) put(w->tiles+i*2,state->map[i]);
     free(state);w->active=true;
 }
-static void generate(ScWorld *w,ScMapGenPrng *prng,unsigned size) {generate_mode(w,prng,size,0);}
+static void generate(ScWorld *w,ScMapGenPrng *prng,unsigned size) {generate_mode(w,prng,size,0,0);}
 void ScWorldGenerate(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,1); }
 void ScWorldGenerateHuge(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,2); }
 void ScWorldGenerateGiant(ScWorld *w,ScMapGenPrng *prng) { generate(w,prng,3); }
@@ -134,7 +137,8 @@ void ScWorldGenerateNumbered(ScWorld *w,unsigned size,unsigned number) {
     for(unsigned i=0;i<ScWorldCells(w);++i)put(w->tiles+2*i,state->map[i]);
     free(state);w->active=true;
 }
-void ScWorldGenerateStyled(ScWorld *w,unsigned size,ScMapGenPrng *prng,unsigned style) {generate_mode(w,prng,size<1?1:size>5?5:size,style);}
+void ScWorldGenerateStyled(ScWorld *w,unsigned size,ScMapGenPrng *prng,unsigned style) {generate_mode(w,prng,size<1?1:size>5?5:size,style,0);}
+void ScWorldGenerateLand(ScWorld *w,unsigned size,ScMapGenPrng *prng,unsigned style,unsigned land) {generate_mode(w,prng,size<1?1:size>5?5:size,style,land);}
 unsigned ScWorldFieldWidth(const ScWorld *w,unsigned f) {
     return f<SC_WORLD_FIELDS?(w && w->giant && f>=17?65535:ScWorldFields[f].width*(f<17?ScWorldScale(w):1)):0;
 }
@@ -173,8 +177,8 @@ static size_t encoded_size(unsigned version) {
     for(unsigned i=0;i<SC_WORLD_FIELDS;++i) n+=encoded_field_size(version,i);
     return n;
 }
-size_t ScWorldEncodedVersionSize(unsigned v) {return v>=2 && v<=6?encoded_size(v):0;}
-size_t ScWorldEncodedSize(void) { return encoded_size(6); }
+size_t ScWorldEncodedVersionSize(unsigned v) {return v>=2 && v<=7?encoded_size(v):0;}
+size_t ScWorldEncodedSize(void) { return encoded_size(7); }
 bool ScWorldAdvanceScan(ScWorld *w) {
     unsigned width=ScWorldWidth(w),height=ScWorldHeight(w);
     if(w->scan_spread) {
@@ -195,15 +199,15 @@ bool ScWorldAdvanceScan(ScWorld *w) {
     w->scan_x=0;return ++w->scan_y<height;
 }
 bool ScWorldEncode(const ScWorld *w,uint8_t *p,size_t size) {
-    if (size!=ScWorldEncodedSize() || (w->development_speed && !ScWorldDevelopmentSpeedValid(w->development_speed))) return false;
-    memset(p,0,80); memcpy(p,"SCWORLD",7); p[7]=6;
+    if (size!=ScWorldEncodedSize() || w->land_type>=SC_LAND_TYPES || (w->development_speed && !ScWorldDevelopmentSpeedValid(w->development_speed))) return false;
+    memset(p,0,80); memcpy(p,"SCWORLD",7); p[7]=7;
     put(p+8,ScWorldWidth(w)); put(p+10,ScWorldHeight(w));
     p[12]=w->active; p[13]=w->mega?4:w->colossal?3:w->giant?2:w->huge?1:0; p[14]=w->test_city; p[15]=w->scan_spread | (w->development_speed<<1); put32(p+16,w->map_anchor);
     put32(p+20,(uint32_t)size); put32(p+24,SC_WORLD_FIELDS);
     for(unsigned i=0;i<3;++i) put32(p+28+i*4,w->bank_anchor[i]);
     put(p+40,w->scan_x); put(p+42,w->scan_y);
     for(unsigned i=0;i<3;++i) for(unsigned j=0;j<2;++j) put(p+44+4*i+2*j,w->coord[i][j]);
-    put(p+56,w->center_x);put(p+58,w->center_y);p[60]=w->center_valid;
+    put(p+56,w->center_x);put(p+58,w->center_y);p[60]=w->center_valid|(w->land_type<<1);
     p[61]=w->journey;p[62]=w->journey_notice;p[63]=w->journey_announcing|(w->journey_target<<1);
     for(unsigned i=0;i<3;++i) put32(p+64+4*i,w->field_anchor[i]);
     put32(p+76,w->field_scan);
@@ -215,7 +219,7 @@ bool ScWorldEncode(const ScWorld *w,uint8_t *p,size_t size) {
     return true;
 }
 bool ScWorldDecode(ScWorld *w,const uint8_t *p,size_t size) {
-    if(size<48 || memcmp(p,"SCWORLD",7) || (p[7]<2 || p[7]>6)) return false;
+    if(size<48 || memcmp(p,"SCWORLD",7) || (p[7]<2 || p[7]>7)) return false;
     bool legacy=p[7]==2,huge=!legacy && p[13]!=0,giant=p[7]>=4 && p[13]>=2,colossal=p[7]>=5 && p[13]>=3,mega=p[7]>=6 && p[13]==4;
     unsigned width=mega?3840:colossal?1920:giant?960:huge?480:240,height=mega?3200:colossal?1600:giant?800:huge?400:200,bytes=width*height*2;
     if(size!=encoded_size(p[7]) || word(p+8)!=width || word(p+10)!=height ||
@@ -224,17 +228,18 @@ bool ScWorldDecode(ScWorld *w,const uint8_t *p,size_t size) {
         get32(p+20)!=size || get32(p+24)!=SC_WORLD_FIELDS) return false;
     for(unsigned i=0;i<3;++i) if(get32(p+28+i*4)>=bytes && get32(p+28+i*4)!=UINT32_MAX) return false;
     if(!legacy && (word(p+40)>width || word(p+42)>height)) return false;
-    if(!legacy && p[60]>1) return false;
+    if(!legacy && (p[7]>=7?p[60]>>1>=SC_LAND_TYPES:p[60]>1)) return false;
     if(!legacy && (p[61]>1 || p[62]>2 || p[63]>5 || (!p[61] && (p[62] || p[63])))) return false;
     ScWorldReset(w);w->active=p[12]!=0;w->huge=huge;w->giant=giant;w->colossal=colossal;w->mega=mega;w->map_anchor=get32(p+16);
     w->test_city=p[7]>=5 && p[14]!=0;
     w->scan_spread=p[7]>=5 && (p[15]&1)!=0;
     w->development_speed=p[7]>=6?p[15]>>1:0;
+    w->land_type=p[7]>=7?p[60]>>1:0;
     for(unsigned i=0;i<3;++i) w->bank_anchor[i]=get32(p+28+i*4);
     if(!legacy) {
         w->scan_x=word(p+40);w->scan_y=word(p+42);
         for(unsigned i=0;i<3;++i) for(unsigned j=0;j<2;++j) w->coord[i][j]=(int16_t)word(p+44+4*i+2*j);
-        w->center_x=word(p+56);w->center_y=word(p+58);w->center_valid=p[60]!=0;
+        w->center_x=word(p+56);w->center_y=word(p+58);w->center_valid=(p[60]&1)!=0;
         /* Older dense-city scans could wrap their 16-bit owner count and
          * serialize an impossible center. The map and field data remain valid;
          * discard only that derived position until the next corrected scan. */
@@ -259,11 +264,11 @@ void ScWorldMirror(const ScWorld *w,uint8_t *r) {
 }
 size_t ScWorldCitiesSize(void) { return 24+2*(16+ScWorldEncodedSize()); }
 void ScWorldCitiesInit(uint8_t *p) {
-    memset(p,0,ScWorldCitiesSize()); memcpy(p,"SCWCITY",7); p[7]=6;
+    memset(p,0,ScWorldCitiesSize()); memcpy(p,"SCWCITY",7); p[7]=7;
     put32(p+8,(uint32_t)ScWorldEncodedSize()); put32(p+12,(uint32_t)ScWorldCitiesSize()); put32(p+16,2);
 }
 bool ScWorldCitiesValid(const uint8_t *p,size_t size) {
-    return size==ScWorldCitiesSize() && !memcmp(p,"SCWCITY",7) && p[7]==6 &&
+    return size==ScWorldCitiesSize() && !memcmp(p,"SCWCITY",7) && (p[7]==6 || p[7]==7) &&
         get32(p+8)==ScWorldEncodedSize() && get32(p+12)==size && get32(p+16)==2;
 }
 static uint32_t city_hash(const uint8_t *r,unsigned slot) {

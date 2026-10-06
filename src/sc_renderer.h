@@ -39,6 +39,12 @@ typedef struct ScRenderer {
     bool map_preview_frame; /* visible panel latched before scanout */
     uint32_t preview_colors[38];
     unsigned map_number;
+    unsigned terrain_style;
+    unsigned land_type;
+    unsigned setup_size;
+    uint8_t setup_font[128][8];
+    bool setup_font_valid;
+    unsigned setup_page;
     ScViewport view;
     ScViewport gameplay_view; /* configured HUD anchor; menus are centered */
     double map_zoom;
@@ -101,6 +107,9 @@ typedef struct ScRenderer {
 void ScRendererInit(ScRenderer *r, const uint8_t *rom, size_t size, bool is_us);
 bool ScRendererResize(ScRenderer *r, ScViewport view);
 void ScRendererDestroy(ScRenderer *r);
+unsigned ScRendererCitySetupVisible(const Ppu *p,const uint8_t *ram);
+void ScRendererCitySetupRow(const ScRenderer *r,const Ppu *p,ScViewport view,
+    const uint8_t *ram,int y,uint32_t *row);
 bool ScRendererDeferTerrain(ScRenderer *r,bool enabled);
 bool ScRendererDeferNativeLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line);
 uint32_t ScRendererPixel(const ScRenderer *r,int x,int y);
@@ -143,3 +152,5 @@ void ScRendererHudPointer(ScRenderer *r,const Ppu *ppu);
 uint32_t ScRendererHandPixel(const Ppu *ppu,int x,int y);
 /* Distinguish the visible map panel from waiting/name pages during setup. */
 bool ScRendererMapPreviewVisible(const Ppu *ppu,const uint8_t *ram);
+void ScRendererMapGenerationRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,
+                               int y,uint32_t *row);

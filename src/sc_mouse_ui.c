@@ -1,4 +1,5 @@
 #include "sc_mouse_ui.h"
+#include "sc_city_setup.h"
 #include <math.h>
 ScMousePanDelta ScMousePanUpdate(ScMousePan *p,bool allowed,bool held,bool on_land,
     double x,double y,double scale_x,double scale_y) {
@@ -119,6 +120,12 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
     break;
   case 5: { /* Map preview: buttons and five pairs of digit arrows. */
     int choice = -1;
+    for(unsigned type=0;type<2;++type) {
+      int top=(type?SC_MAP_LAND_Y:SC_MAP_GENERATION_Y)-1;
+      if(box(x,y,SC_MAP_GENERATION_LEFT_X-4,top,16,10))choice=type?SC_MAP_LAND_LEFT:SC_MAP_GENERATION_LEFT;
+      if(box(x,y,SC_MAP_GENERATION_LEFT_X+12,top,
+          SC_MAP_GENERATION_RIGHT_X-SC_MAP_GENERATION_LEFT_X-4,10))choice=type?SC_MAP_LAND_RIGHT:SC_MAP_GENERATION_RIGHT;
+    }
     if (box(x, y, 192, 88, 32, 16)) choice = 0;
     if (box(x, y, 192, 112, 32, 16)) choice = 1;
     for (int digit = 0; digit < 5; ++digit) {
@@ -166,16 +173,16 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
     }
     break;
   }
-  case 9: /* Difficulty tiles: 05:9b4a, 9b5c and 9b6e. */
-    result.hit=box(x,y,208,160,24,16); /* Keyboard END confirms the selection. */
-    for (int i = 0; i < 3; ++i) {
-      if (!box(x, y, 72 + i * 40, 64, 32, 16)) continue;
+  case 9: /* Four vertical choices; clicking a row retains native confirm. */
+    result.hit=box(x,y,200,184,24,16); /* Relocated native END key. */
+    for (int i = 0; i < SC_DIFFICULTIES; ++i) {
+      if (!box(x,y,56,SC_DIFFICULTY_Y+i*SC_DIFFICULTY_SPACING-2,144,12))continue;
       result.hit = true;
       if (select) put(r, 0x0b57, i);
     }
     break;
   case 22: /* Difficulty confirmation: 05:9b80 and 9b8a, on BG's second page. */
-    result.hit=box(x,y,208,160,24,16);
+    result.hit=box(x,y,200,184,24,16);
     for (int i = 0; i < 2; ++i) {
       if (!box(x, y, 96 + i * 40, 72, 32, 8)) continue;
       result.hit = true;
@@ -251,6 +258,8 @@ int ScMouseUiCursorPlace(const uint8_t *ram,uint16_t *oam,uint8_t *high,int x,in
 }
 uint16_t ScMouseUiModalInput(uint8_t *r,uint16_t input,bool back) {
   const unsigned b=1,start=8,x=0x200,mode=word(r,0x14);
+  if(mode==5 && word(r,0xb2d)>=SC_MAP_GENERATION_LEFT && (input&start))
+    return (input&~start)|b;
   if(mode==0 || mode==0x8000) {
     if(r[0x391] && word(r,0x397)==word(r,0x39b)) {
       if(word(r,0x39b)!=0x0d && (back || (input&start)))

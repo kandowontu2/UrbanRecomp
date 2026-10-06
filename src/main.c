@@ -116,6 +116,8 @@ static ScFleet *s_fleet;
 #include "sc_power_traversal.h"
 #include "sc_world_guest.h"
 #include "sc_journey.h"
+#include "sc_city_setup.h"
+#include "sc_land_type.h"
 #include "sc_test_city.h"
 static ScWorld s_world;
 static ScWorldGuest s_world_guest;
@@ -130,6 +132,9 @@ static double s_custom_frame_ms;
 static double s_perf_custom_ms,s_perf_native_ms;
 static int s_large_maps; /* 0 Normal, 1 Big, 2 Huge, 3 960x800, 4 1920x1600, 5 3840x3200 */
 static int s_terrain_style;
+static int s_land_type;
+static ScLandGraphics s_land_graphics;
+static bool s_rom_is_us = true;
 static bool s_journey_arming;
 static unsigned s_journey_menu_selection;
 static unsigned s_loading_slot;
@@ -157,6 +162,7 @@ static unsigned s_new_city_speed=1,s_speed_selection=1;
 static const unsigned kCityDevelopmentSpeeds[]={1,3,5,10,20,50};
 static unsigned s_size_game_choice;
 static void save_large_map_setting(void);
+static void save_terrain_setting(void);
 static int s_scroll_multiplier=1;
 static bool s_keyboard_pan_latched;
 static unsigned scroll_key_multiplier(const uint8_t *keys) {
@@ -571,6 +577,8 @@ static uint8_t bus_read(void *mem, uint32_t adr) {
   (void)mem;
   uint8_t world_value;
   if (ScWorldGuestRead(&s_world_guest, adr, &world_value)) return world_value;
+  if(s_rom_is_us && g_cpu && ScCitySetupRomRead(g_snes->cart->rom,g_snes->cart->romSize,
+        g_ram,((uint32_t)g_cpu->k<<16)|g_cpu->pc,adr,&world_value))return world_value;
   if (ScJourneyMenuRead(adr,g_ram[0x14],&world_value) ||
        (s_world.journey_announcing && ScJourneyMessageRead(s_world.journey_notice,adr,&world_value)))
     return world_value;
@@ -1007,7 +1015,7 @@ static unsigned long long s_loop_frame;
  * then composites over the host map. */
 static uint8_t s_hud_mask = (uint8_t)~0x02;
 
-static bool s_rom_is_us = true;
+
 
 static void handle_pos_stuff(void) {
   Snes *snes = g_snes;
@@ -1032,6 +1040,15 @@ static void handle_pos_stuff(void) {
     if(s_rom_is_us && snes->vPos==1) {
       unsigned screen=ram_w(0x14);
       s_custom_renderer.map_preview_frame=ScRendererMapPreviewVisible(g_ppu,g_ram);
+      s_custom_renderer.terrain_style=(unsigned)s_terrain_style;
+      s_custom_renderer.land_type=(unsigned)s_land_type;
+      if(ScLandGraphicsApply(&s_land_graphics,s_world.land_type,ram_w(0xb55),host_map_screen_live(),
+          PPU_bgTileAdr(g_ppu,1),g_ppu->vram,g_ppu->cgram))ScPpuVramChanged();
+      s_custom_renderer.setup_size=s_world.active?(s_world.mega?5:s_world.colossal?4:s_world.giant?3:s_world.huge?2:1):0;
+      s_custom_renderer.setup_page=ScRendererCitySetupVisible(g_ppu,g_ram);
+      if(s_custom_renderer.setup_page==9 && !s_ui_mouse_pointer.active)
+        g_ppu->oam[0]=(uint16_t)(48|((SC_DIFFICULTY_Y+SC_DIFFICULTY_SPACING*(ram_w(0xb57)%4)-3)<<8));
+      s_custom_renderer.map_number=g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000;
       /* COP 2 builds the next list before OAM DMA displays it. Match the
        * live list before publishing glyphs at the first visible scanline. */
       if(screen==2 || screen==3 || screen==18)
@@ -1193,6 +1210,14 @@ static void handle_pos_stuff(void) {
         ScRendererLine(&s_custom_renderer, g_ppu, g_ram, snes->vPos - 1,
           (const uint32_t *)(s_video_pixels + (size_t)(snes->vPos - 1) * s_video_pitch));
         if(s_measure_custom_frame) s_custom_frame_ms+=(SDL_GetPerformanceCounter()-custom_t0)*s_perf_clock_ms;
+      }
+      if(!s_custom_video.enabled && snes->vPos>0 && snes->vPos<=224) {
+        ScRendererMapGenerationRow(&s_custom_renderer,g_ppu,
+          (ScViewport){s_video_w,224,s_ws_extra,0,1,1},snes->vPos-1,
+          (uint32_t *)(s_video_pixels+(size_t)(snes->vPos-1)*s_video_pitch));
+        ScRendererCitySetupRow(&s_custom_renderer,g_ppu,
+          (ScViewport){s_video_w,224,s_ws_extra,0,1,1},g_ram,snes->vPos-1,
+          (uint32_t *)(s_video_pixels+(size_t)(snes->vPos-1)*s_video_pitch));
       }
       /* Blank the margins when nothing is entitled to draw there.
        *
@@ -4311,7 +4336,7 @@ static bool run_one_frame(void) {
       }
       if (!fast && !s_large_maps) {ScWorldReset(&s_world);s_world.journey=s_journey_arming;}
       unsigned number=g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000;
-      if (fast || s_large_maps || s_terrain_style || number==31337) {
+      if (fast || s_large_maps || s_terrain_style || s_land_type || number==31337) {
         static ScMapGenState gs;
         ScMapGenPrng pr;
         pr.s0 = (uint16_t)(g_ram[0x59] | (g_ram[0x5a] << 8));
@@ -4324,15 +4349,17 @@ static bool run_one_frame(void) {
           pr.s0^=(uint16_t)key;pr.s1^=(uint16_t)(key>>16);
         }
         if (s_large_maps && !s_journey_arming && s_rom_fnv==SC_ROM_FNV_US) {
-          ScWorldGenerateStyled(&s_world,s_large_maps,&pr,s_terrain_style);
+          ScWorldGenerateLand(&s_world,s_large_maps,&pr,s_terrain_style,s_land_type);
           ScWorldApplyMapNumber(&s_world,number);ScWorldMirror(&s_world,g_ram);
         } else {
           ScWorldReset(&s_world);
           if(s_terrain_style)sc_mapgen_generate_style(&pr,&gs,0,s_terrain_style);
           else sc_mapgen_generate(&pr,&gs);
+          if(s_land_type==SC_LAND_AMAZON)sc_mapgen_extra_forests(&pr,&gs);
           sc_mapgen_apply_number(&gs,number);
           s_world.journey=s_journey_arming;
         }
+        s_world.land_type=(uint8_t)s_land_type;
         /* The map is at $7F0200 -- bank 7F, so 0x10200 into WRAM. */
         for (unsigned i = 0; !s_world.active && i < SC_MAPGEN_CELLS; i++) {
           g_ram[0x10200 + 2 * i]     = (uint8_t)(gs.map[i] & 0xff);
@@ -4584,12 +4611,36 @@ static bool run_one_frame(void) {
         cpu->dp==0 && cpu->db==0 && host_map_screen_live() && !ram_w(0xd7))
       refresh_fast_power(true);
     if(s_rom_is_us && cpu->k==3) {
+      if(cpu->pc==0xc65c && getenv("SC_SETTINGS_DIAG"))fprintf(stderr,"[starting funds] size %u level %u funds %u\n",
+          s_custom_renderer.setup_size,ram_w(0xb57),ScCityStartingFunds(s_custom_renderer.setup_size,ram_w(0xb57)));
+      ScCitySetupStep(cpu,g_ram,s_world.active?(s_world.mega?5:s_world.colossal?4:s_world.giant?3:s_world.huge?2:1):0);
       if(cpu->pc==0xd3b7) {s_map_number_high=0;s_map_number_dirty=true;}
       if(cpu->pc==0xd81c && s_map_number_dirty)cpu->pc=0xd834;
       if(cpu->pc==0xd625) {
         unsigned choice=sc_mapgen_number_nav(ram_w(0xb2d),g_ram[0xca]);
         ram_set_w(0xb2d,choice);g_ram[6]=7;
         cpu->pc=choice==1 && ram_w(0xb31)?0xd695:0xd65d;
+      }
+      if(cpu->pc==0xd3e0 && ram_w(0xb2d)>=SC_MAP_GENERATION_LEFT) {
+        unsigned choice=ram_w(0xb2d),keys=g_ram[0xca];
+        int direction=keys&1?1:keys&2?-1:keys&128?
+            ((choice&1)?1:-1):0;
+        if(direction) {
+          if(choice>=SC_MAP_LAND_LEFT)s_land_type=(s_land_type+direction+SC_LAND_TYPES)%SC_LAND_TYPES;
+          else s_terrain_style=(s_terrain_style+direction+SC_TERRAIN_STYLES)%SC_TERRAIN_STYLES;
+          save_terrain_setting();ram_set_w(0xb31,128);s_map_number_dirty=true;
+          s_map_mouse_refresh_pending=true;g_ram[6]=8;
+          if(keys&3)ram_set_w(0xb2d,(choice&~1u)+(direction>0));
+          if(getenv("SC_MAP_PREVIEW_DIAG"))fprintf(stderr,"[map generation] style %s land %s number %05u\n",
+              sc_mapgen_style_name(s_terrain_style),ScLandTypeName(s_land_type),g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000);
+        } else if(keys&15) {
+          ram_set_w(0xb2d,sc_mapgen_number_nav(choice,keys));g_ram[6]=7;
+        }
+        /* Never index the cartridge's twelve-entry digit table with a new control. */
+        cpu->pc=0xd459;
+        if(!direction && s_map_mouse_refresh_pending && ram_w(0xb31)) {
+          cpu->pc=0xd695;cpu->mf=cpu->xf=true;s_map_mouse_refresh_pending=false;
+        }
       }
       if(cpu->pc==0xd3e0 && (g_ram[0xca]&128) && ram_w(0xb2d)>=2) {
         unsigned choice=ram_w(0xb2d),number=g_ram[0xb27]+g_ram[0xb28]*10+g_ram[0xb29]*100+s_map_number_high*1000;
@@ -4604,8 +4655,14 @@ static bool run_one_frame(void) {
       }
       if(cpu->pc==0xd7dd && ram_w(0xb2d)>=2) {
         unsigned choice=ram_w(0xb2d);
-      ram_set_w(0x2000,SC_MAP_NUMBER_X+36-(choice-2)/2*8+((178+(choice&1)*8)<<8));
-        ram_set_w(0x2002,0x3f9e);g_ram[0x2200]=2;cpu->pc=0xd7fc;
+        if(choice>=SC_MAP_GENERATION_LEFT) {
+          ram_set_w(0x2000,((choice&1)?SC_MAP_GENERATION_RIGHT_X:SC_MAP_GENERATION_LEFT_X)+
+              (((choice>=SC_MAP_LAND_LEFT?SC_MAP_LAND_Y:SC_MAP_GENERATION_Y)+2)<<8));
+          ram_set_w(0x2002,0x3f9e);g_ram[0x2200]=2;cpu->pc=0xd7fc;
+        } else {
+          ram_set_w(0x2000,SC_MAP_NUMBER_X+36-(choice-2)/2*8+((178+(choice&1)*8)<<8));
+          ram_set_w(0x2002,0x3f9e);g_ram[0x2200]=2;cpu->pc=0xd7fc;
+        }
       }
     }
     if (s_rom_is_us && cpu->k == 3 && cpu->pc == 0xd3e0 &&
@@ -4908,13 +4965,26 @@ static bool run_one_frame(void) {
       if(cpu->pc==0xc63c && s_world.test_city)ram_set_w(0x38,0);
       if(cpu->pc==0xc633 && s_practice_size_pending) {
         ScMapGenPrng pr={ram_w(0x59),ram_w(0x5b),ram_w(0x5d)};
-        if(s_large_maps)ScWorldGenerateStyled(&s_world,s_large_maps,&pr,s_terrain_style);
+        if(s_large_maps)ScWorldGenerateLand(&s_world,s_large_maps,&pr,s_terrain_style,s_land_type);
+        s_world.land_type=(uint8_t)s_land_type;
+        if(!s_world.active && s_land_type==SC_LAND_AMAZON) {
+          ScMapGenState *forest=calloc(1,sizeof *forest);
+          if(forest) {
+            forest->width=120;forest->height=100;
+            for(unsigned i=0;i<12000;++i)forest->map[i]=ram_w(0x10200+2*i);
+            sc_mapgen_extra_forests(&pr,forest);
+            for(unsigned i=0;i<12000;++i)ram_set_w(0x10200+2*i,forest->map[i]);
+            free(forest);
+          }
+        }
         if(s_world.active) {
           ScWorldMirror(&s_world,g_ram);
           ram_set_w(0x1c5,ScWorldWidth(&s_world)-25);ram_set_w(0x1c9,ScWorldHeight(&s_world)-22);
         }
         s_world.development_speed=(uint8_t)s_new_city_speed;
         s_practice_size_pending=false;
+        unsigned funds=ScCityStartingFunds(s_large_maps,0);
+        ram_set_w(0xb9d,funds);g_ram[0xb9f]=(uint8_t)(funds>>16);g_ram[0xba0]=0;
       }
       if (cpu->pc == 0xce61) ScPopulationImport(&s_population, g_ram);
       if (cpu->pc == 0xc73c) {
@@ -7556,7 +7626,13 @@ static bool save_state(const char *path) {
   fs.f = f;
   fs.ok = true;
   fs.base.func(&fs.base, (void *)kScStateHeader, sizeof(kScStateHeader));
+  /* Device snapshots store the cartridge art, with the land type in the
+   * world record. Reloading then applies the theme exactly once. */
+  bool themed=s_land_graphics.valid;
+  unsigned land_base=s_land_graphics.base;
+  if(themed && ScLandGraphicsApply(&s_land_graphics,0,ram_w(0xb55),false,land_base,g_ppu->vram,g_ppu->cgram))ScPpuVramChanged();
   ScMusicLock();snes_saveload(g_snes, &fs.base);ScMusicUnlock();
+  if(themed && ScLandGraphicsApply(&s_land_graphics,s_world.land_type,ram_w(0xb55),true,land_base,g_ppu->vram,g_ppu->cgram))ScPpuVramChanged();
   interp816_saveload(g_cpu, &fs.base);
   fs.base.func(&fs.base, &s_frames, sizeof(s_frames));
   fs.base.func(&fs.base, &g_ppu->vramPointer, kScPpuBusBytes);
@@ -7599,6 +7675,7 @@ static bool load_state(const char *path) {
     fseek(f, 0, SEEK_SET);
   }
   s_ui_mouse_pointer=(ScMouseUiPointer){0};
+  memset(&s_land_graphics,0,sizeof s_land_graphics);
   s_custom_renderer.menu_pointer_active=false;
   s_custom_renderer.map_preview.active=0;s_preview_started=0;
   s_map_number_high=0;s_map_number_dirty=false;
@@ -8122,6 +8199,7 @@ static void save_terrain_setting(void) {
   ScSettings settings;
   if(ScSettingsLoad(&settings,kScSettingsPath)) {
     settings.terrain_style=s_terrain_style;
+    settings.land_type=s_land_type;
     if(!ScSettingsSave(&settings,kScSettingsPath))fprintf(stderr,"settings: could not save terrain style\n");
   }
 }
@@ -8633,8 +8711,9 @@ static void menu_trigger_monster(void) { if (disaster_triggers_armed("monster"))
  * no separate plugin/registration system needed. Adding a new toggle or
  * action means adding one row here -- render_settings_menu() below never
  * needs to change. */
-static const int kTerrainStyles[]={0,1,2,3,4,5};
-static const char *const kTerrainStyleNames[]={"NATIVE","PROCEDURAL","ISLANDS","LAKES","RIVERS","FRACTAL"};
+static const int kTerrainStyles[]={0,1,2,3,4,5,6,7,8};
+static const char *const kTerrainStyleNames[]={"NATIVE","PROCEDURAL","ISLANDS","LAKES","RIVERS","FRACTAL",
+    "CONTINENT","DELTA","ATOLLS"};
 static SettingDesc s_settings[] = {
   /* Labels are kept short enough that the longest one plus its ON/OFF
    * value still fits the menu box at the current font size -- see
@@ -10989,6 +11068,13 @@ int main(int argc, char **argv) {
       if(!result.bad) ScRendererClipboardFont(&s_custom_renderer,font+0x8000,result.bytes_out);
       free(font);
     }
+    font=calloc(1,0x20000);
+    if(font) {
+      ScDecompResult result;
+      sc_decomp_run(font,clipboard_rom_read,&s_custom_renderer,8,0xc4db,0,&result);
+      if(!result.bad)s_custom_renderer.setup_font_valid=ScCitySetupFont(s_custom_renderer.setup_font,font+0x8000,result.bytes_out);
+      free(font);
+    }
   }
   s_custom_renderer.population=&s_population;
   if(s_rom_is_us) {
@@ -11000,6 +11086,9 @@ int main(int argc, char **argv) {
   {const char *style=getenv("SC_TERRAIN_STYLE");
     s_terrain_style=style?atoi(style):s_launch_settings.terrain_style;
     if(s_terrain_style<0 || s_terrain_style>=SC_TERRAIN_STYLES)s_terrain_style=0;}
+  {const char *land=getenv("SC_LAND_TYPE");
+    s_land_type=land?atoi(land):s_launch_settings.land_type;
+    if(s_land_type<0 || s_land_type>=SC_LAND_TYPES)s_land_type=0;}
   s_custom_renderer.world=&s_world;
   s_custom_renderer.sylt = s_ninth_scenario;   /* its pin and mark */
   if (!ScRendererResize(&s_custom_renderer,

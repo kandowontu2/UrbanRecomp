@@ -36,6 +36,7 @@ unsigned ScJourneyExpand(ScWorld *w,uint8_t *r,uint64_t population) {
             memcpy(next->fields[f]+((y+dy/divy)*nw+dx/divx)*bytes,src+y*ow*bytes,ow*bytes);
     }
     next->development_speed=w->development_speed;
+    next->land_type=w->land_type;
     next->journey=true;next->journey_notice=(uint8_t)stage;
     next->journey_target=w->journey_target;
     next->center_valid=true;

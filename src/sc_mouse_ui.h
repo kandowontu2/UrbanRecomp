@@ -25,6 +25,11 @@ enum { SC_MAP_NUMBER_X=192, SC_MAP_NUMBER_Y=176, SC_MAP_NUMBER_WIDTH=40,
        SC_MAP_NUMBER_HEIGHT=16 };
 /* One boundary covers all five digit pairs, including movement between them. */
 bool ScMouseUiMapNumberArrows(int x,int y);
+enum { SC_MAP_GENERATION_LEFT=12, SC_MAP_GENERATION_RIGHT=13,
+       SC_MAP_LAND_LEFT=14, SC_MAP_LAND_RIGHT=15,
+       SC_MAP_GENERATION_LEFT_X=132, SC_MAP_GENERATION_RIGHT_X=228,
+       SC_MAP_GENERATION_CENTER_X=184,
+       SC_MAP_GENERATION_Y=38, SC_MAP_LAND_Y=58 };
 ScMouseUiResult ScMouseUiPoint(uint8_t *ram, int x, int y,
                               bool select, bool ninth_scenario);
 bool ScMouseUiScenarioScroll(uint8_t *ram, int direction, bool ninth_scenario);

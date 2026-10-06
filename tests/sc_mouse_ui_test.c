@@ -116,13 +116,13 @@ int main(void) {
   assert(point(209,161) && word(0x4a)==9 && word(0x4c)==3); /* END */
   assert(point(150,180) && word(0x4c)==4); /* SPACE */
   assert(!point(48,180) && !point(232,160));
-  put(0x14,9); assert(point(160,70) && word(0xb57)==2);
-  assert(point(220,168) && word(0xb57)==2); /* END keeps the selected difficulty. */
-  assert(!point(110,70));
+  put(0x14,9); assert(point(160,150) && word(0xb57)==2);
+  assert(point(220,192) && word(0xb57)==2); /* END keeps the selected difficulty. */
+  assert(!point(110,140));
   put(0x14,22); assert(point(140,75) && word(0x36)==1);
   assert(point(100,75) && word(0x36)==0); assert(!point(100,80));
-  assert(point(220,168) && word(0x36)==0);
-  put(0x36,1); assert(point(220,168) && word(0x36)==1); /* END also confirms No. */
+  assert(point(220,192) && word(0x36)==0);
+  put(0x36,1); assert(point(220,192) && word(0x36)==1); /* END also confirms No. */
   put(0x14,11); put(0x42,0); put(0x16,0);
   assert(point(100,130) && word(0x52)==1 && word(0x54)==1 && word(0x40)==4);
   assert(!point(82,80));
@@ -192,6 +192,19 @@ int main(void) {
   r[0xe3]=0;put(0x1fb,3);
   assert(ScMouseUiModalInput(r,8,false)==8); /* Report fade is not interactive. */
   put(0x14,5);assert(ScMouseUiModalInput(r,0,true)==0x200);
+  put(0xb2d,1);assert(ScMouseUiModalInput(r,8,false)==8);
+  assert(point(128,38) && word(0xb2d)==SC_MAP_GENERATION_LEFT);
+  assert(ScMouseUiModalInput(r,8,false)==1);
+  assert(point(235,40) && word(0xb2d)==SC_MAP_GENERATION_RIGHT);
+  assert(point(192,41) && word(0xb2d)==SC_MAP_GENERATION_RIGHT);
+  assert(point(143,38) && word(0xb2d)==SC_MAP_GENERATION_LEFT);
+  assert(point(144,38) && word(0xb2d)==SC_MAP_GENERATION_RIGHT);
+  memcpy(before,r,sizeof r);assert(ScMouseUiPoint(r,132,38,false,true).hit && !memcmp(before,r,sizeof r));
+  assert(!point(127,38) && !point(236,38) && !point(192,36) && !point(192,55));
+  assert(point(132,58) && word(0xb2d)==SC_MAP_LAND_LEFT);
+  assert(point(228,58) && word(0xb2d)==SC_MAP_LAND_RIGHT);
+  put(0x14,9); assert(point(100,170) && word(0xb57)==3);
+  put(0x14,5);
   ScMouseDialog dialog=SC_MOUSE_DIALOG_NONE;
   put(0x1ffe,0xc8fc); ScMouseUiObserve(&dialog,r,0,0xd19e,0x1ffd);
   assert(dialog==SC_MOUSE_DIALOG_SLOTS);

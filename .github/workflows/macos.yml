@@ -26,7 +26,7 @@ on:
         type: string
       version:
         description: Mac package version label
-        default: v1.2.0-enhanced.20
+        default: v1.2.0-enhanced.21
         required: true
         type: string
 
@@ -94,8 +94,10 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DCMAKE_PREFIX_PATH="$PWD/mac-deps/sdl-install" -DSNESRECOMP_SDL_BACKEND=SDL3 \
             -DSC_AOT=OFF -DSC_PROGRAM=ON -DSC_INTERPRETER_REFERENCE=OFF -DSC_LTO=OFF
-          cmake --build mac-deps/game-build --parallel 4 --target UrbanRecomp sc_video_test sc_renderer_test sc_scroll_renderer_test sc_terrain_test
+          cmake --build mac-deps/game-build --parallel 4 --target UrbanRecomp sc_video_test sc_renderer_test sc_scroll_renderer_test sc_terrain_test UrbanRecompSetupLandTest UrbanRecompLandSaveTest
           ctest --test-dir mac-deps/game-build -R '^simcity_(video|renderer|scroll_renderer|deferred_terrain)$' --output-on-failure
+          mac-deps/game-build/UrbanRecompSetupLandTest
+          mac-deps/game-build/UrbanRecompLandSaveTest
       - name: Package app and verify packaged startup
         shell: bash
         run: |

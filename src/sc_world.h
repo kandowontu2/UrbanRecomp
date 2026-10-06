@@ -27,6 +27,7 @@ typedef struct ScWorld {
     bool mega; /* 3840x3200; retains colossal full-index guest hooks */
     bool test_city; /* hidden City 3; saved with the world, including save states */
     uint8_t development_speed; /* city default; zero in legacy states means 1x */
+    uint8_t land_type; /* city terrain graphics; legacy records use Native */
     bool scan_spread; /* resumable, bijective city scan across distant districts */
     uint16_t scan_x, scan_y;
     uint16_t center_x,center_y;
@@ -68,6 +69,7 @@ void ScWorldGenerateNumbered(ScWorld *world,unsigned size,unsigned number);
 /* Expanded size 1..5; consume and return the caller's native random stream. */
 void ScWorldGenerateSeeded(ScWorld *world,unsigned size,ScMapGenPrng *prng);
 void ScWorldGenerateStyled(ScWorld *world,unsigned size,ScMapGenPrng *prng,unsigned style);
+void ScWorldGenerateLand(ScWorld *world,unsigned size,ScMapGenPrng *prng,unsigned style,unsigned land_type);
 void ScWorldApplyMapNumber(ScWorld *world,unsigned number);
 bool ScWorldBounds(int x, int y);
 uint16_t ScWorldCell(const ScWorld *world, int x, int y);

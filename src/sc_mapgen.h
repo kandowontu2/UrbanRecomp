@@ -67,6 +67,8 @@ void sc_mapgen_feature_centre(ScMapGenPrng *p, ScMapGenState *st);
 /* 01:f3a3 -- 50..150 placements across the full map. Its per-cell placement
  * ($f3d3) and the two $f502 calls are not decompiled yet. */
 void sc_mapgen_feature_scatter(ScMapGenPrng *p, ScMapGenState *st);
+/* Two more native forest-scatter passes, at the same tile/patch scale. */
+void sc_mapgen_extra_forests(ScMapGenPrng *p,ScMapGenState *st);
 
 /* 01:f5b9 -- walk from the centre one way, then the opposite way. The walk
  * itself ($f600) is not decompiled yet. One PRNG step. */
@@ -150,8 +152,10 @@ void sc_mapgen_generate_geographic(ScMapGenPrng *p, ScMapGenState *st, unsigned 
 /* Earlier procedural rivers/lakes/islands/forest generator, explicitly opt-in. */
 void sc_mapgen_generate_alternate(ScMapGenPrng *p,ScMapGenState *st,unsigned size);
 enum { SC_TERRAIN_NATIVE,SC_TERRAIN_PROCEDURAL,SC_TERRAIN_ISLANDS,
-       SC_TERRAIN_LAKES,SC_TERRAIN_RIVERS,SC_TERRAIN_FRACTAL,SC_TERRAIN_STYLES };
+       SC_TERRAIN_LAKES,SC_TERRAIN_RIVERS,SC_TERRAIN_FRACTAL,
+       SC_TERRAIN_CONTINENT,SC_TERRAIN_DELTA,SC_TERRAIN_ATOLLS,SC_TERRAIN_STYLES };
 void sc_mapgen_generate_style(ScMapGenPrng *p,ScMapGenState *st,unsigned size,unsigned style);
+const char *sc_mapgen_style_name(unsigned style);
 /* Fixed native preview, independent of city dimensions and zoom. Waterways
  * grow first, then forest patches; frame 90 is the exact completed overview. */
 typedef struct ScMapPreview {

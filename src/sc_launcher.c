@@ -1,5 +1,7 @@
 /* The pre-boot launcher and its settings -- see sc_launcher.h. */
 #include "sc_launcher.h"
+#include "sc_mapgen.h"
+#include "sc_land_type.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -145,7 +147,8 @@ bool ScSettingsLoad(ScSettings *s, const char *path) {
     else if (!strcmp(key, "widescreen")) s->widescreen = atoi(val) != 0;
     else if (!strcmp(key, "sylt")) s->sylt = atoi(val) != 0;
     else if (!strcmp(key, "large_maps")) s->large_maps = clamp(atoi(val),0,5);
-    else if (!strcmp(key, "terrain_style")) s->terrain_style = clamp(atoi(val),0,5);
+    else if (!strcmp(key, "terrain_style")) s->terrain_style = clamp(atoi(val),0,SC_TERRAIN_STYLES-1);
+    else if (!strcmp(key,"land_type")) s->land_type=clamp(atoi(val),0,SC_LAND_TYPES-1);
     else if (!strcmp(key, "language")) {
       for (int i = 0; i < SC_LANG_COUNT; i++)
         if (!strcmp(val, kLanguageCodes[i])) s->language = i;
@@ -165,10 +168,10 @@ bool ScSettingsSave(const ScSettings *s, const char *path) {
              "[Launcher]\nrom=%s\nskip_launcher=%d\n"
              "[Display]\nwindow_scale=%d\nfullscreen=%d\nlinear_filter=%d\nwidescreen=%d\n"
              "[Audio]\nenable_audio=%d\n"
-             "[Game]\nlanguage=%s\nsylt=%d\nlarge_maps=%d\nterrain_style=%d\n",
+             "[Game]\nlanguage=%s\nsylt=%d\nlarge_maps=%d\nterrain_style=%d\nland_type=%d\n",
           s->rom, s->skip_launcher, s->window_scale, s->fullscreen,
           s->linear_filter, s->widescreen, s->enable_audio,
-          kLanguageCodes[clamp(s->language, 0, SC_LANG_COUNT - 1)], s->sylt, s->large_maps,s->terrain_style);
+          kLanguageCodes[clamp(s->language, 0, SC_LANG_COUNT - 1)], s->sylt, s->large_maps,s->terrain_style,s->land_type);
   bool ok = fclose(f) == 0;
   if (ok) {
     remove(path);

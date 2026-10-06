@@ -1,4 +1,4 @@
-URBAN RECOMP ENHANCED BETA 20 - POINTER-CENTERED ZOOM
+URBAN RECOMP ENHANCED BETA 21 - LAND TYPES AND SEASONS
 =============================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
@@ -13,8 +13,19 @@ Budgets, reports, construction, hidden-city generation, save/load and large
 city work were checked against the original CPU. NATIVE_EXECUTION.md and
 GPU_PERFORMANCE.md contain build controls, validation and performance limits.
 
+Land-type graphics keep the original terrain textures, connected forest/shore
+edges and water animation, with deliberate soil, water/lava and canopy palettes.
+No noisy repeated replacement patterns or cut-up forest tiles remain.
+All seven custom themes now have seasonal colors driven by the saved game month,
+blending between winter, spring, summer and autumn. Tropical themes stay evergreen,
+lava stays hot, and seasonal ice is visual. Pan minimaps follow the current season;
+new-map previews show January. Native cartridge seasons remain unchanged.
+
+The map-selection screen has GENERATION arrows for choosing the terrain type.
+Click the arrows (or type), or move Up from NEXT and use Left/Right. Down
+returns to NEXT. Enter/the confirm button also activates the selected arrow.
 F12 LAND GENERATION offers Native (default), Procedural (the earlier
-generator), Islands, Lakes, Rivers and Fractal. The saved choice applies
+generator), Islands, Lakes, Rivers, Fractal, Continent, Delta and Atolls. The saved choice applies
 to newly generated terrain; existing cities keep their land. Map 31337
 remains water-free with every style and size.
 Map-number arrows allow repeated clicks across all five digits without
@@ -208,3 +219,10 @@ UrbanRecomp.exe starten. F10 öffnet das Einstellungsmenü. Deutsch: deutsche
 ROM dazulegen und "python tools/make_translations.py de" ausführen, dann im
 Launcher die Sprache wählen. Gespeicherte Städte liegen in
 urbanrecomp-us.srm.
+
+Land types: Native, Basalt (lava), Amazon (extra forests), Desert, Mars, Venus,
+Arctic and Swamp. Select LAND TYPE below GENERATION before starting a city;
+terrain graphics stay with the saved city. Water/forest construction rules apply.
+Four difficulty levels include Super Hard, which starts with Medium's funds
+to offset its increased disaster rate. Starting funds double at each larger
+map-size step; setup and confirmation show the scaled amounts.

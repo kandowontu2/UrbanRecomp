@@ -27,7 +27,8 @@ typedef struct ScSettings {
   int language;            /* SC_LANG_* */
   int sylt;                /* Sylt as the ninth scenario */
   int large_maps;          /* new free-play cities: 0 Normal through 5 (3840x3200) */
-  int terrain_style;       /* new terrain only: Native, Procedural, Islands, Lakes, Rivers, Fractal */
+  int terrain_style;       /* new terrain only; SC_TERRAIN_* IDs */
+  int land_type;           /* new city graphics; SC_LAND_* IDs */
 } ScSettings;
 
 extern const char *const kScSettingsPath;
