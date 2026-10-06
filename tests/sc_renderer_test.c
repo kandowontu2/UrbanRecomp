@@ -847,6 +847,7 @@ int main(void) {
     assert(!memcmp(before,p,sizeof *p));
     /* Dirty arrows/NEXT and setup-state transitions keep the actual visible
      * map, never reverting to the low-resolution native preview. */
+    r.land_type=1; /* Pending selector choice must not recolor the old map. */
     for(unsigned mode=4;mode<=7;++mode)for(unsigned dirty=0;dirty<2;++dirty) {
         word(ram,0x14,mode);word(ram,0xb31,dirty?0x80:0);
         assert(ScRendererMapPreviewVisible(p,ram));
@@ -854,6 +855,10 @@ int main(void) {
         assert(r.map_preview_frame && ScRendererPixel(&r,96+49,88)==0xffff0000);
     }
     word(ram,0x14,5);word(ram,0xb31,0);
+    r.preview_land_type=1;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(ScRendererPixel(&r,96+48,88)!=0xff0000ff);
+    r.land_type=r.preview_land_type=0;
     p->bgXsc[2]=0x54; /* The name page shares stale counter tiles. */
     assert(!ScRendererMapPreviewVisible(p,ram));
     assert(r.map_preview_frame); /* Vblank DMA cannot change the rendered frame's gate. */

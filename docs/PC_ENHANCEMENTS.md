@@ -13,6 +13,9 @@ selector, then use Left/Right to change the type; Down returns to NEXT.
 Click either arrow to cycle backward/forward, or click the type to cycle
 forward. Enter or the game's confirm button activates the selected arrow.
 The preview regenerates and the choice is remembered for new cities.
+Type changes retain the visible preview until its complete replacement is ready,
+then publish terrain and colors together. Preview zoom/pan stays in place. Only
+new map numbers replay the initial on-screen generation reveal.
 
 F12 LAND GENERATION also selects Native (default), Procedural (the earlier
 replacement generator), Islands, Lakes, Rivers, Fractal, Continent, Delta or Atolls. The remembered

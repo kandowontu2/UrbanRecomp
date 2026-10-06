@@ -2077,6 +2077,18 @@ void sc_mapgen_preview_build(ScMapPreview *p,const uint16_t *map,
     sc_mapgen_preview_raster(p,p->cells,p->reveal,120,100);
     p->active=1;
 }
+void sc_mapgen_preview_refresh(ScMapPreview *p,const uint16_t *map,
+                               unsigned width,unsigned height,unsigned seed) {
+    bool retain=p->active && p->width==width && p->height==height;
+    double zoom=p->zoom,x=p->center_x,y=p->center_y;
+    sc_mapgen_preview_build(p,map,width,height,seed);
+    if(!p->active)return;
+    if(retain) {
+        p->zoom=zoom;p->center_x=x;p->center_y=y;
+        sc_mapgen_preview_raster(p,p->cells,p->reveal,120,100);
+    }
+    p->frame=90;
+}
 void sc_mapgen_preview_raster(const ScMapPreview *p,uint8_t *cells,uint8_t *reveal,unsigned w,unsigned h) {
     if(!p || !p->source || !w || !h)return;
     double span_x=p->width/p->zoom,span_y=p->height/p->zoom;

@@ -2063,7 +2063,7 @@ static void map_preview_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y)
     uint32_t *row=r->pixels+(size_t)(y+r->view.core_y)*r->view.width;
     unsigned palette=((bg_word(p,1,48,y+1)>>10)&7)*16;
     if(y==88)for(unsigned cell=0;cell<38;++cell)
-        r->preview_colors[cell]=ScLandPreviewColor(r->land_type,cell,
+          r->preview_colors[cell]=ScLandPreviewColor(r->preview_land_type,cell,
             color(p,palette+rom_read(r,0x02948e + (cell>=0x14?0x14:cell))),PPU_brightness(p),1);
     for(unsigned x=0;x<120;++x) {
         unsigned cell=sc_mapgen_preview_cell(&r->map_preview,x,y-88);
@@ -2072,7 +2072,7 @@ static void map_preview_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y)
          * than letting a tree variant acquire the water palette colour. */
         unsigned ink=palette+rom_read(r,0x02948e + (cell>=0x14?0x14:cell));
         unsigned object=ScObjPixel(p,48+x);
-        uint32_t c=ScLandPreviewColor(r->land_type,cell,color(p,ink),PPU_brightness(p),1);
+        uint32_t c=ScLandPreviewColor(r->preview_land_type,cell,color(p,ink),PPU_brightness(p),1);
         if((p->screenEnabled[0]&16) && (object&255))c=color(p,object&255);
         row[r->view.core_x+48+x]=c;
     }

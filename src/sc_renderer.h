@@ -38,6 +38,7 @@ typedef struct ScRenderer {
     ScMapPreview map_preview;
     bool map_preview_frame; /* visible panel latched before scanout */
     uint32_t preview_colors[38];
+    unsigned preview_land_type; /* committed with the completed preview */
     unsigned map_number;
     unsigned terrain_style;
     unsigned land_type;

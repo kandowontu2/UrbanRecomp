@@ -81,6 +81,12 @@ static unsigned geographic_check(ScMapGenState *st,unsigned seed,unsigned size) 
     cx=preview.center_x;cy=preview.center_y;
     sc_mapgen_preview_pan(&preview,0,0);
     assert(preview.center_x==cx && preview.center_y==cy);
+    unsigned revision=preview.revision;
+    sc_mapgen_preview_refresh(&preview,st->map,w,h,seed+1);
+    assert(preview.revision!=revision && preview.frame==90);
+    assert(preview.zoom==8 && preview.center_x==cx && preview.center_y==cy);
+    for(unsigned y=0;y<100;++y)for(unsigned x=0;x<120;++x)
+        assert(sc_mapgen_preview_cell(&preview,x,y)==preview.cells[y*120+x]);
     sc_mapgen_preview_zoom(&preview,.001,.25,.75);
     assert(preview.zoom==1 && preview.center_x==w*.5 && preview.center_y==h*.5);
     sc_mapgen_preview_pan(&preview,10,-10);

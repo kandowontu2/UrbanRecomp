@@ -2,6 +2,11 @@
 
 ## 1.2.0 Enhanced Beta 21 — 2026-10-06
 
+- Changing GENERATION or LAND TYPE keeps the current preview until its complete
+  replacement is ready, then publishes the terrain and colors together. Type
+  changes preserve preview zoom/pan and no longer clear the map or replay its
+  initial generation reveal. New map numbers still build on screen.
+
 - Add four seasonal palettes to all seven custom land types, with monthly blends
   between January/April/July/October anchors driven by the saved city calendar.
   Amazon stays evergreen through wet/dry shifts; Desert has warmer summer sand

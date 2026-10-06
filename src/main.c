@@ -143,6 +143,7 @@ static ScMouseUiPointer s_ui_mouse_pointer;
 static uint64_t s_preview_started;
 static unsigned s_map_number_high;
 static bool s_map_number_dirty;
+static bool s_preview_type_refresh;
 static bool s_preview_expanded,s_preview_complete,s_preview_left_down,s_preview_click_owned,s_preview_input_blocked;
 static double s_preview_cursor_x,s_preview_cursor_y;
 static bool s_city_present_pending,s_city_fade_started,s_city_black_seen;
@@ -4368,9 +4369,15 @@ static bool run_one_frame(void) {
         if(s_world.active) {
           memcpy(gs.map,s_world.tiles,ScWorldCells(&s_world)*2);
         }
-        sc_mapgen_preview_build(&s_custom_renderer.map_preview,gs.map,
-            s_world.active?ScWorldWidth(&s_world):120,s_world.active?ScWorldHeight(&s_world):100,pr.s0);
-        s_preview_expanded=s_preview_complete=false;
+        if(s_preview_type_refresh)
+          sc_mapgen_preview_refresh(&s_custom_renderer.map_preview,gs.map,
+              s_world.active?ScWorldWidth(&s_world):120,s_world.active?ScWorldHeight(&s_world):100,pr.s0);
+        else
+          sc_mapgen_preview_build(&s_custom_renderer.map_preview,gs.map,
+              s_world.active?ScWorldWidth(&s_world):120,s_world.active?ScWorldHeight(&s_world):100,pr.s0);
+        s_custom_renderer.preview_land_type=(unsigned)s_land_type;
+        s_preview_expanded=false;s_preview_complete=s_preview_type_refresh;
+        s_preview_type_refresh=false;
         s_map_number_dirty=false;
         /* Generation precedes the native Please wait panel. Start the reveal
          * only when map selection is visible, so that panel cannot consume it. */
@@ -4628,6 +4635,7 @@ static bool run_one_frame(void) {
         if(direction) {
           if(choice>=SC_MAP_LAND_LEFT)s_land_type=(s_land_type+direction+SC_LAND_TYPES)%SC_LAND_TYPES;
           else s_terrain_style=(s_terrain_style+direction+SC_TERRAIN_STYLES)%SC_TERRAIN_STYLES;
+          s_preview_type_refresh=true;
           save_terrain_setting();ram_set_w(0xb31,128);s_map_number_dirty=true;
           s_map_mouse_refresh_pending=true;g_ram[6]=8;
           if(keys&3)ram_set_w(0xb2d,(choice&~1u)+(direction>0));
@@ -7678,7 +7686,7 @@ static bool load_state(const char *path) {
   memset(&s_land_graphics,0,sizeof s_land_graphics);
   s_custom_renderer.menu_pointer_active=false;
   s_custom_renderer.map_preview.active=0;s_preview_started=0;
-  s_map_number_high=0;s_map_number_dirty=false;
+  s_map_number_high=0;s_map_number_dirty=false;s_preview_type_refresh=false;
   s_preview_expanded=s_preview_complete=s_preview_left_down=s_preview_click_owned=s_preview_input_blocked=false;
   ScConstructionFree(s_build_work);s_build_work=NULL;
   FileSli fs;
@@ -8228,6 +8236,7 @@ static void setting_adjust(SettingDesc *d,int direction) {
   if (d->field==&s_terrain_style)save_terrain_setting();
   if(d->field==&s_terrain_style && s_rom_is_us && ram_w(0x14)==5 &&
       s_custom_renderer.map_preview.active) {
+    s_preview_type_refresh=true;
     s_map_number_dirty=true;ram_set_w(0xb31,0x80);s_map_mouse_refresh_pending=true;
   }
   if(getenv("SC_SETTINGS_DIAG") && d->field)

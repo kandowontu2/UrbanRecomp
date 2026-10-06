@@ -22,6 +22,8 @@ lava stays hot, and seasonal ice is visual. Pan minimaps follow the current seas
 new-map previews show January. Native cartridge seasons remain unchanged.
 
 The map-selection screen has GENERATION arrows for choosing the terrain type.
+Changing generation or land type replaces the complete preview and colors
+together, retaining preview zoom/pan instead of clearing and rebuilding it.
 Click the arrows (or type), or move Up from NEXT and use Left/Right. Down
 returns to NEXT. Enter/the confirm button also activates the selected arrow.
 F12 LAND GENERATION offers Native (default), Procedural (the earlier
