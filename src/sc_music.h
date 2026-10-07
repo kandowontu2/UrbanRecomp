@@ -11,6 +11,7 @@ bool ScMusicStart(Apu *apu,ScAudio *output);
 bool ScMusicLoadRestored(const char *directory);
 uint8_t ScMusicCommand(uint8_t command);
 void ScMusicEnabled(bool enabled);
+void ScMusicCityMilestone(unsigned level);
 void ScMusicRestoreLocked(uint8_t command,bool enabled);
 void ScMusicStop(void);
 bool ScMusicRunning(void);

@@ -16,6 +16,7 @@ typedef struct {
     unsigned width,height,count,offset;
     bool owner;
 } ScCityRowCache;
+typedef struct { int x,y,world_x,world_y,size; } ScViewLabel;
 enum { SC_RENDER_OBJECTS, SC_RENDER_TERRAIN, SC_RENDER_ROWS, SC_RENDER_NATIVE,
        SC_RENDER_REPAIR, SC_RENDER_HUD, SC_RENDER_POINTER, SC_RENDER_TRACK, SC_RENDER_STAGES };
 typedef struct ScRenderer {
@@ -52,6 +53,11 @@ typedef struct ScRenderer {
     bool focus_pending,focus_tracking;
     double focus_x,focus_y;
     bool zoom_frame, zoom_hud, land_view_frame;
+    bool view_labels_ready;
+    ScViewLabel *view_labels;
+    unsigned view_label_count,view_label_capacity;
+    uint16_t *view_label_owner;
+    size_t view_label_owner_capacity;
     uint32_t *pixels;
     ScTerrainFrame terrain;
     bool defer_terrain;
@@ -147,6 +153,9 @@ void ScRendererProjectCity(const ScRenderer *r,double *x,double *y);
 ScVideoRect ScRendererMinimapView(const ScRenderer *r, const uint8_t *ram);
 bool ScRendererCityPoint(const ScRenderer *r, const uint8_t *ram,
                          int x, int y, int *world_x, int *world_y);
+bool ScRendererViewPoint(const ScRenderer *r,const uint8_t *ram,
+                         int x,int y,int *world_x,int *world_y);
+void ScRendererResetMapView(ScRenderer *r);
 /* Draw extended values from the game's live OBJ digit/icon tiles. */
 void ScRendererPopulationRow(const ScRenderer *r, const Ppu *ppu, ScViewport view,
                              bool split, int y, uint32_t *out);

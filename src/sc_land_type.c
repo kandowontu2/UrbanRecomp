@@ -12,15 +12,15 @@ typedef struct {
  * Order: spring, summer, autumn, winter; native colors remain cartridge-owned. */
 static const LandPalette palettes[SC_LAND_TYPES][SC_LAND_SEASONS]={
     {{0}},
-    /* Basalt: Ash-green spring, warm autumn, winter frost; lava never freezes. */
+    /* Basalt: Near-black rock, subtle seasonal ash/frost; lava never freezes. */
     {
-        {RGB(10,11,11),RGB(12,13,13),RGB(7,8,8),RGB(18,19,17),
+        {RGB(4,5,6),RGB(6,7,8),RGB(2,3,4),RGB(12,13,14),
          RGB(28,9,1),RGB(21,5,0),RGB(15,19,12),RGB(9,13,7),RGB(5,8,4),RGB(7,6,5)},
-        {RGB(11,11,12),RGB(13,13,14),RGB(7,7,8),RGB(18,17,15),
+        {RGB(5,5,6),RGB(7,7,8),RGB(3,3,4),RGB(13,13,14),
          RGB(28,9,1),RGB(21,5,0),RGB(14,17,11),RGB(9,12,7),RGB(5,8,4),RGB(7,6,5)},
-        {RGB(12,11,11),RGB(14,13,13),RGB(8,7,7),RGB(19,18,16),
+        {RGB(6,5,5),RGB(8,7,7),RGB(4,3,3),RGB(14,13,13),
          RGB(28,9,1),RGB(21,5,0),RGB(18,17,10),RGB(12,11,6),RGB(7,7,4),RGB(7,6,5)},
-        {RGB(14,15,16),RGB(16,17,18),RGB(9,10,11),RGB(21,22,22),
+        {RGB(8,9,10),RGB(10,11,12),RGB(4,5,6),RGB(16,17,18),
          RGB(28,9,1),RGB(21,5,0),RGB(18,20,17),RGB(11,14,11),RGB(6,9,7),RGB(7,6,5)}
     },
     /* Amazon: Wet winter/spring and warmer, drier autumn; rainforest stays evergreen. */
@@ -47,14 +47,14 @@ static const LandPalette palettes[SC_LAND_TYPES][SC_LAND_SEASONS]={
     },
     /* Mars: Dusty summers and pale winter frost on ground and rock. */
     {
-        {RGB(23,15,12),RGB(25,17,14),RGB(17,10,8),RGB(28,21,17),
-         RGB(6,12,17),RGB(3,7,11),RGB(25,18,14),RGB(19,12,9),RGB(12,7,6),RGB(13,7,5)},
-        {RGB(23,13,9),RGB(25,15,11),RGB(17,9,6),RGB(28,19,14),
-         RGB(5,10,15),RGB(3,6,10),RGB(24,16,11),RGB(18,10,7),RGB(11,6,5),RGB(13,7,5)},
-        {RGB(22,12,9),RGB(24,14,11),RGB(16,8,6),RGB(27,18,14),
-         RGB(4,9,14),RGB(2,5,9),RGB(23,14,10),RGB(17,9,6),RGB(10,5,4),RGB(13,7,5)},
-        {RGB(25,23,22),RGB(27,25,24),RGB(19,17,16),RGB(29,28,26),
-         RGB(11,17,21),RGB(6,11,16),RGB(28,25,22),RGB(21,18,16),RGB(13,11,11),RGB(13,7,5)}
+        {RGB(25,12,8),RGB(27,14,10),RGB(19,8,5),RGB(30,19,14),
+         RGB(6,12,17),RGB(3,7,11),RGB(27,15,10),RGB(21,9,6),RGB(14,5,3),RGB(15,5,3)},
+        {RGB(26,10,6),RGB(28,12,8),RGB(20,6,3),RGB(30,16,11),
+         RGB(5,10,15),RGB(3,6,10),RGB(27,13,7),RGB(21,7,4),RGB(14,4,2),RGB(15,5,3)},
+        {RGB(24,9,6),RGB(26,11,8),RGB(18,5,3),RGB(29,15,11),
+         RGB(4,9,14),RGB(2,5,9),RGB(25,11,7),RGB(19,6,3),RGB(12,3,2),RGB(15,5,3)},
+        {RGB(27,21,19),RGB(29,23,21),RGB(21,15,13),RGB(31,26,23),
+         RGB(11,17,21),RGB(6,11,16),RGB(30,23,19),RGB(23,16,13),RGB(15,9,8),RGB(15,5,3)}
     },
     /* Venus: Subtle sulfur/acid color shifts; no temperate snow or ice. */
     {

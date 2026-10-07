@@ -26,14 +26,14 @@ power networks, 64-bit population accounting up to 9,999,999,999,999, map
 choices through 3840x3200, Journey mode
 with population-triggered border expansions, Copy/Paste, zoom and mouse drag
 panning. Vulkan composition and native C simulation kernels accelerate large
-cities. Music runs on its own thread, with the restored 19-track set bundled
-in the portable release. Widescreen status and navigation controls align with
+cities. Music runs on its own thread, with the restored 19-track set and
+10M/100M milestone themes bundled in the portable release. Widescreen status and navigation controls align with
 the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) and
 [performance evidence and remaining limits](docs/GPU_PERFORMANCE.md).
 
 Download the Windows x64 package from
 [this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 22 is one portable Windows EXE; run it and select your own clean US ROM.
+Beta 23 is one portable Windows EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution

@@ -24,17 +24,21 @@ static _Thread_local uint64_t last_lock_ticks;
 bool ScMusicLoadRestored(const char *directory) {
     if(ScMusicRunning()) return false;
     bool ready=ScPcmLoad(&restored,directory,44100);
-    if(ready) fprintf(stderr,"[restored music] all 19 PCM tracks loaded, 44.1 kHz stereo\n");
+    if(ready) fprintf(stderr,"[restored music] all 19 PCM tracks loaded, 44.1 kHz stereo; Megagopolos theme %s, Gigagopolois theme %s\n",
+        restored.tracks[20].data?"loaded":"unavailable",restored.tracks[21].data?"loaded":"unavailable");
     return ready;
 }
 uint8_t ScMusicCommand(uint8_t command) {
     if(!ScMusicRunning()) return command;
-    ScMusicLock();uint8_t spc=ScPcmCommand(&restored,command);ScMusicUnlock();
-    if(restored.ready && command) fprintf(stderr,"[restored music] command %u, track %u\n",command,command<20?command:0);
+    ScMusicLock();uint8_t spc=ScPcmCommand(&restored,command);unsigned track=restored.track;ScMusicUnlock();
+    if(restored.ready && command) fprintf(stderr,"[restored music] command %u, track %u\n",command,track);
     return spc;
 }
 void ScMusicEnabled(bool enabled) {
     ScMusicLock();restored.enabled=enabled;ScMusicUnlock();
+}
+void ScMusicCityMilestone(unsigned level) {
+    ScMusicLock();ScPcmCityMilestone(&restored,level);ScMusicUnlock();
 }
 void ScMusicRestoreLocked(uint8_t command,bool enabled) {
     if(!restored.ready || !ScMusicRunning()) return;
@@ -50,7 +54,7 @@ void ScMusicRestoreLocked(uint8_t command,bool enabled) {
         for(unsigned cycles=0;music.apu->outPorts[0]!=0x16 && cycles<65536;++cycles) apu_cycle(music.apu);
         apu_writePortNow(music.apu,0,0);
         dsp_trimSamples(music.apu->dsp,0);
-        fprintf(stderr,"[restored music] restored track %u, music %s\n",command,enabled?"on":"off");
+        fprintf(stderr,"[restored music] restored track %u, music %s\n",restored.track,enabled?"on":"off");
     }
 }
 

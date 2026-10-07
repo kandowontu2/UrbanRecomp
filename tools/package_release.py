@@ -47,7 +47,7 @@ def main():
     parser.add_argument("version")
     parser.add_argument("--build-dir", default=BUILD)
     parser.add_argument("--runtime-dir", help="MinGW runtime DLL directory; otherwise use MSVC CRT")
-    parser.add_argument("--restored-music-dir", help="Include the credited local 19-track restored PCM set")
+    parser.add_argument("--restored-music-dir", help="Include the credited 19-track PCM set and optional milestone theme")
     args = parser.parse_args()
     version = args.version
     build = os.path.abspath(args.build_dir)
@@ -103,7 +103,7 @@ def main():
     ]
     # tools/make_translations.py and what it runs, so a player can build the
     # German or French files from their own cartridges.
-    for n in ("make_translations.py", "text_tool.py", "extract_graphics.py", "find_rom.py", "import_restored_music.py"):
+    for n in ("make_translations.py", "text_tool.py", "extract_graphics.py", "find_rom.py", "import_restored_music.py", "import_milestone_music.py"):
         files.append((os.path.join(ROOT, "tools", n), "tools/" + n))
     if args.runtime_dir:
         runtime_files = ("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll")
@@ -119,9 +119,11 @@ def main():
         if os.path.isfile(path):
             files.append((path, os.path.relpath(path, build).replace(os.sep, "/")))
     if args.restored_music_dir:
-        for number in range(1, 20):
+        for number in range(1, 22):
             name = "scity-msu1-%d.pcm" % number
             path = os.path.join(args.restored_music_dir, name)
+            if number >= 20 and not os.path.isfile(path):
+                continue
             with open(path, "rb") as track:
                 header = track.read(8)
             size = os.path.getsize(path)

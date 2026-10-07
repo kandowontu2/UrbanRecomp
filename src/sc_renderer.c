@@ -684,7 +684,8 @@ bool ScRendererResize(ScRenderer *r,ScViewport v) {
 }
 void ScRendererDestroy(ScRenderer *r) {
     ScTerrainDestroy(&r->terrain);
-    free(r->pixels); free(r->held_ppu); free(r->advisor_pixels); memset(r,0,sizeof(*r));
+    free(r->pixels);free(r->held_ppu);free(r->advisor_pixels);
+    free(r->view_labels);free(r->view_label_owner);memset(r,0,sizeof(*r));
 }
 bool ScRendererDeferTerrain(ScRenderer *r,bool enabled) {
     if(enabled && !ScTerrainResize(&r->terrain,r->view.width,r->view.height)) return false;
@@ -1127,6 +1128,111 @@ static void terrain_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y,int 
 /* Project only the live land layer. Native HUD/menu rows are composed later
  * at their original size; the native 32-column city cache is never sampled
  * as zoomed land. The CPU fallback resolves the same immutable spans as GPU. */
+/* Native View labels occupy the same 3/4/6-cell artwork as their building.
+ * Keep that lettering at least native size. At distant zooms choose labels
+ * in stable world-space slots rather than overlapping or scanning millions
+ * of offscreen cells; the hovered building always wins over those samples. */
+static int view_footprint(unsigned tile) {
+    if(tile>=0x257 && tile<0x297)return 4;
+    if(tile>=0x297 && tile<0x2bb)return 6;
+    if(tile>=0x366 && tile<0x376)return 4;
+    return (tile>=0x80 && tile<0x89) || (tile>=0x95 && tile<0x257) ||
+        (tile>=0x2bb && tile<0x354) || (tile>=0x376 && tile<CELL_TYPES)?3:0;
+}
+static bool view_label_near(const ScRenderer *r,const uint8_t *ram,int cx,int cy,ScViewLabel *label) {
+    bool large=r->world && r->world->active;
+    int width=large?ScWorldWidth(r->world):120,height=large?ScWorldHeight(r->world):100;
+    const uint8_t *map=large?r->world->tiles:ram+MAP;
+    int best=1000;
+    for(int dy=-3;dy<=3;++dy)for(int dx=-3;dx<=3;++dx) {
+        int wx=cx+dx,wy=cy+dy;
+        if(wx<0 || wy<0 || wx>=width || wy>=height)continue;
+        unsigned tile=u16(map,2*(wy*width+wx))&1023;
+        int side=view_footprint(tile),distance=dx*dx+dy*dy;
+        if(!side || distance>=best || !(r->rom[0x184eb+tile]&1))continue;
+        int shift=side==6?2:1,left=wx-shift,top=wy-shift;
+        if(left<0 || top<0 || left+side>width || top+side>height)continue;
+        int size=side*8;
+        *label=(ScViewLabel){
+            (int)lround(zoom_forward(r,left*8+size/2-r->scroll_x-r->scroll_adjust_x,false))-size/2+r->view.core_x,
+            (int)lround(zoom_forward(r,top*8+size/2-r->scroll_y-r->scroll_adjust_y-1,true))-size/2+r->view.core_y,
+            left,top,size};
+        best=distance;
+    }
+    return best<1000;
+}
+static bool view_labels_overlap(ScViewLabel a,ScViewLabel b) {
+    return a.x<b.x+b.size && b.x<a.x+a.size && a.y<b.y+b.size && b.y<a.y+a.size;
+}
+static void prepare_view_labels(ScRenderer *r,const uint8_t *ram) {
+    r->view_label_count=0;r->view_labels_ready=false;
+    if(!r->land_view_frame || !r->zoom_frame || r->map_zoom>=1 || !r->rom ||
+        r->rom_size<0x184eb+CELL_TYPES)return;
+    int step=(int)ceil(4/r->map_zoom);
+    int sx=r->scroll_x+r->scroll_adjust_x,sy=r->scroll_y+r->scroll_adjust_y;
+    int left=(sx+zoom_local(r,-r->view.core_x,false))/8;
+    int top=(sy+zoom_local(r,-r->view.core_y,true))/8;
+    int right=(sx+zoom_local(r,r->view.width-r->view.core_x,false))/8;
+    int bottom=(sy+zoom_local(r,r->view.height-r->view.core_y,true))/8;
+    int width=r->world && r->world->active?ScWorldWidth(r->world):120;
+    int height=r->world && r->world->active?ScWorldHeight(r->world):100;
+    if(left<0)left=0;
+    if(top<0)top=0;
+    if(right>=width)right=width-1;
+    if(bottom>=height)bottom=height-1;
+    if(right<left || bottom<top)return;
+    size_t canvas=(size_t)r->view.width*r->view.height;
+    if(canvas>r->view_label_owner_capacity) {
+        uint16_t *owner=realloc(r->view_label_owner,canvas*sizeof *owner);if(!owner)return;
+        r->view_label_owner=owner;r->view_label_owner_capacity=canvas;
+    }
+    memset(r->view_label_owner,0,canvas*sizeof *r->view_label_owner);
+    unsigned required=(unsigned)(right/step-left/step+1)*(bottom/step-top/step+1)+1;
+    if(required>r->view_label_capacity) {
+        ScViewLabel *labels=realloc(r->view_labels,required*sizeof *labels);if(!labels)return;
+        r->view_labels=labels;r->view_label_capacity=required;
+    }
+    r->view_labels_ready=true;
+    for(int gy=top/step;gy<=bottom/step;++gy)for(int gx=left/step;gx<=right/step;++gx) {
+        ScViewLabel label;
+        if(!view_label_near(r,ram,gx*step+step/2,gy*step+step/2,&label))continue;
+        int x0=(int)ceil(zoom_forward(r,gx*step*8-sx,false))+r->view.core_x;
+        int y0=(int)ceil(zoom_forward(r,gy*step*8-sy-1,true))+r->view.core_y;
+        int x1=(int)ceil(zoom_forward(r,(gx+1)*step*8-sx,false))+r->view.core_x;
+        int y1=(int)ceil(zoom_forward(r,(gy+1)*step*8-sy-1,true))+r->view.core_y;
+        if(label.x>=x0 && label.y>=y0 && label.x+label.size<=x1 && label.y+label.size<=y1)
+            r->view_labels[r->view_label_count++]=label;
+    }
+    int wx,wy;ScViewLabel focus;
+    if(r->pointer_active && !r->pointer_hidden && ScRendererViewPoint(r,ram,r->pointer_x,r->pointer_y,&wx,&wy) &&
+       view_label_near(r,ram,wx,wy,&focus)) {
+        unsigned count=0;
+        for(unsigned i=0;i<r->view_label_count;++i)
+            if(!view_labels_overlap(focus,r->view_labels[i]))r->view_labels[count++]=r->view_labels[i];
+        r->view_labels[count++]=focus;r->view_label_count=count;
+    }
+    for(unsigned i=0;i<r->view_label_count;++i) {
+        ScViewLabel l=r->view_labels[i];
+        int left=l.x<0?0:l.x,top=l.y<0?0:l.y;
+        int right=l.x+l.size<r->view.width?l.x+l.size:r->view.width;
+        int bottom=l.y+l.size<r->view.height?l.y+l.size:r->view.height;
+        for(int y=top;y<bottom;++y)for(int x=left;x<right;++x)
+            r->view_label_owner[(size_t)y*r->view.width+x]=(uint16_t)(i+1);
+    }
+}
+static unsigned view_label_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,int x,int y) {
+    bool large=r->world && r->world->active;
+    unsigned width=large?ScWorldWidth(r->world):120;
+    const uint8_t *map=large?r->world->tiles:ram+MAP;
+    unsigned owner=r->view_label_owner[(size_t)y*r->view.width+x];
+    if(owner && owner<=r->view_label_count) {
+        ScViewLabel l=r->view_labels[owner-1];int dx=x-l.x,dy=y-l.y;
+        unsigned tile=u16(map,2*((l.world_y+dy/8)*width+l.world_x+dx/8))&1023;
+        if(tile<CELL_TYPES)return tile_pixel(p,u16(r->rom,VIEW_TILES+2*tile)|0x2000,
+            PPU_bgTileAdr(p,2),dx,dy,2,0);
+    }
+    return 0;
+}
 static void zoom_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y,bool core_only) {
     int sx=r->scroll_x+r->scroll_adjust_x+scroll_delta(p->hScroll[1],r->scroll_h);
     int sy=r->scroll_y+r->scroll_adjust_y+scroll_delta(p->vScroll[1],r->scroll_v);
@@ -1163,8 +1269,13 @@ static void zoom_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y,bo
                     unsigned cell=u16(map,2*((wy/8)*width+wx/8))&1023;
                     if(cell<CELL_TYPES && VIEW_TILES+2*cell+1<r->rom_size) {
                         unsigned word=u16(r->rom,VIEW_TILES+2*cell)|0x2000;
-                        ci=tile_pixel(p,word,PPU_bgTileAdr(p,2),wx,wy,2,0);
+                        if(r->map_zoom>=1 || !view_footprint(cell) || !r->view_labels_ready)
+                            ci=tile_pixel(p,word,PPU_bgTileAdr(p,2),wx,wy,2,0);
                     }
+                }
+                if(r->map_zoom<1 && r->view_labels_ready) {
+                    unsigned label=view_label_pixel(r,p,ram,x,ay);
+                    if(label)ci=label;
                 }
                 r->terrain.overlays[(size_t)ay*r->view.width+x].background=
                     UINT32_C(0x80000000)|(ci<<16)|((PPU_bg3priority(p)?15u:3u)<<24);
@@ -1216,6 +1327,11 @@ void ScRendererResetCamera(ScRenderer *r) {
     r->focus_pending=r->focus_tracking=false;
     r->scroll_x-=(int)lround(r->camera_x);r->scroll_y-=(int)lround(r->camera_y);
     r->camera_x=r->camera_y=0;r->object_grid_valid=false;
+}
+void ScRendererResetMapView(ScRenderer *r) {
+    ScRendererResetCamera(r);
+    r->map_zoom=1;r->zoom_frame=r->zoom_hud=r->land_view_frame=false;
+    ScRendererResetHistory(r);
 }
 void ScRendererFocusWorld(ScRenderer *r,double x,double y) {
     r->focus_x=x;r->focus_y=y;r->focus_pending=r->focus_tracking=true;
@@ -1651,21 +1767,27 @@ bool ScRendererWindowToGuest(const ScRenderer *r,ScVideoRect d,
             }
         }
     }
-    if (!(r->city_input && !r->advisor_frame) &&
+    if (!((r->city_input || r->land_view_frame) && !r->advisor_frame) &&
         (cx<0 || cx>=256 || cy<0 || cy>=224)) return false;
     *gx=cx; *gy=cy; return true;
 }
-bool ScRendererCityPoint(const ScRenderer *r,const uint8_t *ram,
-                         int x,int y,int *wx,int *wy) {
-    if (!r->city_input || r->advisor_frame || r->map_hold) return false;
+static bool land_point(const ScRenderer *r,const uint8_t *ram,
+                       int x,int y,int *wx,int *wy,bool view) {
+    if (!(view?r->land_view_frame:r->city_input) || r->advisor_frame || r->map_hold) return false;
     if (x+r->view.core_x<0 || x+r->view.core_x>=r->view.width ||
         y+r->view.core_y<0 || y+r->view.core_y>=r->view.height) return false;
-    if (u16(ram,0x1d7) && ((y>=0 && y<46) || in_rect(x,y,0,46,56,178))) return false;
+    if (!view && u16(ram,0x1d7) && ((y>=0 && y<46) || in_rect(x,y,0,46,56,178))) return false;
     int px=r->scroll_x+r->scroll_adjust_x+zoom_local(r,x,false),py=r->scroll_y+r->scroll_adjust_y+zoom_local(r,y,true);
     int width=r->world && r->world->active?ScWorldWidth(r->world):120;
     int height=r->world && r->world->active?ScWorldHeight(r->world):100;
     if (px<0 || py<0 || px>=width*8 || py>=height*8) return false;
     *wx=px/8; *wy=py/8; return true;
+}
+bool ScRendererCityPoint(const ScRenderer *r,const uint8_t *ram,int x,int y,int *wx,int *wy) {
+    return land_point(r,ram,x,y,wx,wy,false);
+}
+bool ScRendererViewPoint(const ScRenderer *r,const uint8_t *ram,int x,int y,int *wx,int *wy) {
+    return land_point(r,ram,x,y,wx,wy,true);
 }
 static uint32_t bare_city_pixel(const ScRenderer *r,const Ppu *p,const uint8_t *ram,int x,int y) {
     int sx=r->scroll_x+r->scroll_adjust_x,sy=r->scroll_y+r->scroll_adjust_y;
@@ -1833,6 +1955,15 @@ static uint32_t without_pointer(const ScRenderer *r,const Ppu *p,const uint8_t *
     return composite_color(p,samples[0],owners[0],samples[1],owners[1],x);
 }
 static void city_pointer(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
+    if(r->land_view_frame && !r->map_hold && !r->advisor_frame) {
+        if(r->pointer_active && !r->pointer_hidden)for(int y=0;y<16;++y)for(int x=0;x<16;++x) {
+            int ax=r->view.core_x+r->pointer_x+x,ay=r->view.core_y+r->pointer_y+y;
+            uint32_t ink=ScRendererCityHandPixel(p,x,y);
+            if(ink && ax>=0 && ax<r->view.width && ay>=0 && ay<r->view.height)
+                r->pixels[(size_t)ay*r->view.width+ax]=ink;
+        }
+        return;
+    }
     if (!r->city_input || r->advisor_frame || r->map_hold) return;
     int wx=0,wy=0;
     bool hud=r->pointer_active && r->pointer_hud;
@@ -2475,6 +2606,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         track_scroll(r,p,ram);
         track_objects(r,p,ram);
         track_map_swap(r,p,ram);
+        prepare_view_labels(r,ram);
         MEASURE_END(r,SC_RENDER_TRACK,measured);
     }
     /* The 32-column guest tilemap stages incoming tiles in CRT overscan.

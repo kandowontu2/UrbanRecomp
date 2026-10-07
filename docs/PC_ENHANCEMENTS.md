@@ -557,9 +557,11 @@ inherit spatial clock scaling from their saved caller; global calculations and
 redraw waits retain ordinary timing. This permits later calendar and density
 passes without bypassing the original growth rules.
 
-The top-toolbar View tool uses a third world graphics table. Its BG3 artwork
-now follows the same inverse projection as land at every city zoom, through
-the shared CPU/GPU terrain overlay compositor.
+The top-toolbar View tool follows the current city camera and supports mouse
+drag/edge panning, keyboard arrows and Ctrl-wheel zoom while active. It does
+not enable construction. At reduced zoom, building labels retain their native
+font size in spaced groups; hovering a building always shows its label. CPU
+and GPU terrain composition share the same label artwork and coordinates.
 
 Camera scrolling now validates the native staging cache throughout the city
 viewport, rather than repairing only its outer eight-pixel bands. Stale terrain,
@@ -822,6 +824,17 @@ Missing or invalid packs retain the original soundtrack. `SC_RESTORED_MUSIC=0`
 selects the original soundtrack for developer reference runs; setting it to a
 directory selects a different local pack with the same 19 filenames. The
 restored pack needs the dedicated worker; disabling it retains native audio.
+At 10,000,000 population, Dr. Wright announces **Megagopolos** once per city.
+The city theme changes to Markify's restored unused Vanilla Lake beta theme
+from Super Mario Kart. Optional `scity-msu1-20.pcm` supplies this additional
+loop; the single EXE embeds it. Menu songs, disaster music and fanfares retain
+their original assignments. City and state saves preserve the earned milestone
+and any unfinished announcement; older saves can earn it normally.
+At 100,000,000 population, **Gigagopolois** adds a second announcement and
+switches the city theme to **LOOP16B** from **LOOP816 / Soyo Oka (2023)**.
+Artist, composer and publisher: Soyo Oka. Optional host track 21 contains the
+full arrangement and ending fade. The rewards run in order, even when one
+growth update crosses both thresholds, and neither repeats after earning it.
 Tests cover all imported tracks and their authored loops, interpolation at
 loop seams, mixing saturation, mute/resume, worker pause/reset/shutdown,
 44.1 kHz playback through a 250 ms game-thread stall, and a real US-driver
@@ -913,7 +926,9 @@ Moon generates no natural forests, including Practice and Journey expansions;
 parks can still be planted. These are graphical themes using ordinary terrain
 rules: lava/acid still has water's construction rules, and themed vegetation
 still has forest's rules. Each city saves its type, including Journey expansions.
-Older saves use Native. The selection is remembered for the next new city.
+Older saves use Native. Every new city defaults to Native; loaded cities retain
+their saved theme. Opening a new map also clears the previous city's host
+camera offset, focus target and zoom.
 
 The themes retain the original terrain pixels, connected shoreline and forest
 masks, and animated water. Explicit soil, bank, water and canopy color ramps
@@ -988,8 +1003,9 @@ migration, budget digits and unscaled HUD digits/month placement.
 
 Shift-click anywhere on the original 16x16 toolbox ? image (guest x32..47,
 y158..173) to open all 15 gift choices, including when native availability is
-dimmed. The picker pauses the guest, consumes its opening/selection click, and
-accepts mouse, Up/Down and Enter. Selection enters the original gift-tool palette
+  dimmed. All 15 icons fit in four columns without scrolling. The picker pauses
+  the city while music continues, consumes its opening/selection click, and
+  accepts mouse, D-pad/arrows and Enter. Selection enters the original gift-tool palette
 transition, bypassing only its four-inventory-slot chooser. Gift construction,
 price, water-only landfill behavior and inventory consumption remain native.
 A full earned-gift queue temporarily lends one slot; placement, cancellation or

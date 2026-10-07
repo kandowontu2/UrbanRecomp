@@ -47,6 +47,12 @@ static void free_camera_test(void) {
     ScRendererPan(r,100000,100000);
     assert(r->scroll_x==28224 && r->scroll_y==24026);
     assert(r->map_zoom==.25 && r->native_scroll_x==2400 && r->native_scroll_y==2400);
+    r->focus_pending=r->focus_tracking=r->land_view_frame=r->zoom_frame=true;
+    ScRendererResetMapView(r);
+    assert(r->map_zoom==1 && !r->camera_x && !r->camera_y && !r->focus_pending && !r->focus_tracking);
+    assert(!r->zoom_frame && !r->zoom_hud && !r->land_view_frame && !r->scroll_valid);
+    assert(r->scroll_x==2400 && r->scroll_y==2400);
+    r->zoom_hud=true;
     /* Ctrl-wheel keeps the world at the screen center stationary, including
      * very distant zooms, overscan and a fractional camera. */
     for(unsigned layout=0;layout<2;++layout) {
@@ -915,7 +921,32 @@ int main(void) {
         assert(ScRendererPixel(&r,r.view.core_x+120,100)==0xffff0000);
         assert(!memcmp(before,p,sizeof *p));
     }
-    r.defer_terrain=false;r.map_zoom=.0625;
+    /* Real 3x3 label art retains its 8-pixel glyphs at reduced zoom. The
+     * hovered building is available even between sampled label groups. */
+    for(int deferred=0;deferred<2;++deferred)for(int z=0;z<2;++z) {
+        r.defer_terrain=deferred;r.map_zoom=z?.25:.5;
+        memset(ram+0x10200,0,24000);
+        for(int dy=0;dy<3;++dy)for(int dx=0;dx<3;++dx) {
+            unsigned tile=0x80+dy*3+dx;
+            word(ram,0x10200+2*((59+dy)*120+59+dx),tile);
+            word(rom,0x15e25+2*tile,2);
+        }
+        rom[0x184eb+0x84]=1;
+        r.pointer_active=true;r.pointer_hidden=false;
+        r.pointer_x=56+(int)lround((60*8+4-320-56)*r.map_zoom);
+        r.pointer_y=46+(int)lround((60*8+4-320-46-1)*r.map_zoom);
+        memcpy(before,p,sizeof *p);
+        for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+        assert(r.view_labels_ready && r.view_label_count && !memcmp(before,p,sizeof *p));
+        ScViewLabel label=r.view_labels[r.view_label_count-1];
+        assert(label.size==24 && label.world_x==59 && label.world_y==59);
+        int wx,wy;
+        assert(ScRendererViewPoint(&r,ram,r.pointer_x,r.pointer_y,&wx,&wy) && wx==60 && wy==60);
+        assert(!ScRendererCityPoint(&r,ram,r.pointer_x,r.pointer_y,&wx,&wy));
+        for(int dx=0;dx<8;++dx)
+            assert(ScRendererPixel(&r,label.x+8+dx,label.y+8)==0xff0000ff);
+    }
+    r.pointer_active=false;r.defer_terrain=false;r.map_zoom=.0625;
     /* Preview cells use the live BG2 palette, preserve the native box, stay
      * sharp at every city zoom, and never alter live PPU state. */
     memset(p,0,sizeof *p);memset(ram,0,0x20000);ScRendererResetHistory(&r);

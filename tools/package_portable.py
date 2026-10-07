@@ -34,7 +34,10 @@ with zipfile.ZipFile(args.archive) as archive:
         if Path(name).suffix.lower() in ('.sfc', '.smc', '.srm', '.sav') or '.srm.' in name:
             raise ValueError(f'Personal/game data cannot be bundled: {name}')
         files.append((name.encode('ascii'), archive.read(item)))
-assert len([n for n, _ in files if n.endswith(b'.pcm')]) == 19
+tracks = {n for n, _ in files if n.endswith(b'.pcm')}
+required_tracks = {f'music/restored/scity-msu1-{n}.pcm'.encode() for n in range(1, 20)}
+assert required_tracks.issubset(tracks)
+assert tracks <= required_tracks | {b'music/restored/scity-msu1-20.pcm',b'music/restored/scity-msu1-21.pcm'}
 assert {b'UrbanRecomp.exe', b'SDL3.dll', b'CREDITS.md', b'CHANGELOG.md', b'THIRD_PARTY_NOTICES.md'}.issubset({n for n, _ in files})
 raw = bytearray(b'SCFILES1' + struct.pack('<I', len(files)))
 for name, data in files:
@@ -73,4 +76,4 @@ with output.open('wb') as target:
     target.write(b'SCBNDL01'+struct.pack('<QQ', needed.value, len(raw))+hashlib.sha256(raw).digest())
 digest = hashlib.sha256(output.read_bytes()).hexdigest()
 Path(str(output)+'.sha256').write_text(digest+'  '+output.name+'\n')
-print(f'{output}: {output.stat().st_size/1e6:.1f} MB, {len(files)} embedded files, 19 restored tracks')
+print(f'{output}: {output.stat().st_size/1e6:.1f} MB, {len(files)} embedded files, {len(tracks)} music tracks')

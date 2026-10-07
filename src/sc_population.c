@@ -180,6 +180,40 @@ unsigned ScPopulationClass(uint64_t v) {
     const unsigned limits[]={2000,10000,50000,100000,500000};
     unsigned n=0; while (n<5 && v>=limits[n]) ++n; return n;
 }
+bool ScPopulationQueueMilestone(ScPopulation *s,uint8_t *ram) {
+    if(!s->valid || s->value<SC_MEGAGOPOLOS_POPULATION ||
+       s->megagopolos_announcing || s->gigagopolois_announcing ||
+       ram[0x14] || !word(ram,0x3e) || word(ram,0xca5)<5 || word(ram,0xd7) || word(ram,0x379) ||
+       ram[0xe3] || ram[0x391] || word(ram,0x395) || word(ram,0x397) || word(ram,0x3fe))return false;
+    /* Message 4 has the original happy Wright/fanfare, with no gift or
+     * scenario side effect. Keep the guest's class within its six entries. */
+    if(!s->megagopolos_unlocked)s->megagopolos_unlocked=s->megagopolos_announcing=true;
+    else if(!s->gigagopolois_unlocked && s->value>=SC_GIGAGOPOLOIS_POPULATION)
+        s->gigagopolois_unlocked=s->gigagopolois_announcing=true;
+    else return false;
+    put(ram,0x397,4);put(ram,0x395,1);return true;
+}
+unsigned ScPopulationMusicMilestone(const ScPopulation *s) {
+    if(s->gigagopolois_unlocked && !s->gigagopolois_announcing)return 2;
+    return s->megagopolos_unlocked && !s->megagopolos_announcing;
+}
+bool ScPopulationMilestoneRead(const ScPopulation *s,uint32_t address,uint8_t *value) {
+    static const char *const mega[]={
+        "MEGAGOPOLOS!","","Congratulations, Mayor!","Ten million citizens!",
+        "Your city has reached a","new level of greatness.","Keep our people happy,",
+        "and let*s keep growing!"};
+    static const char *const giga[]={
+        "GIGAGOPOLOIS!","","Congratulations, Mayor!","One hundred million!",
+        "An incredible city of","one hundred million",
+        "citizens! Keep building","a bright future for all!"};
+    const char *const *lines=s->gigagopolois_announcing?giga:mega;
+    address&=0x7fffff;
+    if(address<0x0ffd00 || address>=0x0fff00)return false;
+    unsigned row=(address-0x0ffd00)/24,col=(address-0x0ffd00)%24;
+    *value=row>=8?0xff:
+        col<strlen(lines[row])?(uint8_t)lines[row][col]:' ';
+    return true;
+}
 void ScPopulationImport(ScPopulation *s, const uint8_t *r) {
     memset(s,0,sizeof *s);
     s->value=dword(r,0xba5); s->previous=dword(r,0xbcd);
@@ -276,6 +310,8 @@ void ScPopulationEncode(const ScPopulation *s, uint8_t out[SC_POPULATION_BYTES])
     encode64(out+56,s->history_head); encode64(out+64,s->history_count);
     memcpy(out+72,s->tally_active,3); out[75]=s->valid; out[76]=s->calculation_wide;
     out[77]=s->live;
+    out[78]=s->megagopolos_unlocked | s->megagopolos_announcing<<1 |
+        s->gigagopolois_unlocked<<2 | s->gigagopolois_announcing<<3;
     for (unsigned i=0;i<SC_POPULATION_HISTORY;++i) encode64(out+80+i*8,s->history[i]);
 }
 bool ScPopulationDecode(ScPopulation *s, const uint8_t *p, size_t size) {
@@ -291,7 +327,11 @@ bool ScPopulationDecode(ScPopulation *s, const uint8_t *p, size_t size) {
     uint64_t head=decode64(p+56), count=decode64(p+64);
     if (head>=SC_POPULATION_HISTORY || count>SC_POPULATION_HISTORY || p[75]>1 || p[76]>1 || p[77]>1) return false;
     t.history_head=(uint32_t)head; t.history_count=(uint32_t)count; t.valid=p[75]!=0; t.calculation_wide=p[76]!=0;
-    t.live=p[77]!=0;
+    /* Valid states: no rewards, Mega earned/announcing, both earned, or
+     * Giga announcing after Mega. The two native visits cannot overlap. */
+    if(p[78]!=0 && p[78]!=1 && p[78]!=3 && p[78]!=5 && p[78]!=13)return false;
+    t.live=p[77]!=0;t.megagopolos_unlocked=(p[78]&1)!=0;t.megagopolos_announcing=(p[78]&2)!=0;
+    t.gigagopolois_unlocked=(p[78]&4)!=0;t.gigagopolois_announcing=(p[78]&8)!=0;
     for (unsigned i=0;i<SC_POPULATION_HISTORY;++i) {
         t.history[i]=decode64(p+80+i*8);
         if (t.history[i]>SC_POPULATION_MAX) return false;

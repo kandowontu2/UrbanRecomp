@@ -23,7 +23,7 @@ with tarfile.open(args.archive,'r:gz') as archive:
         path=PurePosixPath(member.name)
         native=path.parent==PurePosixPath('src/program_gen') and path.suffix in ('.c','.h')
         music=path.parent==PurePosixPath('music/restored') and path.name in {
-            f'scity-msu1-{n}.pcm' for n in range(1,20)}
+            f'scity-msu1-{n}.pcm' for n in range(1,22)}
         if not member.isfile() or '..' in path.parts or not (native or music) or member.name in names:
             raise SystemExit('Unexpected private build archive member')
         names.add(member.name)

@@ -1,11 +1,18 @@
-URBAN RECOMP ENHANCED BETA 22
+URBAN RECOMP ENHANCED
 ==========================================================
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
-The runtime, assets, documentation, credits and all 19 restored songs are
+The runtime, assets, documentation, credits and restored soundtrack are
 embedded. They unpack into a versioned private cache under LOCALAPPDATA.
 Saves and settings stay beside the portable EXE; existing installations are
 not replaced. No ROM or personal saves/settings are included.
+
+At 10 million population, Dr. Wright announces Megagopolos once per city.
+Its new city theme is Markify's restored unused Vanilla Lake beta song from
+Super Mario Kart. Menu and disaster songs keep their existing assignments.
+The reward is saved with each city, and music stays at real-time tempo.
+At 100 million, Gigagopolois adds a second Dr. Wright announcement and changes
+the city theme to LOOP16B from LOOP816 (2023), by Soyo Oka, artist/composer/publisher.
 
 The game CPU now executes compiled C without a 65816 interpreter in the
 release executable. Save/register layouts and device timing are preserved.

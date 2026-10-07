@@ -7,17 +7,17 @@ static uint32_t le32(const uint8_t *p) {
     return p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;
 }
 void ScPcmDestroy(ScPcm *p) {
-    for(unsigned i=1;i<20;++i) free(p->tracks[i].data);
+    for(unsigned i=1;i<=21;++i) free(p->tracks[i].data);
     memset(p,0,sizeof *p);
 }
 bool ScPcmLoad(ScPcm *p,const char *directory,unsigned rate) {
     ScPcmDestroy(p);
     if(!directory || !*directory || rate<8000 || rate>192000) return false;
-    for(unsigned i=1;i<20;++i) {
+    for(unsigned i=1;i<=21;++i) {
         char path[4096];uint8_t header[8];
         int n=snprintf(path,sizeof path,"%s/scity-msu1-%u.pcm",directory,i);
         if(n<0 || n>=(int)sizeof path) goto failed;
-        FILE *f=fopen(path,"rb");if(!f) goto failed;
+        FILE *f=fopen(path,"rb");if(!f) {if(i>=20)continue;goto failed;}
         bool valid=fseek(f,0,SEEK_END)==0;
         long bytes=valid?ftell(f):-1;
         valid=bytes>=12 && bytes<=256*1024*1024 && (bytes-8)%4==0 &&
@@ -27,20 +27,33 @@ bool ScPcmLoad(ScPcm *p,const char *directory,unsigned rate) {
         uint8_t *data=valid?malloc((size_t)frames*4):NULL;
         valid=data && fread(data,4,frames,f)==frames;
         fclose(f);
-        if(!valid) {free(data);goto failed;}
+        if(!valid) {free(data);if(i>=20)continue;goto failed;}
         p->tracks[i]=(ScPcmTrack){data,frames,loop};
     }
     p->rate=rate;p->ready=p->enabled=true;return true;
 failed:
     ScPcmDestroy(p);return false;
 }
+static unsigned city_track(const ScPcm *p,unsigned command) {
+    if(command<=6 && p->city_milestone>=2 && p->tracks[21].data)return 21;
+    if(command<=6 && p->city_milestone && p->tracks[20].data)return 20;
+    return command;
+}
 uint8_t ScPcmCommand(ScPcm *p,uint8_t command) {
     if(!p->ready) return command;
+    if(command)p->last_command=command;
     if(command>0 && command<20) {
-        p->track=command;p->position=0;p->enabled=true;return 0;
+        p->track=city_track(p,command);
+        p->position=0;p->enabled=true;return 0;
     }
     if(command>=20) {p->track=0;p->position=0;}
     return command;
+}
+void ScPcmCityMilestone(ScPcm *p,unsigned level) {
+    p->city_milestone=level>2?2:level;
+    if(!p->ready || !p->last_command || p->last_command>6 || !p->track)return;
+    unsigned track=city_track(p,p->last_command);
+    if(p->track!=track) {p->track=track;p->position=0;}
 }
 static int sample(const ScPcmTrack *t,unsigned frame,unsigned channel) {
     const uint8_t *p=t->data+frame*4+channel*2;

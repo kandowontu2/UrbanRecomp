@@ -5,6 +5,8 @@
 #include "sc_world.h"
 
 #define SC_POPULATION_MAX UINT64_C(9999999999999)
+#define SC_MEGAGOPOLOS_POPULATION UINT64_C(10000000)
+#define SC_GIGAGOPOLOIS_POPULATION UINT64_C(100000000)
 enum { SC_POPULATION_HISTORY = 1200 };
 typedef struct ScPopulation {
     uint64_t value, previous, capacity[3]; /* residential, commercial, industrial */
@@ -13,6 +15,8 @@ typedef struct ScPopulation {
     uint32_t history_head, history_count;
     uint8_t tally_active[3];
     bool valid, calculation_wide, live;
+    bool megagopolos_unlocked,megagopolos_announcing;
+    bool gigagopolois_unlocked,gigagopolois_announcing;
 } ScPopulation;
 
 void ScPopulationImport(ScPopulation *s, const uint8_t *ram);
@@ -35,6 +39,9 @@ uint64_t ScPopulationCensusEvaluatedCells(const ScPopulationCensus *census);
  * on the stock path when its arithmetic can represent the correct result. */
 uint16_t ScPopulationStep(ScPopulation *s, uint8_t *ram, uint16_t pc, uint16_t dp);
 unsigned ScPopulationClass(uint64_t value);
+bool ScPopulationQueueMilestone(ScPopulation *s,uint8_t *ram);
+bool ScPopulationMilestoneRead(const ScPopulation *population,uint32_t address,uint8_t *value);
+unsigned ScPopulationMusicMilestone(const ScPopulation *population);
 void ScPopulationReport(const ScPopulation *s, uint8_t *ram, bool change);
 /* Explicit little-endian encoding, independent of compiler padding. */
 enum { SC_POPULATION_BYTES = 80 + SC_POPULATION_HISTORY * 8 };

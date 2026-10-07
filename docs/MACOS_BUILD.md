@@ -51,12 +51,13 @@ cmake -S . -B mac-deps/game-build -G Ninja \
   -DSNESRECOMP_SDL_BACKEND=SDL3 -DSC_AOT=OFF -DSC_PROGRAM=ON \
   -DSC_INTERPRETER_REFERENCE=OFF -DSC_LTO=OFF
 cmake --build mac-deps/game-build --parallel 2 --target UrbanRecomp
-python3 tools/package_macos.py v1.2.0-enhanced.20 \
+python3 tools/package_macos.py v1.2.0-enhanced.23 \
   --build-dir mac-deps/game-build --restored-music-dir music/restored
 ```
 
 The packager verifies both Mach-O slices, rejects non-system dynamic
-dependencies, includes all 19 music tracks and required notices, checks for
+dependencies, includes the 19 restored tracks, optional milestone themes and
+required notices, checks for
 private files, signs the app and verifies its signature before making a ZIP.
 
 ## Hosted build

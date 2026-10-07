@@ -59,6 +59,24 @@ provided a reference for track-command mapping; its ROM patch is not bundled.
 The 19 tracks retain their authored stereo audio and loop points. The host's
 native sound effects continue to play alongside them.
 
+## Additional city themes
+
+The **Megagopolos** city theme uses **Markify's** restoration,
+[Super Mario Kart: Vanilla Lake Beta Theme (Restored)](https://www.youtube.com/watch?v=NjLiCEoSGWo),
+the unused Vanilla Lake composition by **Soyo Oka**. This is a separate
+restoration from the Church of Kondo SimCity set. The project prepares a
+31.2195-second repeating phrase with a short seam blend, mixing headroom and
+volume balanced with the restored city themes;
+`tools/import_milestone_music.py` reproduces the PCM conversion from a local
+copy of that recording.
+
+The **Gigagopolois** city theme is **LOOP16B**, track 7 from
+[LOOP816 / Soyo Oka (2023)](https://downloads.khinsider.com/game-soundtracks/album/loop816-soyo-oka-2023).
+**Soyo Oka / 岡素世** is credited as the artist, composer and publisher.
+The full arrangement and its original ending fade are retained; only trailing
+silence is trimmed for repeat playback. It plays after the 100-million milestone.
+Its playback volume is balanced with the restored city music.
+
 ## Original game
 
 **SimCity (SNES, 1991): Nintendo, Maxis and Electronic Arts**, and the original

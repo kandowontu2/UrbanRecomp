@@ -250,6 +250,53 @@ static void census_benchmark(void) {
         full*1000,unchanged*1000,sparse*1000,(double)evaluated/512);
     ScPopulationCensusDestroy(c);free(w);
 }
+static void milestone_tests(void) {
+    ScPopulation s={0},t={0};uint8_t data[SC_POPULATION_BYTES],value=0;
+    memset(ram,0,sizeof ram);put(0x3e,1);put(0xca5,5);
+    ram[0x15]=128; /* native city screen's high-byte task flag */
+    ScPopulationSet(&s,ram,SC_MEGAGOPOLOS_POPULATION-1);
+    assert(!ScPopulationQueueMilestone(&s,ram));
+    ScPopulationSet(&s,ram,SC_MEGAGOPOLOS_POPULATION);
+    put(0xca5,4);assert(!ScPopulationQueueMilestone(&s,ram));put(0xca5,5);
+    /* Gifts, reports, disasters and pending announcements retain priority. */
+    const unsigned busy[]={0x14,0xd7,0x379,0xe3,0x391,0x395,0x397,0x3fe};
+    for(unsigned i=0;i<sizeof busy/sizeof *busy;++i) {
+        put(busy[i],1);assert(!ScPopulationQueueMilestone(&s,ram));put(busy[i],0);
+    }
+    assert(ScPopulationQueueMilestone(&s,ram));
+    assert(s.megagopolos_unlocked && s.megagopolos_announcing && word(0x397)==4 && word(0x395)==1);
+    assert(word(0xdeb)==5 && !ScPopulationQueueMilestone(&s,ram));
+    assert(ScPopulationMilestoneRead(&s,0x8ffd00,&value) && value=='M');
+    assert(ScPopulationMilestoneRead(&s,0x0ffd00+24*8,&value) && value==0xff);
+    assert(!ScPopulationMilestoneRead(&s,0x0ffc00,&value));
+    ScPopulationEncode(&s,data);assert(ScPopulationDecode(&t,data,sizeof data));
+    assert(t.megagopolos_unlocked && t.megagopolos_announcing);
+    s.megagopolos_announcing=false;ScPopulationEncode(&s,data);
+    assert(ScPopulationDecode(&t,data,sizeof data) && t.megagopolos_unlocked && !t.megagopolos_announcing);
+    put(0x397,0);put(0x395,0);assert(!ScPopulationQueueMilestone(&t,ram));
+    ScPopulationSet(&t,ram,SC_GIGAGOPOLOIS_POPULATION-1);
+    assert(!ScPopulationQueueMilestone(&t,ram));
+    ScPopulationSet(&t,ram,SC_GIGAGOPOLOIS_POPULATION);
+    assert(ScPopulationQueueMilestone(&t,ram) && t.gigagopolois_unlocked && t.gigagopolois_announcing);
+    assert(ScPopulationMusicMilestone(&t)==1);
+    assert(ScPopulationMilestoneRead(&t,0x8ffd00,&value) && value=='G');
+    ScPopulationEncode(&t,data);ScPopulation both={0};
+    assert(ScPopulationDecode(&both,data,sizeof data) && both.gigagopolois_announcing);
+    t.gigagopolois_announcing=false;assert(ScPopulationMusicMilestone(&t)==2);
+    uint8_t cities[SC_POPULATION_CITIES_BYTES],sram[0x8000]={0};
+    ScPopulationCitiesInit(cities);ScPopulationCitySave(cities,sram,0,&t);
+    ScPopulation restored={0};assert(ScPopulationCityLoad(&restored,cities,sizeof cities,sram,0));
+    assert(restored.megagopolos_unlocked && restored.gigagopolois_unlocked && !restored.gigagopolois_announcing);
+    put(0x397,0);put(0x395,0);assert(!ScPopulationQueueMilestone(&restored,ram));
+    data[78]=0;assert(ScPopulationDecode(&t,data,sizeof data) && !t.megagopolos_unlocked);
+    data[78]=2;assert(!ScPopulationDecode(&t,data,sizeof data));
+    data[78]=4;assert(!ScPopulationDecode(&t,data,sizeof data));
+    data[78]=9;assert(!ScPopulationDecode(&t,data,sizeof data));
+    data[78]=7;assert(!ScPopulationDecode(&t,data,sizeof data));
+    memset(&t,0,sizeof t);ScPopulationSet(&t,ram,SC_GIGAGOPOLOIS_POPULATION);
+    assert(ScPopulationQueueMilestone(&t,ram) && t.megagopolos_announcing && !t.gigagopolois_unlocked);
+    puts("PASS: 10/100-million milestones, ordered native Wright visits, theme progression, modal priority, safe class index and old/new city/state saves");
+}
 int main(int argc,char **argv) {
     assert(argc==2); FILE *f=fopen(argv[1],"rb"); assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom); fclose(f);
@@ -341,6 +388,7 @@ int main(int argc,char **argv) {
     assert(ScPopulationCityLoad(&t,cities,sizeof cities,sram,0));
     assert(!ScPopulationCityLoad(&t,cities,sizeof cities-1,sram,0));
     cities[7]=2; assert(!ScPopulationCityLoad(&t,cities,sizeof cities,sram,0));
+    milestone_tests();
     live_census_tests();
     cached_census_tests();
     census_benchmark();

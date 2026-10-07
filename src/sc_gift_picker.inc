@@ -6,12 +6,7 @@ static ScViewport gift_view(void) {
   return v;
 }
 static ScGiftLayout gift_layout(void) {
-  ScViewport v=gift_view();ScGiftLayout l=ScDebugGiftLayout(v.width,v.height,0);
-  l.first=s_debug_gift_first;
-  if(l.first>8-l.rows)l.first=8-l.rows;
-  if(s_debug_gift_selected/2<l.first)l.first=s_debug_gift_selected/2;
-  if(s_debug_gift_selected/2>=l.first+l.rows)l.first=s_debug_gift_selected/2-l.rows+1;
-  s_debug_gift_first=l.first;return l;
+  ScViewport v=gift_view();return ScDebugGiftLayout(v.width,v.height);
 }
 static bool gift_mouse_point(SDL_Window *window,SDL_Renderer *renderer,double wx,double wy,int *x,int *y) {
   int ww,wh,dw,dh;SDL_GetWindowSize(window,&ww,&wh);SDL_GetRendererOutputSize(renderer,&dw,&dh);
@@ -38,7 +33,7 @@ static void render_gift_picker(SDL_Renderer *renderer) {
     panel=SDL_CreateTexture(renderer,SDL_PIXELFORMAT_ARGB8888,SDL_TEXTUREACCESS_STREAMING,l.w,l.h);
     if(!panel)return;panel_h=l.h;snesrecomp_sdl_set_texture_linear(panel,false);
   }
-  uint32_t pixels[88*360],colors[16];
+  uint32_t pixels[SC_DEBUG_GIFT_PANEL_WIDTH*SC_DEBUG_GIFT_PANEL_HEIGHT],colors[16];
   /* Gift OBJ palette zero is shared with the original city hand. */
   for(int i=0;i<16;++i) {
     unsigned c=g_ppu->cgram[128+i];
@@ -54,34 +49,27 @@ static void render_gift_picker(SDL_Renderer *renderer) {
     else if(x==2 || y==2 || x==l.w-3 || y==l.h-3)ci=edge;
     pixels[y*l.w+x]=ci;
   }
-  gift_text(pixels,l.w,12,5,"PRESENTS",light);
-  for(int row=0;row<l.rows;++row)for(int col=0;col<2;++col) {
-    int i=(l.first+row)*2+col;if(i>=SC_DEBUG_GIFT_COUNT)continue;
+  gift_text(pixels,l.w,(l.w-8*8)/2,5,"PRESENTS",light);
+  for(int row=0;row<l.rows;++row)for(int col=0;col<l.cols;++col) {
+    int i=row*l.cols+col;if(i>=SC_DEBUG_GIFT_COUNT)continue;
     int bx=8+col*40,by=16+row*40;
     for(int y=0;y<32;++y)for(int x=0;x<32;++x) {
       unsigned ci=icons[i][y*32+x];
       pixels[(by+y)*l.w+bx+x]=ci?colors[ci]:paper;
     }
-    if(i==s_debug_gift_selected)for(int y=-1;y<=32;++y)for(int x=-1;x<=32;++x) {
-      bool corner=(x==-1 || x==32)?(y<5 || y>26):(y==-1 || y==32) && (x<5 || x>26);
-      if(corner)pixels[(by+y)*l.w+bx+x]=0xffffff90;
+    if(i==s_debug_gift_selected) {
+      ScGiftBounds b=ScDebugGiftIconBounds(icons[i]);
+      for(int y=-1;y<=b.h;++y)for(int x=-1;x<=b.w;++x) {
+        bool corner=(x==-1 || x==b.w)?(y<5 || y>b.h-6):
+          (y==-1 || y==b.h) && (x<5 || x>b.w-6);
+        if(corner)pixels[(by+b.y+y)*l.w+bx+b.x+x]=0xffffff90;
+      }
     }
   }
-  /* The original 8px lettering, wrapped inside the two-column box. */
-  const char *name=ScDebugGiftNames[s_debug_gift_selected];char first[11]={0},second[11]={0};
-  size_t n=strlen(name),cut=n;
-  if(cut>10) {cut=10;while(cut && name[cut]!=' ')--cut;if(!cut)cut=10;}
-  memcpy(first,name,cut);
-  if(cut<n)snprintf(second,sizeof second,"%s",name+cut+(name[cut]==' '));
+  /* The original 8px lettering; every gift name fits the expanded box. */
+  const char *name=ScDebugGiftNames[s_debug_gift_selected];
   int ty=16+l.rows*40;
-  gift_text(pixels,l.w,(l.w-(int)strlen(first)*8)/2,ty,first,light);
-  if(second[0])gift_text(pixels,l.w,(l.w-(int)strlen(second)*8)/2,ty+8,second,light);
-  for(int direction=0;direction<2;++direction) {
-    bool enabled=direction?l.first+l.rows<8:l.first>0;if(!enabled)continue;
-    int top=direction?l.h-6:5;
-    for(int y=0;y<3;++y)for(int x=0;x<=y*2;++x)
-      pixels[(top+(direction?2-y:y))*l.w+79-y+x]=light;
-  }
+  gift_text(pixels,l.w,(l.w-(int)strlen(name)*8)/2,ty,name,light);
   SDL_UpdateTexture(panel,NULL,pixels,l.w*4);
   int dw,dh;SDL_GetRendererOutputSize(renderer,&dw,&dh);
   ScVideoRect dest=ScVideoDestination(v,dw,dh);double sx=(double)dest.w/v.width,sy=(double)dest.h/v.height;

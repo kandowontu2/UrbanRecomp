@@ -59,23 +59,36 @@ bool ScDebugGiftIcons(uint8_t icons[SC_DEBUG_GIFT_COUNT][32*32],const uint8_t *r
     }
     free(scratch);return true;
 }
-ScGiftLayout ScDebugGiftLayout(int width,int height,int selected) {
-    /* Keep the original two columns, 32px images and 8px gaps. Grow upward
-     * from the original popup's bottom, scrolling when eight rows won't fit. */
-    int rows=(height-56)/40;if(rows<2)rows=2;if(rows>8)rows=8;
-    int h=40*rows+40,y=height-h-8;if(y<8)y=8;
-    int x=56;if(x+88>width-8)x=width-96;
-    int first=selected/2-rows+1;if(first<0)first=0;if(first>8-rows)first=8-rows;
-    return (ScGiftLayout){x,y,88,h,rows,first};
+ScGiftBounds ScDebugGiftIconBounds(const uint8_t icon[32*32]) {
+    int left=32,top=32,right=-1,bottom=-1;
+    for(int y=0;y<32;++y)for(int x=0;x<32;++x)if(icon[y*32+x]) {
+        if(x<left)left=x;if(x>right)right=x;
+        if(y<top)top=y;if(y>bottom)bottom=y;
+    }
+    return right<0?(ScGiftBounds){0,0,32,32}:
+        (ScGiftBounds){left,top,right-left+1,bottom-top+1};
+}
+ScGiftLayout ScDebugGiftLayout(int width,int height) {
+    /* Native 32px images and 8px gaps, with all 15 choices visible even on
+     * the original 224px canvas. Anchor beside the toolbox and grow upward. */
+    int w=SC_DEBUG_GIFT_PANEL_WIDTH,h=SC_DEBUG_GIFT_PANEL_HEIGHT;
+    int y=height-h-8;if(y<8)y=8;
+    int x=56;if(x+w>width-8)x=width-w-8;
+    return (ScGiftLayout){x,y,w,h,SC_DEBUG_GIFT_ROWS,SC_DEBUG_GIFT_COLUMNS};
 }
 int ScDebugGiftHit(ScGiftLayout l,int x,int y) {
     x-=l.x+8;y-=l.y+16;
-    if(x<0 || y<0 || x>=72 || y>=l.rows*40 || x%40>=32 || y%40>=32)return -1;
-    int gift=(l.first+y/40)*2+x/40;
+    if(x<0 || y<0 || x>=l.cols*40 || y>=l.rows*40 || x%40>=32 || y%40>=32)return -1;
+    int gift=y/40*l.cols+x/40;
     return gift<SC_DEBUG_GIFT_COUNT?gift:-1;
 }
 int ScDebugGiftMove(int selected,int dx,int dy) {
-    if(dx) {int next=selected+dx;if(next>=0 && next<SC_DEBUG_GIFT_COUNT && next/2==selected/2)selected=next;}
-    if(dy) {int next=selected+dy*2;if(next>=0 && next<SC_DEBUG_GIFT_COUNT)selected=next;}
+    if(dx) {int next=selected+dx;if(next>=0 && next<SC_DEBUG_GIFT_COUNT &&
+        next/SC_DEBUG_GIFT_COLUMNS==selected/SC_DEBUG_GIFT_COLUMNS)selected=next;}
+    if(dy) {
+        int next=selected+dy*SC_DEBUG_GIFT_COLUMNS;
+        if(next>=0 && next/SC_DEBUG_GIFT_COLUMNS<SC_DEBUG_GIFT_ROWS)
+            selected=next<SC_DEBUG_GIFT_COUNT?next:SC_DEBUG_GIFT_COUNT-1;
+    }
     return selected;
 }

@@ -124,6 +124,7 @@ static ScFleet *s_fleet;
 #include "sc_land_type.h"
 #include "sc_test_city.h"
 static ScWorld s_world;
+static ScPopulation s_population;
 static ScWorldGuest s_world_guest;
 static bool s_perf_detail;
 static double s_perf_clock_ms,s_perf_raster_ms,s_perf_power_ms,s_perf_batches_ms,s_perf_population_ms;
@@ -164,7 +165,6 @@ static ScDebugGift s_debug_gift;
 static unsigned s_debug_gift_pending;
 static bool s_debug_gift_skip_dialog,s_debug_gift_open,s_debug_gift_click_owned;
 static int s_debug_gift_selected;
-static int s_debug_gift_first;
 static bool s_debug_gift_pointer;
 static double s_debug_gift_mouse_x,s_debug_gift_mouse_y;
 static uint16_t s_debug_gift_pad_owned;
@@ -596,6 +596,8 @@ static uint8_t bus_read(void *mem, uint32_t adr) {
   if(s_rom_is_us && g_cpu && ScCitySetupRomRead(g_snes->cart->rom,g_snes->cart->romSize,
         g_ram,((uint32_t)g_cpu->k<<16)|g_cpu->pc,adr,&world_value))return world_value;
   if (ScJourneyMenuRead(adr,g_ram[0x14],&world_value) ||
+       ((s_population.megagopolos_announcing || s_population.gigagopolois_announcing) &&
+        ScPopulationMilestoneRead(&s_population,adr,&world_value)) ||
        (s_world.journey_announcing && ScJourneyMessageRead(s_world.journey_notice,adr,&world_value)))
     return world_value;
   uint8_t v = snes_read(g_snes, adr);
@@ -2619,7 +2621,6 @@ static ScDevelopmentBatches *s_development_batches;
 static bool s_development_batch_reference;
 static bool s_native_bind_eager;
 static uint64_t s_native_bind_deferred,s_native_bind_fallback;
-static ScPopulation s_population;
 static ScPopulationCensus *s_population_census;
 static ScRefreshClock s_population_clock;
 static ScPowerRefresh s_power_refresh;
@@ -2741,6 +2742,7 @@ static bool test_city_begin_load(void) {
   uint32_t n;const uint8_t *record=ScSram_Extra(&n);
   if(!n) {
     s_test_setup=true;
+    if(!getenv("SC_LAND_TYPE"))s_land_type=SC_LAND_NATIVE;
     return true;
   }
   ScWorld *world=malloc(sizeof *world);ScPopulation population;
@@ -4620,6 +4622,7 @@ static bool run_one_frame(void) {
           save_large_map_setting();s_size_selecting=false;s_speed_selecting=true;
           ScDevelopmentMenuSet(true);ram_set_w(0x3e,s_speed_selection);cpu->pc=0xd370;
         } else if(!s_speed_selecting && selected>=1 && selected<=3) {
+          if(!getenv("SC_LAND_TYPE"))s_land_type=SC_LAND_NATIVE;
           s_size_game_choice=selected;
           if(selected==3) { /* Journey always begins at the original size. */
             s_speed_selecting=true;ScDevelopmentMenuSet(true);ram_set_w(0x3e,s_speed_selection);
@@ -4676,6 +4679,18 @@ static bool run_one_frame(void) {
         cpu->a=0xfd00; /* virtual text record through the native 24-column writer */
       if(cpu->k==1 && cpu->pc==0xa63c && s_world.journey_announcing && ram_w(0x397)==4) {
         s_world.journey_notice=0;s_world.journey_announcing=false;
+      }
+      if(cpu->k==1 && cpu->pc==0x8976 && cpu->dp==0 && cpu->db==0 &&
+          host_map_screen_live() && !s_world.journey_announcing)
+        if(ScPopulationQueueMilestone(&s_population,g_ram))
+          fprintf(stderr,"[milestone] %s at population %llu\n",s_population.gigagopolois_announcing?"Gigagopolois":"Megagopolos",(unsigned long long)s_population.value);
+      if(cpu->k==1 && cpu->pc==0xe59b &&
+          (s_population.megagopolos_announcing || s_population.gigagopolois_announcing) && ram_w(0x397)==4)
+        cpu->a=0xfd00;
+      if(cpu->k==1 && cpu->pc==0xa63c &&
+          (s_population.megagopolos_announcing || s_population.gigagopolois_announcing) && ram_w(0x397)==4) {
+        s_population.megagopolos_announcing=s_population.gigagopolois_announcing=false;
+        ScMusicCityMilestone(ScPopulationMusicMilestone(&s_population));
       }
     }
     if (s_rom_is_us && cpu->k==3 && cpu->pc==0x80eb) {
@@ -5019,11 +5034,15 @@ static bool run_one_frame(void) {
       }
       if(s_city_loading && cpu->k==3 && (cpu->pc==0xc8b3 || cpu->pc==0xc8e6))
         ram_set_w(0x421,s_loading_slot+1);
-      if (cpu->k==3 && (cpu->pc==0xce2e || cpu->pc==0xc8c8)) {
-        ScRendererResetCamera(&s_custom_renderer);
+      if (cpu->k==3 && (cpu->pc==0xce2e || cpu->pc==0xc8c8 || cpu->pc==0xc633)) {
         ScRendererBeginMapLoad(&s_custom_renderer);
+        ScRendererResetMapView(&s_custom_renderer);s_custom_video.map_zoom=1;
+        s_keyboard_pan_latched=false;s_middle_pan=(ScMousePan){0};
+        s_population.megagopolos_unlocked=s_population.megagopolos_announcing=false;
+        s_population.gigagopolois_unlocked=s_population.gigagopolois_announcing=false;
+        ScMusicCityMilestone(false);
         reset_refresh_clocks();
-        ScWorldReset(&s_world);
+        if(cpu->pc!=0xc633)ScWorldReset(&s_world);
       }
       if (cpu->k==3 && cpu->pc==0xcf89) ScWorldMirror(&s_world,g_ram);
       bool power_writeback=cpu->k==3 && cpu->pc==0xb152 && s_world.active;
@@ -5057,6 +5076,7 @@ static bool run_one_frame(void) {
             fprintf(stderr,"[test city] loaded saved City 3, population %llu\n",(unsigned long long)s_population.value);
           }
         } else {population_saved_city(false);world_saved_city(false);}
+        ScMusicCityMilestone(ScPopulationMusicMilestone(&s_population));
         if(!s_world.calendar_year)s_world.calendar_year=ram_w(0xb53);
         ScWorldYearMirror(&s_world,g_ram);
       }
@@ -7882,6 +7902,7 @@ static bool load_state(const char *path) {
 #endif
   if (ok) {
     unsigned screen=ram_w(0x14);
+    ScMusicCityMilestone(ScPopulationMusicMilestone(&s_population));
     ScMusicLock();ScMusicRestoreLocked(g_ram[8],!host_map_screen_live() || (ram_w(0x195)&8)!=0);ScMusicUnlock();
     s_journey_arming=s_world.journey && ((screen>=4 && screen<=9) || screen==21 || screen==22);
     s_build_active = s_build_pending = s_build_cancelled = false;
@@ -8044,6 +8065,10 @@ static const int kClassOverrides[] = { -1, 0, 1, 2, 3, 4, 5 };
 static void menu_action_clear_milestones(void) {
   g_ram[0x0cbd] = 0; g_ram[0x0cbf] = 0;
   g_ram[0x0cc1] = 0; g_ram[0x0cc3] = 0;
+  /* An active typewriter still reads its virtual text until native return. */
+  if(!s_population.megagopolos_announcing && !s_population.gigagopolois_announcing) {
+    s_population.megagopolos_unlocked=s_population.gigagopolois_unlocked=false;ScMusicCityMilestone(0);
+  }
   fprintf(stderr, "[menu] cleared milestone latches $0cbd/$0cbf/$0cc1/$0cc3\n");
 }
 
@@ -11006,7 +11031,7 @@ int main(int argc, char **argv) {
     s_terrain_style=style?atoi(style):s_launch_settings.terrain_style;
     if(s_terrain_style<0 || s_terrain_style>=SC_TERRAIN_STYLES)s_terrain_style=0;}
   {const char *land=getenv("SC_LAND_TYPE");
-    s_land_type=land?atoi(land):s_launch_settings.land_type;
+    s_land_type=land?atoi(land):SC_LAND_NATIVE;
     if(s_land_type<0 || s_land_type>=SC_LAND_TYPES)s_land_type=0;}
   s_custom_renderer.world=&s_world;
   s_custom_renderer.sylt = s_ninth_scenario;   /* its pin and mark */
@@ -11182,6 +11207,7 @@ int main(int argc, char **argv) {
   {
     if(audio_dev && want_music_thread) music_thread=ScMusicStart(g_snes->apu,&audio);
     if(music_thread && restored_music) {
+      ScMusicCityMilestone(ScPopulationMusicMilestone(&s_population));
       ScMusicLock();ScMusicRestoreLocked(g_ram[8],!host_map_screen_live() || (ram_w(0x195)&8)!=0);ScMusicUnlock();
     } else if(restored_music) {
       ScMusicLoadRestored(NULL);
@@ -11429,7 +11455,7 @@ int main(int argc, char **argv) {
         continue;
       }
       if(!s_menu_open && !s_build_active && !s_build_pending && !s_clip_drag && !s_clip_pending && host_map_screen_live() &&
-         !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3]) {
+         (s_custom_renderer.land_view_frame || (!ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3]))) {
         if(ev.type==SDL_MOUSEWHEEL && (SDL_GetModState()&KMOD_CTRL)) {
 #if SNESRECOMP_SDL3
           double amount=ev.wheel.y;
@@ -11568,18 +11594,12 @@ int main(int argc, char **argv) {
                 s_debug_gift_pending=(unsigned)gift+1;
                 s_menu_open=s_debug_gift_open=false;s_debug_gift_click_owned=true;
               }
-            } else if(ev.type==SDL_MOUSEBUTTONDOWN && cx>=l.x+73 && cx<l.x+84) {
-              if(cy>=l.y+3 && cy<l.y+14)s_debug_gift_selected=ScDebugGiftMove(s_debug_gift_selected,0,-1);
-              if(cy>=l.y+l.h-14 && cy<l.y+l.h-3)s_debug_gift_selected=ScDebugGiftMove(s_debug_gift_selected,0,1);
             }
           }
         } else {
           int row=settings_mouse_row(window,renderer,x,y);
           if(row>=0) {s_menu_selected=row;if(ev.type==SDL_MOUSEBUTTONDOWN)setting_activate(&s_settings[row]);}
         }
-      }
-      if(s_menu_open && s_debug_gift_open && ev.type==SDL_MOUSEWHEEL) {
-        s_debug_gift_selected=ScDebugGiftMove(s_debug_gift_selected,0,ev.wheel.y>0?-1:1);
       }
 
       /* F4: dump WRAM to a fixed path right now, on demand -- for pinning
@@ -11868,19 +11888,23 @@ int main(int argc, char **argv) {
       mouse_city_hit=inside && !mouse_navigation_hit && s_mouse_dialog==SC_MOUSE_DIALOG_NONE && s_custom_video.enabled &&
           ScRendererCityPoint(&s_custom_renderer,g_ram,mouse_target_x,mouse_target_y,
               &mouse_city_x,&mouse_city_y);
+      int view_x,view_y;
+      bool mouse_view_hit=inside && s_custom_video.enabled && s_mouse_dialog==SC_MOUSE_DIALOG_NONE &&
+          ScRendererViewPoint(&s_custom_renderer,g_ram,mouse_target_x,mouse_target_y,&view_x,&view_y);
       static bool last_inside;
       static int last_x, last_y;
       const bool right = focused && (mouse_buttons & SDL_BUTTON(SDL_BUTTON_RIGHT));
       const bool middle = focused && (mouse_buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE));
       const bool middle_was_active=s_middle_pan.active;
       const bool city_pan_allowed=focused && s_custom_video.enabled && !mouse_raw_left && !s_build_active && !s_build_pending &&
-          !s_clip_drag && !s_clip_pending && host_map_screen_live() && !ram_w(0x379) &&
+          !s_clip_drag && !s_clip_pending && host_map_screen_live() &&
           s_mouse_dialog==SC_MOUSE_DIALOG_NONE && !s_custom_renderer.advisor_frame &&
-          (s_middle_pan.active || (!ram_w(0xd7) && !g_ram[0x391] && !g_ram[0xe3] && !s_custom_renderer.map_hold));
+          !s_custom_renderer.map_hold && (s_custom_renderer.land_view_frame ||
+          (s_middle_pan.active || (!ram_w(0x379) && !ram_w(0xd7) && !g_ram[0x391] && !g_ram[0xe3])));
       const bool preview_pan_allowed=preview_live && focused && !mouse_raw_left;
       const bool pan_allowed=city_pan_allowed || preview_pan_allowed;
       const bool pan_land=inside && !mouse_navigation_hit && !mouse_clip_hit &&
-          (s_custom_video.enabled?mouse_city_hit:(!ram_w(0x1d7) || (mouse_target_x>=56 && mouse_target_y>=48)));
+          (s_custom_video.enabled?(mouse_city_hit || mouse_view_hit):(!ram_w(0x1d7) || (mouse_target_x>=56 && mouse_target_y>=48)));
       const bool pan_held=middle || (right && !s_clip_tool);
       double sensitivity=(double)s_mouse_sensitivity/100*s_pan_max_tiles*scroll_key_multiplier(keys);
       double zoom=s_custom_renderer.map_zoom>0?s_custom_renderer.map_zoom:1;
@@ -11916,7 +11940,7 @@ int main(int argc, char **argv) {
            * full world coordinate, never this safe native cursor proxy. */
           g_ram[0x01eb] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_x<0?0:mouse_target_x>255?255:mouse_target_x);
           g_ram[0x01ed] = (uint8_t)(mouse_city_hit ? 128 : mouse_target_y<0?0:mouse_target_y>223?223:mouse_target_y);
-          if (mouse_city_hit && !right && ram_w(0x020d)<=15) {
+          if ((mouse_city_hit || mouse_view_hit) && !right && ram_w(0x020d)<=15) {
             s_custom_renderer.pointer_active=true;
             s_custom_renderer.pointer_x=mouse_target_x;
             s_custom_renderer.pointer_y=mouse_target_y;
@@ -11959,7 +11983,7 @@ int main(int argc, char **argv) {
           }
           if (buttons_up && !middle_was_active && !keys[pan_key] && host_map_screen_live()) {
             /* The visible HUD occupies the top and left edges. */
-            const bool hud_hidden = !(g_ram[0x01d7] | g_ram[0x01d8]);
+            const bool hud_hidden = s_custom_renderer.land_view_frame || !(g_ram[0x01d7] | g_ram[0x01d8]);
             int canvas_x=mouse_target_x+pointer_view.core_x;
             int canvas_y=mouse_target_y+pointer_view.core_y;
             if (canvas_x >= pointer_view.width-8) mouse_edge_input |= kPad_Right;
@@ -11967,7 +11991,7 @@ int main(int argc, char **argv) {
             if ((hud_hidden || pointer_view.core_x>0) && canvas_x < 8) mouse_edge_input |= kPad_Left;
             if ((hud_hidden || pointer_view.core_y>0) && canvas_y < 8) mouse_edge_input |= kPad_Up;
             if(mouse_edge_input && s_custom_video.enabled) {
-              if(s_custom_renderer.city_input && !s_custom_renderer.map_hold) {
+              if((s_custom_renderer.city_input || s_custom_renderer.land_view_frame) && !s_custom_renderer.map_hold) {
                 double zoom=s_custom_renderer.map_zoom>0?s_custom_renderer.map_zoom:1;
                 double speed=2/zoom*scroll_key_multiplier(keys);
                 int ex=((mouse_edge_input&kPad_Right)!=0)-((mouse_edge_input&kPad_Left)!=0);
@@ -12095,13 +12119,14 @@ int main(int argc, char **argv) {
         (keys[SDL_SCANCODE_UP]?kPad_Up:0);
     bool pan_was_latched=s_keyboard_pan_latched;
     bool keyboard_pan_allowed=s_rom_is_us && s_custom_video.enabled &&
-        s_custom_renderer.city_input && !s_custom_renderer.advisor_frame &&
+        (s_custom_renderer.city_input || s_custom_renderer.land_view_frame) && !s_custom_renderer.advisor_frame &&
         !s_custom_renderer.map_hold && !s_city_present_pending && !s_menu_open &&
-        !ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3] &&
+        (s_custom_renderer.land_view_frame || (!ram_w(0xd7) && !ram_w(0x379) && !g_ram[0x391] && !g_ram[0xe3])) &&
         !s_middle_pan.active && !s_build_active && !s_build_pending &&
         !s_clip_drag && !s_clip_pending && !mouse_raw_left;
-    s_keyboard_pan_latched=keyboard_pan_allowed && keys[pan_key] &&
-        (s_keyboard_pan_latched || keyboard_pan_dirs);
+    s_keyboard_pan_latched=keyboard_pan_allowed &&
+        (s_custom_renderer.land_view_frame?keyboard_pan_dirs:
+        keys[pan_key] && (s_keyboard_pan_latched || keyboard_pan_dirs));
     if(s_keyboard_pan_latched) {
       /* Consume the physical shortcut's bindings only. Keep standalone X
        * and controller buttons unchanged. Holding X after releasing arrows
@@ -12207,7 +12232,7 @@ int main(int argc, char **argv) {
           ScDebugGiftButton(mouse_target_x,mouse_target_y) && s_mouse_enabled && s_rom_is_us &&
           host_map_screen_live() && ram_w(0x1d7) && !ram_w(0xd7) && !ram_w(0x379) &&
           s_mouse_dialog==SC_MOUSE_DIALOG_NONE && !s_build_active && !s_build_pending && !s_clip_pending) {
-        s_menu_open=s_debug_gift_open=true;s_debug_gift_selected=0;s_debug_gift_first=0;
+        s_menu_open=s_debug_gift_open=true;s_debug_gift_selected=0;
         s_debug_gift_pointer=true;s_debug_gift_mouse_x=mouse_target_x;s_debug_gift_mouse_y=mouse_target_y;
         s_debug_gift_click_owned=true;mouse_clip_consumed=true;mouse_edge_input=0;
         pressed=false;
@@ -12398,6 +12423,7 @@ int main(int argc, char **argv) {
     bool fast_forward = keys[SDL_SCANCODE_TAB] || test_fast_forward;
     bool shift_fast_forward=fast_forward && (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]);
     bool maximum_fast_forward=shift_fast_forward && (keys[SDL_SCANCODE_LCTRL] || keys[SDL_SCANCODE_RCTRL]);
+    ScMusicCityMilestone(ScPopulationMusicMilestone(&s_population));
     s_wait_lane_enabled=fast_forward;
     /* Ctrl accelerates scrolling 3x; Ctrl+Shift uses 10x. */
     s_scroll_multiplier=host_map_screen_live() && !s_menu_open?(int)scroll_key_multiplier(keys):1;
@@ -12592,7 +12618,9 @@ int main(int argc, char **argv) {
     /* Audio: drain one frame's worth of DSP output at the native SNES rate,
      * same pacing model as snesrecomp/cosim/ref_driver.c's deterministic
      * consumer, queued to the SDL audio device instead of discarded. */
-    if(music_thread) ScMusicGuestFrame(sc_audio_guest_cycle(),s_menu_open);
+    /* Choosing a debug gift freezes the city, while the music worker keeps
+     * the current song and its playback position advancing in real time. */
+    if(music_thread) ScMusicGuestFrame(sc_audio_guest_cycle(),s_menu_open && !s_debug_gift_open);
     if (audio_dev && !music_thread) {
       /* Don't accrue playback debt for wall-clock time the emulator wasn't
        * actually running: while the settings menu is open no frames are

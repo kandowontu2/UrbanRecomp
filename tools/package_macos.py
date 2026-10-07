@@ -9,6 +9,7 @@ import hashlib
 from pathlib import Path
 import plistlib
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -43,10 +44,16 @@ shutil.copytree(args.build_dir/'assets',resources/'assets')
 for name in ('sylt_map.bin','sylt_card.bin','PROVENANCE.md'):
     shutil.copy2(root/'sylt_graphics'/name,resources/'sylt_graphics'/name)
 music=resources/'music/restored';music.mkdir(parents=True)
-for n in range(1,20):
+track_count=0
+for n in range(1,22):
     track=args.restored_music_dir/f'scity-msu1-{n}.pcm'
-    if track.read_bytes()[:4]!=b'MSU1':raise SystemExit('Invalid restored music: '+str(track))
+    if n>=20 and not track.is_file():continue
+    with track.open('rb') as source:header=source.read(8)
+    size=track.stat().st_size
+    if len(header)!=8 or header[:4]!=b'MSU1' or size<12 or (size-8)%4 or struct.unpack_from('<I',header,4)[0]>=(size-8)//4:
+        raise SystemExit('Invalid music: '+str(track))
     shutil.copy2(track,music/track.name)
+    track_count+=1
 for name in ('LICENSE','CREDITS.md','CHANGELOG.md','THIRD_PARTY_NOTICES.md'):
     shutil.copy2(root/name,resources/name)
 for name in ('PC_ENHANCEMENTS.md','TEST_CITY_LAYOUT.md','PLACEMENT_EFFECTS.md','GPU_PERFORMANCE.md','NATIVE_EXECUTION.md','MACOS_BUILD.md'):
@@ -81,7 +88,7 @@ with (app/'Contents/Info.plist').open('wb') as f:plistlib.dump(info,f)
     'Urban Recomp Enhanced '+args.version+' for macOS 11 or newer\n\n'
     'Universal app: Apple Silicon and Intel. Copy UrbanRecomp.app to Applications\n'
     'and select your own clean US SimCity SNES ROM in the launcher.\n'
-    'All assets, runtime code and 19 restored tracks are included; no ROM or saves.\n'
+    f'All assets, runtime code and {track_count} music tracks are included; no ROM or saves.\n'
     'Settings and saves use ~/Library/Application Support/UrbanRecomp/UrbanRecomp/.\n'
     'This test build is ad-hoc signed, not Developer ID signed or notarized.\n'
     'If macOS blocks opening, use System Settings > Privacy & Security > Open Anyway.\n'
@@ -98,4 +105,4 @@ if out.exists():raise SystemExit('Preserve existing archive: '+str(out))
 subprocess.run(['ditto','-c','-k','--sequesterRsrc','--keepParent',str(app),str(out)],check=True)
 digest=hashlib.sha256(out.read_bytes()).hexdigest()
 Path(str(out)+'.sha256').write_text(digest+'  '+out.name+'\n')
-print(f'{out}: {out.stat().st_size/1e6:.1f} MB; universal native app, 19 restored tracks')
+print(f'{out}: {out.stat().st_size/1e6:.1f} MB; universal native app, {track_count} music tracks')

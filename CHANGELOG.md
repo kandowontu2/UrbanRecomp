@@ -1,5 +1,29 @@
 # Enhanced fork changelog
 
+## 1.2.0 Enhanced Beta 23 — 2026-10-06
+
+- Add the 10-million-population Megagopolos milestone with an original-style
+  Dr. Wright announcement, saved one-time reward state and a new city theme:
+  Markify's restoration of Super Mario Kart's unused Vanilla Lake beta song.
+  Include the looping PCM in the single EXE; retain original menu, disaster
+  and fanfare tracks and real-time music during fast-forward.
+  Balance the unused Vanilla Lake recording with the restored city music,
+  reducing it by 7.4 dB from the initial milestone preview.
+- Add Gigagopolois at 100 million with its own saved Dr. Wright celebration
+  and LOOP16B city theme, from LOOP816 (2023), by artist/composer/publisher
+  Soyo Oka. Earn the 10-million reward first if both thresholds are crossed
+  together; keep both additional themes embedded in the local single EXE.
+  Balance LOOP16B with the restored city music, reducing it by 5.5 dB from
+  the initial milestone preview while preserving its arrangement and fade.
+- Align gift-selection corners to the visible icon art while keeping generous
+  click targets. Allow free mouse/keyboard movement and zoom in the top-toolbar
+  View tool, with native-sized building labels at reduced city zooms.
+- Show all 15 debug gifts in a four-column Present palette without scrolling.
+  Keep the current city music playing while that picker is open.
+- Reset camera offsets and zoom when opening a new map, including generated
+  Test City 3. Default new cities to Native terrain while retaining saved themes.
+  Make Mars redder and Basalt ground much darker, with seasonal variations.
+
 ## 1.2.0 Enhanced Beta 22 — 2026-10-06
 
 - Reduce large-map Tab overhead by keeping shared arithmetic and electrical
