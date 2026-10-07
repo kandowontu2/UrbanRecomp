@@ -5,7 +5,7 @@ on:
     inputs:
       source_ref:
         description: Enhanced source branch, tag or commit to build
-        default: codex/placement-and-mouse-menus
+        default: main
         required: true
         type: string
       runner:
@@ -26,7 +26,7 @@ on:
         type: string
       version:
         description: Mac package version label
-        default: v1.2.0-enhanced.23
+        default: enhanced-v1.0.0
         required: true
         type: string
 

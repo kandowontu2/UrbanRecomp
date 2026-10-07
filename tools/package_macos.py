@@ -12,6 +12,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import re
 
 root=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser(description=__doc__)
@@ -77,9 +78,12 @@ for size in (16,32,128,256,512):
         subprocess.run(['sips','-z',str(size*scale),str(size*scale),str(root/'assets/icon.png'),
                         '--out',str(iconset/name)],check=True,stdout=subprocess.DEVNULL)
 subprocess.run(['iconutil','-c','icns',str(iconset),'-o',str(resources/'UrbanRecomp.icns')],check=True)
+stable=re.fullmatch(r'enhanced-v(\d+\.\d+\.\d+)',args.version)
+short_version=stable.group(1) if stable else '1.2.0'
+bundle_version=short_version if stable else '1.2.'+args.version.rsplit('.',1)[-1]
 info=dict(CFBundleExecutable='UrbanRecomp',CFBundleIdentifier='io.github.kandowontu2.UrbanRecomp',
-    CFBundleName='UrbanRecomp',CFBundleDisplayName='Urban Recomp',CFBundlePackageType='APPL',
-    CFBundleShortVersionString='1.2.0',CFBundleVersion='1.2.'+args.version.rsplit('.',1)[-1],
+    CFBundleName='UrbanRecomp Enhanced',CFBundleDisplayName='UrbanRecomp Enhanced',CFBundlePackageType='APPL',
+    CFBundleShortVersionString=short_version,CFBundleVersion=bundle_version,
     CFBundleIconFile='UrbanRecomp.icns',LSMinimumSystemVersion='11.0',
     LSApplicationCategoryType='public.app-category.simulation-games',NSHighResolutionCapable=True,
     SDL_FILESYSTEM_BASE_DIR_TYPE='resource')
@@ -90,7 +94,7 @@ with (app/'Contents/Info.plist').open('wb') as f:plistlib.dump(info,f)
     'and select your own clean US SimCity SNES ROM in the launcher.\n'
     f'All assets, runtime code and {track_count} music tracks are included; no ROM or saves.\n'
     'Settings and saves use ~/Library/Application Support/UrbanRecomp/UrbanRecomp/.\n'
-    'This test build is ad-hoc signed, not Developer ID signed or notarized.\n'
+    'This app is ad-hoc signed, not Developer ID signed or notarized.\n'
     'If macOS blocks opening, use System Settings > Privacy & Security > Open Anyway.\n'
     'Full credits and licenses are in Contents/Resources.\n'
     'Rendering uses Metal presentation with the CPU terrain/field fallback;\n'

@@ -18,6 +18,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('archive', type=Path)
 parser.add_argument('--output', type=Path, help='Portable EXE path; never replaces an existing file')
 parser.add_argument('--compiler-dir', type=Path, default=Path('C:/Strawberry/c/bin'))
+parser.add_argument('--version', help='Enhanced product version, such as 1.0.0')
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 output = args.output or args.archive.with_suffix('.exe')
@@ -63,7 +64,39 @@ finally:
 build = root / '.local/bundle-build'
 build.mkdir(parents=True, exist_ok=True)
 resource = build / 'portable.rc'
-resource.write_text('1 ICON "' + (root/'assets/urbanrecomp.ico').as_posix() + '"\n')
+rc='1 ICON "' + (root/'assets/urbanrecomp.ico').as_posix() + '"\n'
+if args.version:
+    parts=args.version.split('.')
+    if len(parts)!=3 or not all(s.isascii() and s.isdigit() and 0<=int(s)<=65535 for s in parts):
+        raise ValueError('Expected three numeric version components')
+    numeric=','.join(str(int(s)) for s in parts)+',0'
+    rc+=f'''1 VERSIONINFO
+ FILEVERSION {numeric}
+ PRODUCTVERSION {numeric}
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+ BLOCK "StringFileInfo"
+ BEGIN
+  BLOCK "040904b0"
+  BEGIN
+   VALUE "FileDescription", "UrbanRecomp Enhanced"
+   VALUE "FileVersion", "{args.version}"
+   VALUE "ProductName", "UrbanRecomp Enhanced"
+   VALUE "ProductVersion", "{args.version}"
+   VALUE "OriginalFilename", "UrbanRecomp.exe"
+  END
+ END
+ BLOCK "VarFileInfo"
+ BEGIN
+  VALUE "Translation", 0x409, 1200
+ END
+END
+'''
+resource.write_text(rc)
 # Relative tool inputs avoid windres' shell preprocessing of a spaced path.
 subprocess.run([str(args.compiler_dir/'windres.exe'), '-I', '.', '-i', '.local/bundle-build/portable.rc',
                 '-o', '.local/bundle-build/portable-icon.o'], cwd=root, check=True)

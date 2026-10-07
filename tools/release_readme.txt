@@ -1,5 +1,9 @@
-URBAN RECOMP ENHANCED
+URBANRECOMP ENHANCED 1.0
 ==========================================================
+
+The first stable Enhanced release consolidates Enhanced Betas 1-23.
+Enhanced 1.0 is versioned separately from the upstream UrbanRecomp engine.
+Downloads: https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.0
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
 The runtime, assets, documentation, credits and restored soundtrack are
@@ -88,7 +92,7 @@ money cheats, terrain restrictions and transport joins remain intact.
 The mouse hand waits for menu graphics during the title-screen exit fade,
 preventing a corrupted logo tile from appearing at the pointer after a click.
 
-Beta 17 restores the original cartridge terrain generator for 120x100.
+Native generation retains the original cartridge terrain generator for 120x100.
 Expanded maps extend its actual river walks, lake/coast brushes, forest
 scatter and shoreline fitting across the full world, adding more features
 while keeping their original tile sizes. Rivers continue across map bounds;
@@ -118,13 +122,13 @@ window events throughout placement.
 Enhanced fork: https://github.com/kandowontu2/UrbanRecomp
 Original project: https://github.com/blackerking/UrbanRecomp
 
-Beta 16: X + arrow keys uses the free camera over the full map,
+X + arrow keys uses the free camera over the full map,
 including after mouse panning. Zoom stays unchanged; movement stops when the
 arrows stop. Ctrl scrolls at 3x; Ctrl+Shift scrolls at 10x. Both also apply to
 mouse edge scrolling and drag panning. Test City 3 now stays black during
 preparation and fades in with the sharp finished view and fixed-size HUD.
 
-Beta 15 additions: city development now runs in bounded batches distributed
+City development runs in bounded batches distributed
 across districts at every development speed, including Normal. Large cities
 no longer wait for a row-by-row sweep to reach their neighborhoods. Original
 growth, demand, power and land-value rules remain active; calendar and budget
@@ -255,7 +259,7 @@ Launcher die Sprache wÃ¤hlen. Gespeicherte StÃ¤dte liegen in
 urbanrecomp-us.srm.
 
 Land types: Native, Basalt (lava), Amazon (extra forests), Desert, Mars, Venus,
-Arctic and Swamp. Select LAND TYPE below GENERATION before starting a city;
+Arctic, Swamp and Moon. Select LAND TYPE below GENERATION before starting a city;
 terrain graphics stay with the saved city. Water/forest construction rules apply.
 Four difficulty levels include Super Hard, which starts with Medium's funds
 to offset its increased disaster rate. Starting funds double at each larger

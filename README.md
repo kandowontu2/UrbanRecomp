@@ -1,4 +1,4 @@
-# Urban Recomp
+# UrbanRecomp Enhanced
 
 <p align="center"><img src="assets/urbanrecomp_logo.png" alt="Urban Recomp" width="320"></p>
 
@@ -31,31 +31,30 @@ cities. Music runs on its own thread, with the restored 19-track set and
 the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) and
 [performance evidence and remaining limits](docs/GPU_PERFORMANCE.md).
 
-Download the Windows x64 package from
-[this fork's releases](https://github.com/kandowontu2/UrbanRecomp/releases).
-Beta 23 is one portable Windows EXE; run it and select your own clean US ROM.
+**UrbanRecomp Enhanced 1.0 is the first stable enhanced release.** Download the
+[Windows x64 EXE or universal macOS app](https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.0).
+The Windows package is one portable EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.
 The enhancements require the verified US ROM and the supported host execution
-path. Ctrl+wheel anchors Ctrl+wheel zoom to the actual mouse pointer in the city
-and map preview while retaining fixed HUD/menu sizes. Beta 19 introduced
-compiled C game execution and removed the 65816
+path. Ctrl+wheel anchors zoom to the actual mouse pointer in the city
+and map preview while retaining fixed HUD/menu sizes. Enhanced releases use
+compiled C game execution and omit the 65816
 interpreter from the release executable. Register and save-state layouts,
 memory access order and device clocks remain compatible. The independent
 interpreter is available only in explicit reference builds for testing.
 See [native execution and verification](docs/NATIVE_EXECUTION.md).
 For universal Mac app packaging and save locations, see the
 [macOS build notes](docs/MACOS_BUILD.md).
-Beta 18
-distributes development across city districts at Normal
+Development is distributed across city districts at Normal
 speed as well; its time allowance keeps development work bounded per frame.
 See the enhancement notes for current behavior and performance limits.
-Beta 17 restores original 120x100 terrain and extends its generator to larger
+Native generation retains original 120x100 terrain and extends its generator to larger
 maps at native feature scale. It also adds map numbers 00000â€“99999,
 sharp previews with zoom and drag panning, larger vehicle fleets, responsive
 large construction, and zoom-out sufficient to show the complete 3840x3200
 map. It also fixes title-click cursor corruption and tool-window backdrops.
-Enhanced releases are prereleases; see
+Version 1.0 consolidates Enhanced Betas 1–23; see
 [features, controls, save compatibility and testing limits](docs/PC_ENHANCEMENTS.md).
 
 **Adaptive Widescreen, the default renderer:** the shared Mods launcher offers
@@ -77,8 +76,9 @@ left to investigate, with the evidence already gathered for each.
 
 ## How it runs
 
-The map-selection screen offers GENERATION styles: Native,
-Procedural (the earlier generator), Islands, Lakes, Rivers and Fractal.
+The map-selection screen offers nine GENERATION styles: Native,
+Procedural (the earlier generator), Islands, Lakes, Rivers, Fractal,
+Continent, Delta and Atolls.
 Native remains the default; the choice applies to newly generated maps.
 Five-digit map-number editing waits until the mouse leaves the arrow area
 before regenerating. Ctrl+wheel zooms around the mouse pointer, and fused

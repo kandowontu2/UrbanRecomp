@@ -1,5 +1,28 @@
 # Enhanced fork changelog
 
+## Enhanced 1.0 — 2026-10-06
+
+- Publish the first stable UrbanRecomp Enhanced release, consolidating
+  Enhanced Betas 1–23. Enhanced versioning starts at 1.0 independently of
+  upstream UrbanRecomp's version numbers; the release tag is `enhanced-v1.0.0`.
+- Include six map sizes through 3840x3200, nine generation styles, nine land
+  types and seasonal variations; new cities retain Native as the default.
+- Include full mouse controls, free drag panning and live minimaps, sharp
+  pointer-centered zoom, fixed-size HUD/menus, Fit-to-screen sizing, gesture
+  construction and building-aware Copy/Paste with unique gifts excluded.
+- Include saved per-city development speeds, whole-simulation fast-forward,
+  expanded vehicles, post-load power repair, a six-digit calendar, the source-
+  based test city and placement guide, Journey mode, and manual disasters.
+- Include Megagopolos/Gigagopolois milestones, all 21 embedded music tracks,
+  balanced additional themes, the four-column debug gift picker and View fixes.
+- Package the verified native Windows runtime as a single EXE with 1.0
+  product metadata. Package the universal Apple Silicon/Intel Mac app with
+  Enhanced 1.0 metadata, current guides, credits and licenses. Keep existing
+  saves compatible and exclude ROMs, personal data and private build inputs.
+- Keep the Beta 23 gameplay code and documented performance limits. Very
+  large cities and aggressive fast-forward remain workload/hardware dependent;
+  Mac uses Metal presentation with CPU terrain/field composition.
+
 ## 1.2.0 Enhanced Beta 23 — 2026-10-06
 
 - Add the 10-million-population Megagopolos milestone with an original-style

@@ -51,7 +51,7 @@ cmake -S . -B mac-deps/game-build -G Ninja \
   -DSNESRECOMP_SDL_BACKEND=SDL3 -DSC_AOT=OFF -DSC_PROGRAM=ON \
   -DSC_INTERPRETER_REFERENCE=OFF -DSC_LTO=OFF
 cmake --build mac-deps/game-build --parallel 2 --target UrbanRecomp
-python3 tools/package_macos.py v1.2.0-enhanced.23 \
+python3 tools/package_macos.py enhanced-v1.0.0 \
   --build-dir mac-deps/game-build --restored-music-dir music/restored
 ```
 

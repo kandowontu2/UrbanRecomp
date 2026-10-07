@@ -1,5 +1,9 @@
 # PC enhancement work
 
+UrbanRecomp Enhanced 1.0 is the first stable release, consolidating Betas 1–23.
+The controls and save formats below apply to 1.0. Historical beta measurements
+retain their original labels and test conditions.
+
 This fork of [blackerking/UrbanRecomp](https://github.com/blackerking/UrbanRecomp)
 contains development-speed, population, mouse and playable large-map
 enhancements. Windows packages are available from
