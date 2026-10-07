@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.16)
 project(UrbanRecomp VERSION 1.2.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
+if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(SC_MOBILE ON)
+endif()
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(SC_WORLD_LAYOUT "${CMAKE_CURRENT_SOURCE_DIR}/src/sc_world_guest_layout.h")
@@ -47,7 +50,7 @@ include(${SNESRECOMP_ROOT}/runner/runner.cmake)
 # directly, with the settings in sc-settings.ini.
 set(RECOMP_UI_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/recomp-ui" CACHE PATH
     "Shared launcher (recomp-ui) checkout")
-if(EXISTS "${RECOMP_UI_ROOT}/recomp_ui.cmake")
+if(EXISTS "${RECOMP_UI_ROOT}/recomp_ui.cmake" AND NOT SC_MOBILE)
     set(RECOMP_UI_ENABLE_MODS ON CACHE BOOL "Urban Recomp launcher mods (Sylt)" FORCE)
     include(${RECOMP_UI_ROOT}/recomp_ui.cmake)
     set(SC_HAVE_LAUNCHER ON)
@@ -70,7 +73,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/gen)
     endif()
 endif()
 
-add_executable(UrbanRecomp
+set(SC_APP_SOURCES
     src/main.c src/sc_scenario_event.c src/sc_debug_gift.c
     src/sc_macos.c
     src/sc_world.c
@@ -102,6 +105,16 @@ add_executable(UrbanRecomp
     src/sc_renderer.c src/sc_disaster_menu.c src/sc_land_type.c
     src/sc_terrain.c src/sc_native_ppu.c src/sc_obj.c src/sc_gpu_terrain.c src/sc_gpu_fields.c
 )
+if(ANDROID)
+    add_library(UrbanRecomp SHARED ${SC_APP_SOURCES})
+    set_target_properties(UrbanRecomp PROPERTIES OUTPUT_NAME main)
+else()
+    add_executable(UrbanRecomp ${SC_APP_SOURCES})
+endif()
+if(SC_MOBILE)
+    target_sources(UrbanRecomp PRIVATE src/sc_mobile.c src/sc_mobile_input.c)
+    target_compile_definitions(UrbanRecomp PRIVATE SC_MOBILE=1)
+endif()
 
 target_include_directories(UrbanRecomp PRIVATE
     ${CMAKE_SOURCE_DIR}/src
@@ -153,6 +166,7 @@ if(SC_PROGRAM)
         "${CMAKE_SOURCE_DIR}/src/program_gen/sc_program_bank*.c")
 endif()
 add_library(ScProgramRuntime STATIC src/sc_program.c ${SC_PROGRAM_SOURCES})
+set_target_properties(ScProgramRuntime PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(ScProgramRuntime PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
 if(SC_PROGRAM_SOURCES)
@@ -240,6 +254,20 @@ endif()
 # SDL GPU/Vulkan presentation and framebuffer dumps are independently verified.
 # Shader readback is a test-only path; ordinary gameplay does not wait for it.
 snesrecomp_target_sdl(UrbanRecomp)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    enable_language(OBJC)
+    target_sources(UrbanRecomp PRIVATE src/sc_ios.m)
+    target_compile_options(UrbanRecomp PRIVATE $<$<COMPILE_LANGUAGE:OBJC>:-fobjc-arc>)
+    target_link_libraries(UrbanRecomp PRIVATE "-framework UIKit" "-framework UniformTypeIdentifiers")
+    set_target_properties(UrbanRecomp PROPERTIES MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/platform/ios/Info.plist.in"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.kandowontu2.UrbanRecomp"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.0.1"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.1"
+        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+        XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+        XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO")
+endif()
 if(SC_HAVE_LAUNCHER)
     # Box art and window icon are derived from assets/urbanrecomp_logo.png by
     # tools/make_brand_assets.py; src/sc_launcher.c names both paths.
@@ -283,7 +311,7 @@ sc_configure_windows_app(UrbanRecomp)
 #
 # A build folder run in place still works as before: the game finds its
 # assets next to the executable and keeps its files in the working directory.
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT ANDROID)
     include(GNUInstallDirs)
     set(SC_APP_ID "io.github.blackerking.UrbanRecomp")
     set(SC_INSTALL_DIR "${CMAKE_INSTALL_FULL_LIBDIR}/urbanrecomp")
@@ -327,6 +355,14 @@ if(UNIX AND NOT APPLE)
 endif()
 
 include(CTest)
+if(BUILD_TESTING AND NOT SC_MOBILE)
+    add_executable(UrbanRecompMobileInputTest tests/sc_mobile_input_test.c src/sc_mobile_input.c)
+    target_include_directories(UrbanRecompMobileInputTest PRIVATE src)
+    if(NOT MSVC)
+        target_link_libraries(UrbanRecompMobileInputTest PRIVATE m)
+    endif()
+    add_test(NAME simcity_mobile_input COMMAND UrbanRecompMobileInputTest)
+endif()
 if(BUILD_TESTING)
     set(SC_RENDER_TESTS sc_renderer_test)
     if(EXISTS "${RECOMP_UI_ROOT}/src/recomp_launcher.h")

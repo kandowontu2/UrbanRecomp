@@ -1,85 +1,60 @@
-name: Linux build
-
-# Compiles on Ubuntu without a ROM -- there is no src/gen in a checkout, so this
-# is the interpreter build that ships -- installs it into a staging folder, and
-# checks the desktop entry, the icons and that the program starts.
-#
-# Runs on code changes, on release tags and by hand, not on every push, to stay
-# well inside the free Actions minutes.
+name: Linux native release
 on:
   workflow_dispatch:
-  push:
-    branches: [main, widescreen-wood-margins]
-    tags: ['v*']
-    paths:
-      - 'src/**'
-      - 'CMakeLists.txt'
-      - 'assets/**'
-      - 'snesrecomp'
-      - 'recomp-ui'
-      - '.github/workflows/linux.yml'
-
-concurrency:
-  group: linux-${{ github.ref }}
-  cancel-in-progress: true
-
+    inputs:
+      source_ref: {description: Source commit, required: true, default: main, type: string}
+      inputs_release: {description: Temporary private draft inputs, required: true, type: string}
+      inputs_sha256: {description: Input archive SHA-256, required: true, type: string}
+      version: {description: Package version, required: true, default: enhanced-v1.0.1, type: string}
+permissions:
+  contents: write
 jobs:
   build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUTS_RELEASE: ${{ inputs.inputs_release }}
+      INPUTS_SHA256: ${{ inputs.inputs_sha256 }}
+      PACKAGE_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install build dependencies
+        with: {submodules: recursive, ref: '${{ inputs.source_ref }}'}
+      - name: Fetch private native code and music
+        run: python3 tools/fetch_private_inputs.py "$GITHUB_REPOSITORY" "$INPUTS_RELEASE" "$INPUTS_SHA256" "$RUNNER_TEMP/native-inputs.tar.gz"
+      - name: Install graphics and audio build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build libsdl2-dev libgl-dev desktop-file-utils appstream
-
-      - name: Configure
-        run: >
-          cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DSNESRECOMP_SDL_BACKEND=SDL2
-          -DCMAKE_INSTALL_PREFIX=/usr/local
-
-      - name: Build
-        run: cmake --build build --target UrbanRecomp
-
-      - name: Install into a staging folder
-        run: DESTDIR="$PWD/stage" cmake --install build
-
-      - name: Check the desktop integration
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libgl1-mesa-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libudev-dev libwayland-dev libdecor-0-dev xvfb
+      - name: Build static SDL3
         run: |
-          find stage -type f | sort
-          desktop-file-validate stage/usr/local/share/applications/io.github.blackerking.UrbanRecomp.desktop
-          appstreamcli validate --no-net --explain \
-            stage/usr/local/share/metainfo/io.github.blackerking.UrbanRecomp.metainfo.xml || true
-          for s in 16 24 32 48 64 128 256 512; do
-            test -f "stage/usr/local/share/icons/hicolor/${s}x${s}/apps/io.github.blackerking.UrbanRecomp.png"
-          done
-
-      - name: Start without a ROM
-        # --no-settings skips the launcher, so no display is needed. With no ROM
-        # anywhere the game must say so and exit 1 -- which proves the binary
-        # loads its libraries and runs main().
+          git clone --depth 1 --branch release-3.4.16 https://github.com/libsdl-org/SDL.git platform-deps/SDL
+          cmake -S platform-deps/SDL -B platform-deps/sdl-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TESTS=OFF -DSDL_TEST_LIBRARY=OFF -DCMAKE_INSTALL_PREFIX="$PWD/platform-deps/sdl-install"
+          cmake --build platform-deps/sdl-build --parallel 4
+          cmake --install platform-deps/sdl-build
+      - name: Build native game and verify host behavior
         run: |
+          cmake -S . -B platform-deps/game-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS_RELEASE='-O2 -DNDEBUG' -DCMAKE_PREFIX_PATH="$PWD/platform-deps/sdl-install" -DCMAKE_DISABLE_FIND_PACKAGE_Freetype=ON -DSNESRECOMP_SDL_BACKEND=SDL3 -DSC_PROGRAM=ON -DSC_AOT=OFF -DSC_INTERPRETER_REFERENCE=OFF -DSC_LTO=OFF
+          cmake --build platform-deps/game-build --parallel 4 --target UrbanRecomp sc_video_test sc_renderer_test sc_scroll_renderer_test sc_terrain_test UrbanRecompSetupLandTest UrbanRecompLandSaveTest UrbanRecompDebugGiftTest UrbanRecompPcmTest UrbanRecompMobileInputTest
+          ctest --test-dir platform-deps/game-build -R '^simcity_(video|renderer|scroll_renderer|deferred_terrain|mobile_input)$' --output-on-failure
+          platform-deps/game-build/UrbanRecompSetupLandTest
+          platform-deps/game-build/UrbanRecompLandSaveTest
+          platform-deps/game-build/UrbanRecompDebugGiftTest
+          platform-deps/game-build/UrbanRecompPcmTest music/restored
+      - name: Package and verify startup
+        run: |
+          python3 tools/package_linux.py "$PACKAGE_VERSION" --build-dir platform-deps/game-build --sdl-dir platform-deps/SDL
+          app="$PWD/dist/UrbanRecomp-$PACKAGE_VERSION-linux-x64"
+          mkdir -p "$RUNNER_TEMP/startup-data"
           set +e
-          work="$(mktemp -d)"
-          URBANRECOMP_HOME="$work" stage/usr/local/bin/urbanrecomp --no-settings 2>&1 | tee "$work/out.txt"
-          code=${PIPESTATUS[0]}
+          URBANRECOMP_HOME="$RUNNER_TEMP/startup-data" "$app/urbanrecomp" --no-settings > "$RUNNER_TEMP/startup.log" 2>&1
+          status=$?
           set -e
-          grep -q "no ROM" "$work/out.txt"
-          test "$code" -eq 1
-
-      - name: Pack the staged install
-        # Unpacks into /usr/local:  sudo tar -xzf UrbanRecomp-linux-x64.tar.gz -C /usr/local
-        run: tar -C stage/usr/local -czf UrbanRecomp-linux-x64.tar.gz bin lib share
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: UrbanRecomp-linux-x64
-          path: UrbanRecomp-linux-x64.tar.gz
-          retention-days: 14
+          cat "$RUNNER_TEMP/startup.log"
+          test "$status" -eq 1
+          grep -q 'no ROM' "$RUNNER_TEMP/startup.log"
+          file "$app/UrbanRecomp" | grep -q 'ELF 64-bit.*x86-64'
+          gh release upload "$INPUTS_RELEASE" "dist/UrbanRecomp-$PACKAGE_VERSION-linux-x64.tar.gz" "dist/UrbanRecomp-$PACKAGE_VERSION-linux-x64.tar.gz.sha256" --repo "$GITHUB_REPOSITORY"
+      - name: Remove private inputs
+        if: always()
+        run: python3 -c "import shutil; from pathlib import Path; [shutil.rmtree(p,ignore_errors=True) for p in ('src/program_gen','music/restored')]; Path('$RUNNER_TEMP/native-inputs.tar.gz').unlink(missing_ok=True)"

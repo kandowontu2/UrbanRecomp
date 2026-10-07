@@ -1,0 +1,39 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'io.github.kandowontu2.urbanrecomp'
+    compileSdk 35
+    ndkVersion '28.2.13676358'
+    defaultConfig {
+        applicationId 'io.github.kandowontu2.urbanrecomp'
+        minSdk 26
+        targetSdk 35
+        versionCode 10001
+        versionName '1.0.1'
+        externalNativeBuild { cmake {
+            targets 'UrbanRecomp'
+            arguments '-DSNESRECOMP_SDL_BACKEND=SDL3', '-DSC_AOT=OFF',
+                '-DSC_PROGRAM=ON', '-DSC_INTERPRETER_REFERENCE=OFF', '-DBUILD_TESTING=OFF',
+                '-DSC_LTO=OFF', '-DANDROID_STL=c++_static', '-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG'
+            abiFilters 'arm64-v8a', 'x86_64'
+        } }
+    }
+    signingConfigs { permanent {
+        if (System.getenv('ANDROID_RELEASE_KEYSTORE_PATH')) {
+            storeFile file(System.getenv('ANDROID_RELEASE_KEYSTORE_PATH'))
+            storePassword System.getenv('ANDROID_RELEASE_PASSWORD')
+            keyAlias 'starfox-enhanced'
+            keyPassword System.getenv('ANDROID_RELEASE_PASSWORD')
+            storeType 'PKCS12'
+        }
+    } }
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (System.getenv('ANDROID_RELEASE_KEYSTORE_PATH')) signingConfig signingConfigs.permanent
+        }
+    }
+    buildFeatures { prefab true }
+    externalNativeBuild { cmake { path file('../../../CMakeLists.txt'); version '3.22.1' } }
+    androidResources { noCompress 'pcm', 'bin' }
+}
+dependencies { implementation files('libs/SDL3-3.4.16.aar') }

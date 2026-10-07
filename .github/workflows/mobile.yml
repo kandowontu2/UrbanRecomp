@@ -1,0 +1,107 @@
+name: Mobile native packages
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref: {description: Source commit, required: true, default: main, type: string}
+      inputs_release: {description: Temporary private draft inputs, required: true, type: string}
+      inputs_sha256: {description: Input archive SHA-256, required: true, type: string}
+      version: {description: Package version, required: true, default: enhanced-v1.0.1, type: string}
+      platform: {description: Platform, required: true, default: both, type: choice, options: [both, android, ios]}
+permissions:
+  contents: write
+jobs:
+  android:
+    if: inputs.platform != 'ios'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUTS_RELEASE: ${{ inputs.inputs_release }}
+      INPUTS_SHA256: ${{ inputs.inputs_sha256 }}
+      PACKAGE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: recursive, ref: '${{ inputs.source_ref }}'}
+      - name: Fetch private native code and music
+        run: python3 tools/fetch_private_inputs.py "$GITHUB_REPOSITORY" "$INPUTS_RELEASE" "$INPUTS_SHA256" "$RUNNER_TEMP/native-inputs.tar.gz"
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '17'}
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;28.2.13676358 cmake;3.22.1'
+          log-accepted-android-sdk-licenses: 'false'
+      - name: Stage pinned SDL3 and bundled assets
+        run: |
+          git clone --depth 1 --branch release-3.4.16 https://github.com/libsdl-org/SDL.git platform-deps/SDL
+          curl -fL --retry 3 https://github.com/libsdl-org/SDL/releases/download/release-3.4.16/SDL3-devel-3.4.16-android.zip -o "$RUNNER_TEMP/sdl-android.zip"
+          echo 'e1da8d9298471ea4ab8c6d48a804c0ac5415f35f30fcf7eba61aa7357e165765  '"$RUNNER_TEMP/sdl-android.zip" | sha256sum --check
+          mkdir -p platform/android/app/libs
+          unzip -p "$RUNNER_TEMP/sdl-android.zip" SDL3-3.4.16.aar > platform/android/app/libs/SDL3-3.4.16.aar
+          python3 tools/stage_mobile_assets.py platform/android/app/src/main/assets --sdl-dir platform-deps/SDL
+      - name: Build release APK
+        run: |
+          chmod +x platform/android/gradlew
+          cd platform/android
+          ./gradlew --no-daemon :app:assembleRelease
+      - name: Verify mobile payload and stage for signing
+        run: |
+          mkdir -p dist
+          apk="dist/UrbanRecomp-$PACKAGE_VERSION-android-universal-unsigned.apk"
+          cp platform/android/app/build/outputs/apk/release/app-release-unsigned.apk "$apk"
+          python3 tools/check_mobile_package.py "$apk" --platform android
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk"
+          sha256sum "$apk" > "$apk.sha256"
+          gh release upload "$INPUTS_RELEASE" "$apk" "$apk.sha256" --repo "$GITHUB_REPOSITORY"
+      - name: Enable emulator hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_7
+          disable-animations: true
+          script: python3 tools/test_android_emulator.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-emulator-validation
+          path: platform-deps/android-validation/*
+      - name: Remove private inputs
+        if: always()
+        run: python3 -c "import shutil; from pathlib import Path; [shutil.rmtree(p,ignore_errors=True) for p in ('src/program_gen','music/restored','platform/android/app/src/main/assets')]; Path('$RUNNER_TEMP/native-inputs.tar.gz').unlink(missing_ok=True)"
+  ios:
+    if: inputs.platform != 'android'
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUTS_RELEASE: ${{ inputs.inputs_release }}
+      INPUTS_SHA256: ${{ inputs.inputs_sha256 }}
+      PACKAGE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: recursive, ref: '${{ inputs.source_ref }}'}
+      - name: Fetch private native code and music
+        run: python3 tools/fetch_private_inputs.py "$GITHUB_REPOSITORY" "$INPUTS_RELEASE" "$INPUTS_SHA256" "$RUNNER_TEMP/native-inputs.tar.gz"
+      - name: Build SDL3 and game for iPhone/iPad
+        run: |
+          git clone --depth 1 --branch release-3.4.16 https://github.com/libsdl-org/SDL.git platform-deps/SDL
+          python3 tools/build_ios.py device
+      - name: Package unsigned device IPA
+        run: |
+          python3 tools/package_ios.py "$PACKAGE_VERSION" --app platform-deps/device-game/Release-iphoneos/UrbanRecomp.app --sdl-dir platform-deps/SDL
+          python3 tools/check_mobile_package.py "dist/UrbanRecomp-$PACKAGE_VERSION-ios-arm64-unsigned.ipa" --platform ios
+          gh release upload "$INPUTS_RELEASE" "dist/UrbanRecomp-$PACKAGE_VERSION-ios-arm64-unsigned.ipa" "dist/UrbanRecomp-$PACKAGE_VERSION-ios-arm64-unsigned.ipa.sha256" --repo "$GITHUB_REPOSITORY"
+      - name: Build and smoke-test the iOS simulator
+        run: |
+          python3 tools/build_ios.py simulator
+          python3 tools/test_ios_simulator.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-validation
+          path: platform-deps/ios-validation/*
+      - name: Remove private inputs
+        if: always()
+        run: python3 -c "import shutil; from pathlib import Path; [shutil.rmtree(p,ignore_errors=True) for p in ('src/program_gen','music/restored')]; Path('$RUNNER_TEMP/native-inputs.tar.gz').unlink(missing_ok=True)"

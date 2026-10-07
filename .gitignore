@@ -135,3 +135,15 @@ labels_*.png
 # User-provided restored soundtrack, imported locally and never committed.
 /music/restored/
 *.pcm
+
+# Mobile build outputs and local SDK/signing inputs.
+/platform/android/.gradle/
+/platform/android/app/.cxx/
+/platform/android/app/build/
+/platform/android/app/libs/
+/platform/android/app/src/main/assets/
+/platform/android/local.properties
+*.keystore
+*.p12
+*.mobileprovision
+/platform-deps/

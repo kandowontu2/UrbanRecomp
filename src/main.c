@@ -22,8 +22,16 @@
  * keep their SDL2 spellings. Calls whose SIGNATURES changed are handled
  * explicitly at their call sites -- see runner/src/desktop/mmx23_host_main.inc
  * for how upstream does each one. */
+#ifdef SC_MOBILE
+/* Only this translation unit owns SDL's Java/UIKit entry-point glue. */
+#undef SDL_MAIN_HANDLED
+#endif
 #include "sc_sdl_compat.h"
 #include "sc_macos.h"
+#include "sc_mobile.h"
+#ifdef SC_MOBILE
+#include <SDL3/SDL_main.h>
+#endif
 #include "sc_gpu_terrain.h"
 #include "sc_gpu_fields.h"
 #ifdef _WIN32
@@ -9961,6 +9969,7 @@ static int run_qualification(uint64_t frames) {
 }
 
 int main(int argc, char **argv) {
+  if(!ScMobilePrepare())return 2;
   if(!ScMacPreparePaths(argc,argv))return 2;
   for (int i = 1; i + 1 < argc; ++i)
     if (!strcmp(argv[i], "--video-config")) s_video_config = argv[++i];
@@ -10358,6 +10367,11 @@ int main(int argc, char **argv) {
   }
   if (!rom_path && ScFindRom(SC_ROM_FNV_US, s_found_rom, sizeof s_found_rom))
     rom_path = s_found_rom;
+  if (!rom_path) {
+#ifdef SC_MOBILE
+    if(ScMobileChooseRom(s_found_rom,sizeof s_found_rom))rom_path=s_found_rom;
+#endif
+  }
   if (!rom_path) {
     ScMacStartupError("no ROM: pass the path of your own copy, pick it in the "
                       "launcher, or put it (any file name) in the working directory");
@@ -11136,6 +11150,7 @@ int main(int argc, char **argv) {
       "Urban Recomp", s_window_width, s_window_height,
       SDL_WINDOW_RESIZABLE | window_flags);
   if (!window) return startup_sdl_failure("SDL_CreateWindow failed");
+  ScMobileInit(window);
   ScSetWindowIcon(window);
   /* No SDL_RENDERER_PRESENTVSYNC: on some hosts (observed under a VM) the
    * driver's vsync wait blocks for longer than one real display refresh
@@ -11400,6 +11415,7 @@ int main(int argc, char **argv) {
         }
       }
       if (!got) break;
+      if(ScMobileEvent(window,&ev))continue;
       if (ev.type == SDL_QUIT) quit = true;
       if(ev.type==SDL_KEYDOWN && SC_EVENT_SCANCODE(ev)==SDL_SCANCODE_GRAVE &&
           !ev.key.repeat && (SC_EVENT_KEYMOD(ev)&KMOD_CTRL) && (SC_EVENT_KEYMOD(ev)&KMOD_SHIFT) &&
@@ -11681,6 +11697,12 @@ int main(int argc, char **argv) {
         }
       }
     }
+    if(ScMobileBackground()) {
+      if(music_thread)ScMusicGuestFrame(sc_audio_guest_cycle(),true);
+      SDL_Delay(20);
+      next_frame_deadline=SDL_GetPerformanceCounter();
+      continue;
+    }
     if(s_fit_screen_requested) {
       s_fit_screen_requested=false;
       int before_w=0,before_h=0;
@@ -11803,6 +11825,8 @@ int main(int argc, char **argv) {
       mouse_buttons = SDL_GetMouseState(&ix, &iy);
       mx = ix; my = iy;
 #endif
+      ScMobileMouse(window,&mx,&my,&mouse_buttons);
+      if(ScMobileTouchActive())focused=true;
       /* Relative motion never reaches a window edge. Keep an unbounded
        * virtual position for the drag accumulator, independent of SDL's
        * centered, invisible cursor. Recorded canvas input remains absolute. */
@@ -12114,6 +12138,7 @@ int main(int argc, char **argv) {
      * Select press into the game every time a state is saved/loaded. */
     if (keys[sc_select]) input |= kPad_Select;
     }   /* fixed bindings */
+    input |= ScMobilePad();
     unsigned keyboard_pan_dirs=(keys[SDL_SCANCODE_RIGHT]?kPad_Right:0) |
         (keys[SDL_SCANCODE_LEFT]?kPad_Left:0) | (keys[SDL_SCANCODE_DOWN]?kPad_Down:0) |
         (keys[SDL_SCANCODE_UP]?kPad_Up:0);
@@ -12868,6 +12893,7 @@ int main(int argc, char **argv) {
         }
         cap_frame++;
       } }
+    ScMobileDraw(renderer,window,draw_text);
     /* SDL_RenderPresent returns void on SDL2 and bool on SDL3, so it cannot
      * share the SC_SDL_OK spelling with the other calls. */
 #if SNESRECOMP_SDL3
