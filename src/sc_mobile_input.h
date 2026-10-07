@@ -2,13 +2,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-enum { SC_TOUCH_BUTTONS=17, SC_TOUCH_FINGERS=10 };
+enum { SC_TOUCH_BUTTONS=18, SC_TOUCH_FINGERS=10 };
 typedef struct ScTouchRect { float x,y,w,h; const char *label; unsigned pad; int action; } ScTouchRect;
 typedef struct ScTouchFinger { int64_t id; float x,y; int button; bool active; } ScTouchFinger;
 typedef struct ScTouchInput {
     ScTouchRect buttons[SC_TOUCH_BUTTONS];
     ScTouchFinger fingers[SC_TOUCH_FINGERS];
-    bool visible; int width,height,action;
+    bool visible,pan,multi_pan; int width,height,action;
     float mouse_x,mouse_y; unsigned mouse_buttons,pad;
 } ScTouchInput;
 void ScTouchLayout(ScTouchInput *input,int width,int height);

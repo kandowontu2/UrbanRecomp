@@ -15,13 +15,11 @@ bool ScMobilePrepare(void) {
 #ifdef __ANDROID__
     const char *data=SDL_GetAndroidInternalStoragePath();
 #else
-    char *data=SDL_GetPrefPath("UrbanRecomp","UrbanRecomp");
+    extern const char *ScIosDataPath(void);
+    const char *data=ScIosDataPath();
 #endif
     if(!data||chdir(data))return false;
     fprintf(stderr,"[mobile] saves/settings: %s\n",data);
-#ifndef __ANDROID__
-    SDL_free(data);
-#endif
     setenv("SC_RESTORED_MUSIC","music/restored",0);
 #ifndef __ANDROID__
     const char *base=SDL_GetBasePath();char music[4096];
@@ -85,8 +83,15 @@ bool ScMobileChooseRom(char *out,size_t n) {
     bool ok=atomic_load(&picked)==1;SDL_DestroyRenderer(r);SDL_DestroyWindow(w);
     return ok;
 }
+static void layout(SDL_Window *window) {
+    int w,h;SDL_GetWindowSize(window,&w,&h);
+    SDL_Rect safe={0,0,w,h};SDL_GetWindowSafeArea(window,&safe);
+    if(safe.w<=0||safe.h<=0)safe=(SDL_Rect){0,0,w,h};
+    ScTouchLayout(&touch,safe.w,safe.h);
+    for(unsigned i=0;i<SC_TOUCH_BUTTONS;++i) {touch.buttons[i].x+=safe.x;touch.buttons[i].y+=safe.y;}
+}
 void ScMobileInit(SDL_Window *window) {
-    touch.visible=true;int w,h;SDL_GetWindowSize(window,&w,&h);ScTouchLayout(&touch,w,h);
+    touch.visible=true;layout(window);
     SDL_InitSubSystem(SDL_INIT_GAMEPAD);
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON,"1");
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS,"1");
@@ -104,7 +109,7 @@ bool ScMobileEvent(SDL_Window *window,const SDL_Event *e) {
     if(e->type==SDL_EVENT_DID_ENTER_FOREGROUND) {background=false;ScTouchClear(&touch);return true;}
     if(e->type==SDL_EVENT_GAMEPAD_REMOVED&&gamepad&&SDL_GetGamepadID(gamepad)==e->gdevice.which) {SDL_CloseGamepad(gamepad);gamepad=NULL;}
     if(e->type==SDL_EVENT_FINGER_DOWN||e->type==SDL_EVENT_FINGER_MOTION||e->type==SDL_EVENT_FINGER_UP||e->type==SDL_EVENT_FINGER_CANCELED) {
-        int w,h;SDL_GetWindowSize(window,&w,&h);ScTouchLayout(&touch,w,h);
+        int w,h;SDL_GetWindowSize(window,&w,&h);layout(window);
         ScTouchUpdate(&touch,e->tfinger.fingerID,e->tfinger.x*w,e->tfinger.y*h,
             e->type!=SDL_EVENT_FINGER_UP&&e->type!=SDL_EVENT_FINGER_CANCELED,e->type==SDL_EVENT_FINGER_DOWN);
         if(touch.action) {
@@ -128,6 +133,7 @@ void ScMobileMouse(SDL_Window *window,double *x,double *y,uint32_t *buttons) {
         if(ScTouchActive(&touch)) {
             *buttons=touch.mouse_buttons==2?SDL_BUTTON_MMASK:touch.mouse_buttons==1?SDL_BUTTON_LMASK:0;
             if(touch.mouse_buttons) {*x=touch.mouse_x;*y=touch.mouse_y;}
+            else {*x=-1000;*y=-1000;}
         }
     }
 }
@@ -148,13 +154,13 @@ unsigned ScMobilePad(void) {
     return pad;
 }
 void ScMobileDraw(SDL_Renderer *renderer,SDL_Window *window,ScMobileText text) {
-    int w,h,rw,rh;SDL_GetWindowSize(window,&w,&h);SDL_GetRenderOutputSize(renderer,&rw,&rh);ScTouchLayout(&touch,w,h);
+    int w,h,rw,rh;SDL_GetWindowSize(window,&w,&h);SDL_GetRenderOutputSize(renderer,&rw,&rh);layout(window);
     if(w<=0||h<=0)return;
     SDL_SetRenderDrawBlendMode(renderer,SDL_BLENDMODE_BLEND);
     for(int i=0;i<SC_TOUCH_BUTTONS;++i) {
-        if(!touch.visible&&i!=16)continue;ScTouchRect b=touch.buttons[i];
+        if(!touch.visible&&i!=17)continue;ScTouchRect b=touch.buttons[i];
         SDL_FRect r={b.x*rw/w,b.y*rh/h,b.w*rw/w,b.h*rh/h};
-        SDL_SetRenderDrawColor(renderer,24,20,8,(touch.pad&b.pad)?220:150);SDL_RenderFillRect(renderer,&r);
+        SDL_SetRenderDrawColor(renderer,24,20,8,(touch.pad&b.pad)||(i==16&&touch.pan)?220:150);SDL_RenderFillRect(renderer,&r);
         SDL_SetRenderDrawColor(renderer,244,227,164,220);SDL_RenderRect(renderer,&r);
         int px=(int)(r.w/30);if(px<1)px=1;int tw=(int)strlen(b.label)*6*px-px;
         text(renderer,(int)(r.x+(r.w-tw)/2),(int)(r.y+(r.h-5*px)/2),px,b.label);

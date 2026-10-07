@@ -9,7 +9,8 @@ def stage_assets(root: Path, destination: Path, sdl: Path):
         shutil.copy2(root/name,destination/name)
     for name in ('MOBILE.md','PC_ENHANCEMENTS.md','TEST_CITY_LAYOUT.md','PLACEMENT_EFFECTS.md','GPU_PERFORMANCE.md','NATIVE_EXECUTION.md'):
         shutil.copy2(root/'docs'/name,destination/name)
-    shutil.copytree(root/'sylt_graphics',destination/'sylt_graphics',ignore=shutil.ignore_patterns('*.ips','*_check.png'))
+    sylt=destination/'sylt_graphics';sylt.mkdir()
+    for name in ('sylt_map.bin','sylt_card.bin','PROVENANCE.md'):shutil.copy2(root/'sylt_graphics'/name,sylt/name)
     music=destination/'music/restored';music.mkdir(parents=True)
     for n in range(1,22):
         track=root/'music/restored'/f'scity-msu1-{n}.pcm'

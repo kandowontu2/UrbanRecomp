@@ -33,6 +33,9 @@ the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) an
 
 **UrbanRecomp Enhanced 1.0 is the first stable enhanced release.** Download the
 [Windows x64 EXE or universal macOS app](https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.0).
+The [1.0.1 platform release](https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.1)
+adds Linux x86-64, a release-signed Android APK (ARM64/x86-64), and an unsigned
+iPhone/iPad IPA for sideloading. See [mobile controls and installation](docs/MOBILE.md).
 The Windows package is one portable EXE; run it and select your own clean US ROM.
 Bundled files unpack into a versioned private cache. Saves/settings stay beside
 the portable EXE. `--portable-docs` opens the bundled credits and licenses.

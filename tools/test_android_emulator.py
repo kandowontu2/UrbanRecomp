@@ -8,11 +8,19 @@ signer=Path(os.environ['ANDROID_HOME'])/'build-tools/35.0.0/apksigner'
 source=root/'platform/android/app/build/outputs/apk/release/app-release-unsigned.apk'
 subprocess.run([str(signer),'sign','--ks',str(key),'--ks-pass','pass:validation-only','--out',str(apk),str(source)],check=True)
 def adb(*args):return subprocess.check_output(['adb',*args],text=True)
-adb('install',str(apk));adb('logcat','-c');adb('shell','am','start','-n','io.github.kandowontu2.urbanrecomp/.LauncherActivity')
-time.sleep(25)
-adb('shell','uiautomator','dump','/sdcard/window.xml');xml=adb('shell','cat','/sdcard/window.xml');(out/'launcher.xml').write_text(xml)
-play=next(e for e in ET.fromstring(xml).iter('node') if e.attrib.get('text')=='Play')
-assert play.attrib['enabled']=='true','Bundled assets failed to initialize'
+adb('install',str(apk));adb('logcat','-c')
+adb('shell','input','keyevent','82');adb('shell','wm','dismiss-keyguard')
+print(adb('shell','am','start','-W','-n','io.github.kandowontu2.urbanrecomp/.LauncherActivity'))
+play=None
+for attempt in range(12):
+    time.sleep(5)
+    adb('shell','uiautomator','dump','/sdcard/window.xml');xml=adb('shell','cat','/sdcard/window.xml');(out/'launcher.xml').write_text(xml)
+    logs=adb('logcat','-d');(out/'logcat.txt').write_text(logs)
+    play=next((e for e in ET.fromstring(xml).iter('node') if e.attrib.get('text','').casefold()=='play'),None)
+    if play is not None and play.attrib.get('enabled')=='true':break
+print(xml)
+adb('shell','screencap','-p','/sdcard/launcher.png');adb('pull','/sdcard/launcher.png',str(out/'launcher.png'))
+assert play is not None and play.attrib.get('enabled')=='true','Bundled assets/launcher failed to initialize'
 import re
 x1,y1,x2,y2=map(int,re.findall(r'\d+',play.attrib['bounds']));adb('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2))
 time.sleep(15)

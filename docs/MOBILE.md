@@ -4,8 +4,9 @@ Import your own clean US SimCity SNES ROM through the launcher's Files picker.
 No ROM is included. A 512-byte copier header is accepted and removed on import.
 The restored soundtrack, milestone music, Sylt map, credits and licenses are bundled.
 
-Tap or drag the city and menus to use the in-game mouse. Drag with two fingers
-to pan. Pinch to zoom the city. The `-` and `+` touch buttons also change zoom.
+Tap or drag the city and menus to use the in-game mouse. `PAN` switches city
+touches to one-finger drag panning; switch it off to build again. Two-finger
+drag panning is also available. Pinch to zoom the city. The `-` and `+` buttons also change zoom.
 `PAD` hides or shows the touch buttons. `F12` opens the enhancement options;
 `SAVE` opens the in-game save dialog or backs out of a menu.
 
@@ -23,7 +24,8 @@ Android requires Android 8 or later and a 64-bit ARM or x86 device. Saves and
 imported ROMs are in app storage; uninstalling the app removes them.
 The APK is signed with the owner's existing release certificate.
 
-iOS requires iOS/iPadOS 14 or later. The GitHub IPA must be signed using a
+iOS saves and the imported ROM appear in Files under On My iPhone/iPad →
+UrbanRecomp Enhanced. iOS requires iOS/iPadOS 14 or later. The GitHub IPA must be signed using a
 sideloading tool and your own Apple account before installation. It is not an
 App Store or TestFlight distribution. Files are in the app's sandbox; saves
 must be made in-game before closing the app. The iOS build uses Metal

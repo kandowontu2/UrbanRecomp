@@ -65,6 +65,7 @@ jobs:
           disable-animations: true
           script: python3 tools/test_android_emulator.py
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: android-emulator-validation
           path: platform-deps/android-validation/*
@@ -99,6 +100,7 @@ jobs:
           python3 tools/build_ios.py simulator
           python3 tools/test_ios_simulator.py
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: ios-simulator-validation
           path: platform-deps/ios-validation/*

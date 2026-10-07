@@ -29,7 +29,7 @@ exec "$base/UrbanRecomp" "$@"
     'Saves/settings: ${XDG_DATA_HOME:-~/.local/share}/urbanrecomp/\n'
     'Override with URBANRECOMP_HOME. Vulkan terrain/field acceleration is used when available;\n'
     'otherwise SDL and CPU rendering are used. System graphics/audio drivers are required.\n')
-out=stage.with_suffix('.tar.gz')
+out=stage.parent/(name+'.tar.gz')
 with tarfile.open(out,'w:gz') as tar:tar.add(stage,arcname=name)
 digest=hashlib.sha256(out.read_bytes()).hexdigest();Path(str(out)+'.sha256').write_text(digest+'  '+out.name+'\n')
 print(out)

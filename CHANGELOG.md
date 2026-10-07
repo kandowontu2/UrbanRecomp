@@ -1,5 +1,18 @@
 # Enhanced fork changelog
 
+## Enhanced 1.0.1 — 2026-10-07
+
+- Add a native Linux x86-64 release with bundled SDL3, launcher assets,
+  restored soundtrack, credits and licenses. Store saves/settings in the
+  user's XDG data directory and use Vulkan acceleration when available.
+- Add initial Android ARM64/x86-64 and iPhone/iPad ARM64 ports. Include
+  system ROM import, app-owned save storage, safe-area touch controls,
+  controller support, touch construction, pan/zoom and enhancement options.
+- Keep desktop gameplay and the full set of map sizes, terrain types and
+  music. Pause simulation/audio while mobile apps are backgrounded.
+- Sign Android with the owner's existing permanent release certificate.
+  Package iOS as an unsigned IPA for user signing/sideloading.
+
 ## Enhanced 1.0 — 2026-10-06
 
 - Publish the first stable UrbanRecomp Enhanced release, consolidating

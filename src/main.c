@@ -11141,7 +11141,11 @@ int main(int argc, char **argv) {
     return startup_sdl_failure("SDL_Init failed");
   }
 #if SNESRECOMP_SDL3
-  const SDL_WindowFlags window_flags = s_fullscreen ? SDL_WINDOW_FULLSCREEN : 0;
+  const SDL_WindowFlags window_flags = (s_fullscreen ? SDL_WINDOW_FULLSCREEN : 0)
+#ifdef SC_MOBILE
+      | SDL_WINDOW_HIGH_PIXEL_DENSITY
+#endif
+      ;
 #else
   const Uint32 window_flags = s_fullscreen == 2 ? SDL_WINDOW_FULLSCREEN
                             : s_fullscreen == 1 ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0;
@@ -12045,7 +12049,7 @@ int main(int argc, char **argv) {
     } else {
       s_middle_pan=(ScMousePan){0};
     }
-    if(mouse_pan_relative_requested!=s_middle_pan.active) {
+    if(mouse_pan_relative_requested!=s_middle_pan.active && !ScMobileTouchActive()) {
       bool accepted=sc_window_relative_mouse(window,s_middle_pan.active);
       mouse_pan_relative_requested=accepted && s_middle_pan.active;
       /* A mode transition/warp is not a drag movement. Discard stale deltas
@@ -12062,7 +12066,7 @@ int main(int argc, char **argv) {
     s_custom_renderer.mouse_panning=s_middle_pan.active;
     /* Only panning confines the pointer. Releasing, opening F12, disabling
      * mouse input or losing focus must always restore normal desktop motion. */
-    if(mouse_pan_grab_requested!=mouse_pan_active) {
+    if(mouse_pan_grab_requested!=mouse_pan_active && !ScMobileTouchActive()) {
       bool accepted=sc_window_mouse_grab(window,mouse_pan_active);
       mouse_pan_grab_requested=mouse_pan_active;
       if(!accepted) fprintf(stderr,"mouse pan grab: %s\n",SDL_GetError());

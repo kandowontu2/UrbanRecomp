@@ -2,6 +2,22 @@
 #include <stdatomic.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+const char *ScIosDataPath(void) {
+    static NSString *path;
+    path=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+    [[NSFileManager defaultManager] createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
+    // Expose the bundled controls, credits and licenses alongside saves in
+    // Files. Only these app-owned documents are refreshed on launch.
+    for(NSString *name in @[@"CREDITS.md",@"MOBILE.md",@"CHANGELOG.md",@"THIRD_PARTY_NOTICES.md",@"LICENSE",@"licenses"]) {
+        NSString *source=[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:name];
+        NSString *target=[path stringByAppendingPathComponent:name];
+        if([[NSFileManager defaultManager] fileExistsAtPath:source]) {
+            [[NSFileManager defaultManager] removeItemAtPath:target error:nil];
+            [[NSFileManager defaultManager] copyItemAtPath:source toPath:target error:nil];
+        }
+    }
+    return path.fileSystemRepresentation;
+}
 
 @interface ScRomPicker : NSObject <UIDocumentPickerDelegate>
 @property(nonatomic,assign) atomic_int *result;
