@@ -9,6 +9,7 @@ source=root/'platform/android/app/build/outputs/apk/release/app-release-unsigned
 subprocess.run([str(signer),'sign','--ks',str(key),'--ks-pass','pass:validation-only','--out',str(apk),str(source)],check=True)
 def adb(*args):return subprocess.check_output(['adb',*args],text=True)
 adb('install',str(apk));adb('logcat','-c')
+adb('shell','wm','size','1280x720')
 adb('shell','input','keyevent','82');adb('shell','wm','dismiss-keyguard')
 print(adb('shell','am','start','-W','-n','io.github.kandowontu2.urbanrecomp/.LauncherActivity'))
 play=None
@@ -17,6 +18,12 @@ for attempt in range(12):
     adb('shell','uiautomator','dump','/sdcard/window.xml');xml=adb('shell','cat','/sdcard/window.xml');(out/'launcher.xml').write_text(xml)
     logs=adb('logcat','-d');(out/'logcat.txt').write_text(logs)
     play=next((e for e in ET.fromstring(xml).iter('node') if e.attrib.get('text','').casefold()=='play'),None)
+    nodes=list(ET.fromstring(xml).iter('node'))
+    if any('Quickstep isn' in e.attrib.get('text','') for e in nodes):
+        close=next(e for e in nodes if e.attrib.get('resource-id')=='android:id/aerr_close')
+        import re
+        x1,y1,x2,y2=map(int,re.findall(r'\d+',close.attrib['bounds']))
+        adb('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2))
     if play is not None and play.attrib.get('enabled')=='true':break
 print(xml)
 adb('shell','screencap','-p','/sdcard/launcher.png');adb('pull','/sdcard/launcher.png',str(out/'launcher.png'))

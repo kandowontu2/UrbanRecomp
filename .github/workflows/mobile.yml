@@ -7,6 +7,7 @@ on:
       inputs_sha256: {description: Input archive SHA-256, required: true, type: string}
       version: {description: Package version, required: true, default: enhanced-v1.0.1, type: string}
       platform: {description: Platform, required: true, default: both, type: choice, options: [both, android, ios]}
+      test_only: {description: Recheck the existing private Android APK without rebuilding, required: false, default: false, type: boolean}
 permissions:
   contents: write
 jobs:
@@ -23,6 +24,7 @@ jobs:
       - uses: actions/checkout@v4
         with: {submodules: recursive, ref: '${{ inputs.source_ref }}'}
       - name: Fetch private native code and music
+        if: '!inputs.test_only'
         run: python3 tools/fetch_private_inputs.py "$GITHUB_REPOSITORY" "$INPUTS_RELEASE" "$INPUTS_SHA256" "$RUNNER_TEMP/native-inputs.tar.gz"
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '17'}
@@ -31,6 +33,7 @@ jobs:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;28.2.13676358 cmake;3.22.1'
           log-accepted-android-sdk-licenses: 'false'
       - name: Stage pinned SDL3 and bundled assets
+        if: '!inputs.test_only'
         run: |
           git clone --depth 1 --branch release-3.4.16 https://github.com/libsdl-org/SDL.git platform-deps/SDL
           curl -fL --retry 3 https://github.com/libsdl-org/SDL/releases/download/release-3.4.16/SDL3-devel-3.4.16-android.zip -o "$RUNNER_TEMP/sdl-android.zip"
@@ -39,11 +42,13 @@ jobs:
           unzip -p "$RUNNER_TEMP/sdl-android.zip" SDL3-3.4.16.aar > platform/android/app/libs/SDL3-3.4.16.aar
           python3 tools/stage_mobile_assets.py platform/android/app/src/main/assets --sdl-dir platform-deps/SDL
       - name: Build release APK
+        if: '!inputs.test_only'
         run: |
           chmod +x platform/android/gradlew
           cd platform/android
           ./gradlew --no-daemon :app:assembleRelease
       - name: Verify mobile payload and stage for signing
+        if: '!inputs.test_only'
         run: |
           mkdir -p dist
           apk="dist/UrbanRecomp-$PACKAGE_VERSION-android-universal-unsigned.apk"
@@ -52,6 +57,9 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk"
           sha256sum "$apk" > "$apk.sha256"
           gh release upload "$INPUTS_RELEASE" "$apk" "$apk.sha256" --repo "$GITHUB_REPOSITORY"
+      - name: Retrieve the existing verified APK for a repeated startup check
+        if: inputs.test_only
+        run: python3 tools/fetch_private_asset.py "$GITHUB_REPOSITORY" "$INPUTS_RELEASE" "UrbanRecomp-$PACKAGE_VERSION-android-universal-unsigned.apk" platform/android/app/build/outputs/apk/release/app-release-unsigned.apk
       - name: Enable emulator hardware acceleration
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -62,6 +70,7 @@ jobs:
           api-level: 35
           arch: x86_64
           profile: pixel_7
+          emulator-options: '-no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -skin 1280x720'
           disable-animations: true
           script: python3 tools/test_android_emulator.py
       - uses: actions/upload-artifact@v4
