@@ -40,10 +40,16 @@ assert 'com.android.documentsui' in picker,'Native ROM picker was not presented'
 pid=adb('shell','pidof','io.github.kandowontu2.urbanrecomp').strip()
 assert pid,'App exited while opening the ROM picker'
 adb('shell','input','keyevent','4');time.sleep(2)
+adb('shell','uiautomator','dump','/sdcard/window.xml');returned=adb('shell','cat','/sdcard/window.xml')
+ack=next((e for e in ET.fromstring(returned).iter('node') if e.attrib.get('text','').casefold()=='got it'),None)
+if ack is not None:
+    x1,y1,x2,y2=map(int,re.findall(r'\d+',ack.attrib['bounds']))
+    adb('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2));time.sleep(2)
 adb('shell','screencap','-p','/sdcard/native-launcher.png');adb('pull','/sdcard/native-launcher.png',str(out/'native-launcher.png'))
 assert adb('shell','pidof','io.github.kandowontu2.urbanrecomp').strip()==pid,'App exited on ROM-picker cancellation'
 adb('shell','input','tap','640','360');time.sleep(3)
 adb('shell','uiautomator','dump','/sdcard/window.xml');reopened=adb('shell','cat','/sdcard/window.xml')
+(out/'reopened.xml').write_text(reopened);(out/'logcat.txt').write_text(adb('logcat','-d'))
 assert 'com.android.documentsui' in reopened,'ROM picker did not reopen after cancellation'
 key.unlink();apk.unlink()
 print('Android emulator: assets, launcher, native SDL entry and ROM picker passed; production key never used')
