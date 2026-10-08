@@ -927,19 +927,33 @@ colors and extra forest patches), Desert (pale sand and dry scrub), Mars (red so
 rock), Venus (sulfur terrain and acid seas), Arctic (snow and ice), Swamp
 (wetland soil and vegetation), and Moon (gray lunar dust and dark ice seas).
 Moon generates no natural forests, including Practice and Journey expansions;
-parks can still be planted. These are graphical themes using ordinary terrain
-rules: lava/acid still has water's construction rules, and themed vegetation
-still has forest's rules. Each city saves its type, including Journey expansions.
+parks can still be planted. Lava/acid retains water's construction rules, and
+themed natural features retain forest's amenity and bulldozing rules. Basalt
+floods additionally ignite adjacent bare ground and flammable non-center tiles;
+the native fire simulation then spreads/extinguishes those fires and destroys
+buildings normally. The original flood announcement, spreading and recession
+remain active. Other land types keep ordinary flood behavior.
+Each city saves its type, including Journey expansions.
 Older saves use Native. Every new city defaults to Native; loaded cities retain
 their saved theme. Opening a new map also clears the previous city's host
 camera offset, focus target and zoom.
 
-The themes retain the original terrain pixels, connected shoreline and forest
-masks, and animated water. Explicit soil, bank, water and canopy color ramps
+New Mars maps keep about 24% of the original natural forest cells, replacing
+them with three pale rock formations and varied orientations. Desert keeps
+roughly 3% as small rounded scrub patches with refitted native edges. Arctic
+uses four randomized snow-mound shapes. All sizes and generation styles,
+Practice and Journey use the same feature scale; Native remains byte-exact.
+Existing city saves retain their terrain density and all player-built parks.
+
+The themes retain original connected shorelines and animated water. Explicit
+soil, bank, water and canopy/rock/snow color ramps
 replace the earlier noisy eight-pixel patterns, flat lava and clipped vegetation.
 Red, yellow, orange, metal and other unrelated palette colors stay native.
-The renderer adjusts the small terrain palette rather than rewriting terrain
-CHR every frame; CPU and GPU paths use the same themed palette.
+The renderer adjusts the small terrain palette and replaces only the eighteen
+natural-forest characters for Mars/Arctic. Character art updates only on entry,
+theme changes or cartridge uploads. CPU and GPU paths use the same themed art;
+leaving the city restores native graphics. Water, parks, buildings and menu
+characters remain unchanged.
 
 Custom land types follow the saved in-game month. Seasonal palette anchors are
 January (winter), April (spring), July (summer) and October (autumn); the intervening
@@ -953,9 +967,9 @@ not the seasonal calendar; Tab advances seasons as it advances the game clock.
 | Basalt | Fresh ash-green vegetation, autumn olive tones, light winter frost; lava stays hot |
 | Amazon | Evergreen rainforest with wet winter/spring and warmer, drier autumn colors |
 | Desert | Fresh spring scrub, warm summer sand, dry autumn scrub, cool winter tones |
-| Mars | Rusty summer ground and rocks, pale winter frost |
+| Mars | Red summer ground with pale stone formations, cooler winter rock frost |
 | Venus | Subtle sulfur-ground and acid-sea color shifts, without snow or freezing |
-| Arctic | Spring melt, a short summer tundra thaw, autumn cooling, deep winter snow and icy water colors |
+| Arctic | White snow mounds with blue shadows; spring melt, summer ground thaw, autumn cooling and deeper winter snow |
 | Swamp | Fresh spring greens, mossy summer, amber autumn, frosted winter vegetation and banks |
 | Moon | Stable gray lunar dust and dark ice seas throughout the year, without natural forests |
 

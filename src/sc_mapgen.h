@@ -69,6 +69,9 @@ void sc_mapgen_feature_centre(ScMapGenPrng *p, ScMapGenState *st);
 void sc_mapgen_feature_scatter(ScMapGenPrng *p, ScMapGenState *st);
 /* Two more native forest-scatter passes, at the same tile/patch scale. */
 void sc_mapgen_extra_forests(ScMapGenPrng *p,ScMapGenState *st);
+/* Natural features only: sparse Mars rocks, rare Desert scrub, randomized
+ * Arctic snow mounds, Amazon forest passes and an airless Moon. */
+void sc_mapgen_land_features(ScMapGenPrng *p,ScMapGenState *st,unsigned land);
 
 /* 01:f5b9 -- walk from the centre one way, then the opposite way. The walk
  * itself ($f600) is not decompiled yet. One PRNG step. */

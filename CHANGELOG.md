@@ -1,5 +1,16 @@
 # Enhanced fork changelog
 
+## Enhanced 1.0.2 — 2026-10-07
+
+- Make Mars natural terrain much sparser, with three pale rock formations and
+  randomized orientations instead of trees. Keep its red soil and winter frost.
+- Reduce Desert vegetation to rare, small scrub patches. Replace Arctic natural
+  trees with four varied snow-mound shapes and seasonal blue-white shading.
+- Make Basalt lava floods ignite adjacent land and flammable tiles while
+  retaining ordinary flood spreading/recession and native fire behavior.
+- Apply natural-feature changes to every map size, generation style, Practice
+  and Journey expansion. Preserve existing city terrain and player-built parks.
+
 ## Enhanced 1.0.1 — 2026-10-07
 
 - Include the verified Windows single EXE and universal Mac app from Enhanced

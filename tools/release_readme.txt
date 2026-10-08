@@ -1,9 +1,10 @@
-URBANRECOMP ENHANCED 1.0
+URBANRECOMP ENHANCED 1.0.2
 ==========================================================
 
-The first stable Enhanced release consolidates Enhanced Betas 1-23.
+Enhanced 1.0.2 adds varied Mars rocks, Arctic snow mounds, sparse Desert
+vegetation and fires accompanying Basalt lava floods.
 Enhanced 1.0 is versioned separately from the upstream UrbanRecomp engine.
-Downloads: https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.0
+Downloads: https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.2
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
 The runtime, assets, documentation, credits and restored soundtrack are

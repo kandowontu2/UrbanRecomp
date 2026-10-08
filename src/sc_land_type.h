@@ -18,9 +18,12 @@ typedef struct {
     bool valid;
     unsigned base;
     uint16_t palette[32],shown_palette[32];
+    bool relief_valid;
+    unsigned relief_base,relief_type;
+    uint16_t relief_original[18][16],relief_shown[18][16];
 } ScLandGraphics;
-/* Keep cartridge terrain textures, animation and connected edge masks intact.
- * Theme only designated terrain colors; restore live native uploads on exit. */
+/* Mars/Arctic replace only natural forest CHR; parks and shores stay native.
+ * Restore native graphics/uploads when changing themes or leaving the city. */
 bool ScLandGraphicsApply(ScLandGraphics *state,unsigned type,unsigned month,bool active,
     unsigned chr_base,uint16_t *vram,uint16_t *cgram);
 
@@ -33,3 +36,22 @@ typedef struct {
 /* Only the two stadium CHR sets and their flagpole belong to this skin. */
 bool ScLandStadiumApply(ScLandStadiumGraphics *state,unsigned type,bool active,
     unsigned chr_base,uint16_t *vram);
+
+/* Four cardinal neighbours of a newly flooded lava cell. Match the native
+ * fire's flammable/non-owner rule; bare ground may also catch lava fire.
+ * Never replace water, existing fire, flood or a zone's center marker. */
+static inline unsigned ScLandFloodFireMask(unsigned type,const uint8_t *map,
+        unsigned width,unsigned height,unsigned cell,const uint8_t *properties) {
+    if(type!=SC_LAND_BASALT || !map || !properties || !width || cell>=width*height)return 0;
+    unsigned x=cell%width,y=cell/width,mask=0;
+    const int dx[]={-1,1,0,0},dy[]={0,0,-1,1};
+    for(unsigned d=0;d<4;++d) {
+        int px=(int)x+dx[d],py=(int)y+dy[d];
+        if(px<0 || py<0 || (unsigned)px>=width || (unsigned)py>=height)continue;
+        unsigned at=2*((unsigned)py*width+(unsigned)px);
+        unsigned tile=(map[at]|(unsigned)map[at+1]<<8)&1023;
+        if(!tile || (tile>=20 && tile!=0x7f && tile!=0x365 &&
+                    (properties[tile]&5)==4))mask|=1u<<d;
+    }
+    return mask;
+}

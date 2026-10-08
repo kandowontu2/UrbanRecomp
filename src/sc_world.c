@@ -117,8 +117,7 @@ static void generate_mode(ScWorld *w,ScMapGenPrng *prng,unsigned size,unsigned s
     else if(size==2) sc_mapgen_generate_huge(prng,state);
     else sc_mapgen_generate_large(prng,state);
     w->land_type=land<SC_LAND_TYPES?land:0;
-    if(w->land_type==SC_LAND_AMAZON)sc_mapgen_extra_forests(prng,state);
-    if(w->land_type==SC_LAND_MOON)sc_mapgen_remove_forests(state);
+    sc_mapgen_land_features(prng,state,w->land_type);
     for (unsigned i=0;i<ScWorldCells(w);++i) put(w->tiles+i*2,state->map[i]);
     free(state);w->active=true;
 }

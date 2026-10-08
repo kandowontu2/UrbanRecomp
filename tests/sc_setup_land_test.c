@@ -1,5 +1,6 @@
 #include "sc_city_setup.h"
 #include "sc_land_type.h"
+#include "sc_mapgen.h"
 #include "snes/interp816.h"
 #include <assert.h>
 #include <stdio.h>
@@ -10,7 +11,48 @@ static uint8_t ram[0x20000],rom[0x80000];
 static uint16_t vram[0x8000],original[0x8000],palette[256],original_palette[256];
 static unsigned word(unsigned p) {return ram[p]|ram[p+1]<<8;}
 static void put(unsigned p,unsigned v) {ram[p]=v;ram[p+1]=v>>8;}
+static void check_relief(unsigned type) {
+    bool themed=type==SC_LAND_MARS || type==SC_LAND_ARCTIC;
+    for(unsigned i=0;i<32768;++i)
+        if(!themed || i/16<0x28e || i/16>0x29f)assert(vram[i]==original[i]);
+    if(themed) {
+        unsigned variants=type==SC_LAND_MARS?3:4;
+        for(unsigned i=0;i<variants;++i)for(unsigned j=0;j<i;++j)
+            assert(memcmp(vram+(0x28e + i)*16,vram+(0x28e + j)*16,32));
+    }
+}
+static void check_natural_features(void) {
+    ScMapGenState *st=calloc(1,sizeof *st);assert(st);
+    const unsigned widths[]={120,240,480,960,1920,3840},heights[]={100,200,400,800,1600,3200};
+    for(unsigned size=0;size<6;++size)for(unsigned land=0;land<SC_LAND_TYPES;++land) {
+        if(land==SC_LAND_AMAZON)continue; /* Existing native extra-scatter tests. */
+        st->width=widths[size];st->height=heights[size];
+        unsigned n=st->width*st->height,natural=0;
+        for(unsigned i=0;i<n;++i) {
+            st->map[i]=i%97==0?1:i%97==1?38:i%97==2?0x27c:20+i%18;
+            natural+=i%97>2;
+        }
+        ScMapGenPrng pr={73,819,29},before=pr;
+        sc_mapgen_land_features(&pr,st,land);
+        assert(!memcmp(&pr,&before,sizeof pr));
+        unsigned count=0,variants=0;
+        for(unsigned i=0;i<n;++i) {
+            unsigned tile=st->map[i]&1023;
+            if(i%97<=2)assert(tile==(i%97==0?1:i%97==1?38:0x27c));
+            else if(tile) {assert(tile>=20 && tile<38);++count;variants|=1u<<(tile-20);}
+        }
+        if(land==SC_LAND_MARS)assert(count>natural/5 && count<natural*28/100);
+        else if(land==SC_LAND_DESERT)assert(count>0 && count<natural/20);
+        else if(land==SC_LAND_MOON)assert(!count);
+        else assert(count==natural);
+        if(land==SC_LAND_MARS || land==SC_LAND_ARCTIC)assert(variants==((1u<<18)-1));
+        if(land==SC_LAND_MARS || land==SC_LAND_DESERT)
+            printf("natural features size=%u land=%s retained=%.2f%%\n",size,ScLandTypeName(land),100.0*count/natural);
+    }
+    free(st);
+}
 int main(void) {
+    check_natural_features();
     Interp816 cpu={0};cpu.k=3;
     for(unsigned size=0;size<6;++size)for(unsigned level=0;level<4;++level) {
         put(0xb57,level);cpu.pc=0xc65c;
@@ -53,9 +95,9 @@ int main(void) {
     ScLandGraphics graphics={0};unsigned hashes[SC_LAND_TYPES]={0};
     for(unsigned type=1;type<SC_LAND_TYPES;++type) {
         assert(ScLandGraphicsApply(&graphics,type,7,true,0,vram,palette));
-        /* Every connected shoreline/forest mask and animated water tile
-         * remains byte-exact. Avoid per-tile shapes and noisy replacement dirt. */
-        assert(!memcmp(vram,original,sizeof vram));
+        /* Only natural forest art changes for Mars/Arctic. Native shores,
+         * parks, buildings, menus and animation remain byte-exact. */
+        check_relief(type);
         for(unsigned i=0;i<256;++i) {
             unsigned slot=i>=16 && i<32?i-16:i>=112 && i<128?i-96:99;
             bool themed=slot==3 || slot==4 || slot==7 || (slot>=10 && slot<=15) ||
@@ -95,7 +137,7 @@ int main(void) {
             for(unsigned i=0;i<256;++i)season_hash[season]=season_hash[season]*33+palette[i];
             for(unsigned earlier=0;earlier<season;++earlier)
                 assert(type==SC_LAND_MOON?season_hash[season]==season_hash[earlier]:season_hash[season]!=season_hash[earlier]);
-            assert(!memcmp(vram,original,sizeof vram));
+            check_relief(type);
             assert(palette[20]!=palette[26] && palette[125]!=palette[126] && palette[126]!=palette[127]);
             for(unsigned tile=0;tile<38;++tile) {
                 assert(ScLandPreviewColor(type,tile,0,0,anchors[season])==0xff000000);
@@ -144,6 +186,16 @@ int main(void) {
     ScLandGraphicsApply(&graphics,SC_LAND_DESERT,10,true,0,vram,palette);
     ScLandGraphicsApply(&graphics,0,10,false,0,vram,palette);
     assert(palette[23]==0x1234 && !memcmp(vram,original,sizeof vram));
+    /* Switching relief styles or CHR bases restores native art, including
+     * cartridge DMA refreshes while the replacement is visible. */
+    ScLandGraphicsApply(&graphics,SC_LAND_MARS,7,true,0,vram,palette);
+    unsigned forest_at=0x28e*16;vram[forest_at]=0xbeef;original[forest_at]=0xbeef;
+    ScLandGraphicsApply(&graphics,SC_LAND_ARCTIC,1,true,0,vram,palette);
+    check_relief(SC_LAND_ARCTIC);
+    ScLandGraphicsApply(&graphics,SC_LAND_ARCTIC,1,true,0x4000,vram,palette);
+    assert(!memcmp(vram,original,0x4000*2));
+    ScLandGraphicsApply(&graphics,0,1,false,0,vram,palette);
+    assert(!memcmp(vram,original,sizeof vram));
     /* Dome art touches only stadium-owned CHR; menus, Earth themes and
      * snapshots restore byte-exact native art, including live DMA updates. */
     const unsigned chars[]={0x3b9,0x3ba,0x3bb,0x1e5,0x3bc,0x3bd,0x3be,0x1e6,
@@ -167,6 +219,6 @@ int main(void) {
     ScLandStadiumApply(&stadium,SC_LAND_MARS,true,0,vram);
     ScLandStadiumApply(&stadium,0,false,0,vram);
     assert(!memcmp(vram,original,sizeof original));
-    puts("PASS: city setup, seasonal/lunar palettes, native restoration, preview fades and stadium-only domes");
+    puts("PASS: all-size natural density/variants, seasonal rock/snow art, native restoration, preview fades and stadium-only domes");
     return 0;
 }

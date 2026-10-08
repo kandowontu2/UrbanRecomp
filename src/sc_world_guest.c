@@ -11,6 +11,7 @@
 #include "sc_tile_lookup.h"
 #include "sc_postpass.h"
 #include "sc_sweep.h"
+#include "sc_land_type.h"
 #include "snes/interp816.h"
 #include "sc_program.h"
 #include <string.h>
@@ -474,7 +475,31 @@ static bool calendar_step(ScWorld *w,Interp816 *c,uint8_t *r) {
     }
     return false;
 }
+static bool land_flood_step(ScWorld *w,const Interp816 *c,uint8_t *r) {
+    /* US 03:bc53 seeds a flood, 03:adb3 spreads it. Run immediately before
+     * their STA, after the native bounds/flammability/demolition checks.
+     * The preceding 849e lookup supplies the full destination, not the
+     * truncated simulation-sweep coordinates on expanded maps. */
+    if(!w || w->land_type!=SC_LAND_BASALT || c->k!=3 || c->mf ||
+       (c->pc!=0xbc53 && c->pc!=0xadb3) || c->a!=0x365 || !tile_properties ||
+       c->e || c->d || c->waiting || c->stopped || c->nmiWanted ||
+       (c->irqWanted && !c->i))return false;
+    unsigned width=w->active?ScWorldWidth(w):120,height=w->active?ScWorldHeight(w):100;
+    unsigned offset=w->active?w->map_anchor:c->x;
+    if(offset==UINT32_MAX || (offset&1) || offset>=width*height*2)return true;
+    uint8_t *map=w->active?w->tiles:r+0x10200;
+    if((word(map,offset)&1023)==0x365)return true;
+    unsigned cell=offset/2,mask=ScLandFloodFireMask(w->land_type,map,width,height,cell,tile_properties);
+    const int dx[]={-1,1,0,0},dy[]={0,0,-1,1};
+    for(unsigned d=0;d<4;++d)if(mask&(1u<<d)) {
+        int x=(int)(cell%width)+dx[d],y=(int)(cell/width)+dy[d];
+        if(w->active)ScWorldPutCell(w,x,y,0x7f);
+        else put(map,2*((unsigned)y*width+(unsigned)x),0x7f);
+    }
+    return true;
+}
 void ScWorldGuestStep(ScWorld *w,Interp816 *c,uint8_t *r) {
+    if(land_flood_step(w,c,r))return;
     if(calendar_step(w,c,r))return;
     if(w && w->active && c->k==3 && c->pc==0x9c39 && !c->nmiWanted && !(c->irqWanted && !c->i) && stencil_backend.land_begin)
         stencil_backend.land_begin(stencil_backend.context,w);
@@ -917,6 +942,7 @@ static bool preparation_site(const uint8_t *bits,unsigned pc) {
     return pc>=0x8000 && (bits[(pc-0x8000)>>3]&(1u<<(pc&7)))!=0;
 }
 void ScWorldGuestStepPrepared(ScWorld *w,Interp816 *c,uint8_t *r) {
+    if(land_flood_step(w,c,r))return;
     if(calendar_step(w,c,r))return;
     if(preparation_reference()) {ScWorldGuestStep(w,c,r);return;}
     if(!w->active || c->k>=4 || !preparation_site(sc_world_step_sites,c->pc)) return;

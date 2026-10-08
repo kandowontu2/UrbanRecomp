@@ -262,8 +262,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set_target_properties(UrbanRecomp PROPERTIES MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/platform/ios/Info.plist.in"
         MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.kandowontu2.UrbanRecomp"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.0.1"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.1"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.0.2"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.2"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
         XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO")
@@ -759,12 +759,13 @@ if(MSVC)
 else()
     target_compile_options(UrbanRecompDebugGiftTest PRIVATE -UNDEBUG)
 endif()
-add_executable(UrbanRecompSetupLandTest EXCLUDE_FROM_ALL tests/sc_setup_land_test.c src/sc_city_setup.c src/sc_land_type.c)
+add_executable(UrbanRecompSetupLandTest EXCLUDE_FROM_ALL tests/sc_setup_land_test.c src/sc_city_setup.c src/sc_land_type.c src/sc_mapgen.c)
 add_executable(UrbanRecompLandSaveTest EXCLUDE_FROM_ALL tests/sc_land_save_test.c src/sc_world.c src/sc_mapgen.c)
 target_include_directories(UrbanRecompLandSaveTest PRIVATE src)
 target_include_directories(UrbanRecompSetupLandTest PRIVATE src ${SNESRECOMP_RUNNER_INCLUDE_DIRS})
 if(NOT MSVC)
     target_compile_options(UrbanRecompSetupLandTest PRIVATE -UNDEBUG -Wall -Wextra)
+    target_link_libraries(UrbanRecompSetupLandTest PRIVATE m)
     target_compile_options(UrbanRecompLandSaveTest PRIVATE -UNDEBUG -Wall -Wextra)
     target_link_libraries(UrbanRecompLandSaveTest PRIVATE m)
 endif()

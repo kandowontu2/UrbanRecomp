@@ -20,7 +20,7 @@ with zipfile.ZipFile(a.package) as z:
                 assert struct.unpack_from('<H',data,18)[0]==(183 if abi=='arm64-v8a' else 62)
     else:
         info=plistlib.loads(z.read(prefix+'Info.plist'));assert info['CFBundleIdentifier']=='io.github.kandowontu2.UrbanRecomp'
-        assert info['CFBundleShortVersionString']=='1.0.1' and info['MinimumOSVersion']=='14.0'
+        assert info['CFBundleShortVersionString']=='1.0.2' and info['MinimumOSVersion']=='14.0'
         assert info.get('UIApplicationSupportsIndirectInputEvents') is True
         data=z.read(prefix+'UrbanRecomp');assert data[:4]==b'\xcf\xfa\xed\xfe' and struct.unpack_from('<I',data,4)[0]==0x100000c
 print('Mobile archive verified: architectures, 21 tracks, credits, no ROM/state/signing key')

@@ -4427,8 +4427,7 @@ static bool run_one_frame(void) {
           ScWorldReset(&s_world);
           if(s_terrain_style)sc_mapgen_generate_style(&pr,&gs,0,s_terrain_style);
           else sc_mapgen_generate(&pr,&gs);
-          if(s_land_type==SC_LAND_AMAZON)sc_mapgen_extra_forests(&pr,&gs);
-          if(s_land_type==SC_LAND_MOON)sc_mapgen_remove_forests(&gs);
+          sc_mapgen_land_features(&pr,&gs,s_land_type);
           sc_mapgen_apply_number(&gs,number);
           s_world.journey=s_journey_arming;
         }
@@ -5103,21 +5102,16 @@ static bool run_one_frame(void) {
         ScMapGenPrng pr={ram_w(0x59),ram_w(0x5b),ram_w(0x5d)};
         if(s_large_maps)ScWorldGenerateLand(&s_world,s_large_maps,&pr,s_terrain_style,s_land_type);
         s_world.land_type=(uint8_t)s_land_type;
-        if(!s_world.active && s_land_type==SC_LAND_AMAZON) {
+        if(!s_world.active && s_land_type) {
           ScMapGenState *forest=calloc(1,sizeof *forest);
           if(forest) {
             forest->width=120;forest->height=100;
             for(unsigned i=0;i<12000;++i)forest->map[i]=ram_w(0x10200+2*i);
-            sc_mapgen_extra_forests(&pr,forest);
+            sc_mapgen_land_features(&pr,forest,s_land_type);
             for(unsigned i=0;i<12000;++i)ram_set_w(0x10200+2*i,forest->map[i]);
             free(forest);
           }
         }
-        if(!s_world.active && s_land_type==SC_LAND_MOON)
-          for(unsigned i=0;i<12000;++i) {
-            unsigned tile=ram_w(0x10200+2*i)&1023;
-            if(tile>=20 && tile<38)ram_set_w(0x10200+2*i,0);
-          }
         if(s_world.active) {
           ScWorldMirror(&s_world,g_ram);
           ram_set_w(0x1c5,ScWorldWidth(&s_world)-25);ram_set_w(0x1c9,ScWorldHeight(&s_world)-22);

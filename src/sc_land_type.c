@@ -48,13 +48,13 @@ static const LandPalette palettes[SC_LAND_TYPES][SC_LAND_SEASONS]={
     /* Mars: Dusty summers and pale winter frost on ground and rock. */
     {
         {RGB(25,12,8),RGB(27,14,10),RGB(19,8,5),RGB(30,19,14),
-         RGB(6,12,17),RGB(3,7,11),RGB(27,15,10),RGB(21,9,6),RGB(14,5,3),RGB(15,5,3)},
+         RGB(6,12,17),RGB(3,7,11),RGB(29,27,24),RGB(22,20,17),RGB(14,12,10),RGB(15,5,3)},
         {RGB(26,10,6),RGB(28,12,8),RGB(20,6,3),RGB(30,16,11),
-         RGB(5,10,15),RGB(3,6,10),RGB(27,13,7),RGB(21,7,4),RGB(14,4,2),RGB(15,5,3)},
+         RGB(5,10,15),RGB(3,6,10),RGB(28,26,23),RGB(21,19,16),RGB(13,11,9),RGB(15,5,3)},
         {RGB(24,9,6),RGB(26,11,8),RGB(18,5,3),RGB(29,15,11),
-         RGB(4,9,14),RGB(2,5,9),RGB(25,11,7),RGB(19,6,3),RGB(12,3,2),RGB(15,5,3)},
+         RGB(4,9,14),RGB(2,5,9),RGB(27,25,22),RGB(20,18,15),RGB(12,10,8),RGB(15,5,3)},
         {RGB(27,21,19),RGB(29,23,21),RGB(21,15,13),RGB(31,26,23),
-         RGB(11,17,21),RGB(6,11,16),RGB(30,23,19),RGB(23,16,13),RGB(15,9,8),RGB(15,5,3)}
+         RGB(11,17,21),RGB(6,11,16),RGB(31,30,29),RGB(25,24,23),RGB(17,16,15),RGB(15,5,3)}
     },
     /* Venus: Subtle sulfur/acid color shifts; no temperate snow or ice. */
     {
@@ -70,13 +70,13 @@ static const LandPalette palettes[SC_LAND_TYPES][SC_LAND_SEASONS]={
     /* Arctic: Spring melt, short summer thaw, autumn cooling and deep winter snow. */
     {
         {RGB(24,26,25),RGB(26,28,27),RGB(15,18,18),RGB(29,31,30),
-         RGB(5,15,22),RGB(3,9,15),RGB(21,26,24),RGB(11,20,17),RGB(5,13,10),RGB(9,10,8)},
+         RGB(5,15,22),RGB(3,9,15),RGB(30,31,31),RGB(22,26,29),RGB(12,18,23),RGB(9,10,8)},
         {RGB(22,25,23),RGB(24,27,25),RGB(15,18,15),RGB(28,30,29),
-         RGB(4,12,21),RGB(2,7,13),RGB(16,23,19),RGB(8,18,13),RGB(4,11,8),RGB(9,10,8)},
+         RGB(4,12,21),RGB(2,7,13),RGB(28,30,31),RGB(20,24,28),RGB(10,16,22),RGB(9,10,8)},
         {RGB(23,25,25),RGB(25,27,27),RGB(16,18,19),RGB(29,30,30),
-         RGB(6,14,23),RGB(3,9,15),RGB(20,23,17),RGB(12,18,11),RGB(6,12,7),RGB(9,10,8)},
+         RGB(6,14,23),RGB(3,9,15),RGB(29,30,31),RGB(21,25,29),RGB(11,17,23),RGB(9,10,8)},
         {RGB(29,30,31),RGB(30,31,31),RGB(21,24,27),RGB(31,31,31),
-         RGB(14,22,28),RGB(8,16,23),RGB(29,31,31),RGB(20,25,26),RGB(10,17,17),RGB(9,10,8)}
+         RGB(14,22,28),RGB(8,16,23),RGB(31,31,31),RGB(25,28,31),RGB(15,21,27),RGB(9,10,8)}
     },
     /* Swamp: Fresh spring, mossy summer, amber autumn and frosted winter wetland. */
     {
@@ -152,11 +152,60 @@ static uint16_t land_color(const LandPalette *p,unsigned index,uint16_t native) 
     default:return native;
     }
 }
+/* These eighteen BG2 characters are exclusively natural terrain IDs 20..37.
+ * Parks use the next character; water, buildings and sprites share none of
+ * these. Keep the native palette/footprint and encode original pixel art in
+ * its four-plane format so CPU, GPU, preview and native-core views agree. */
+static const char relief[7][8][9]={
+    {"........","...hh...","..hmmm..",".hhmmmm.",".hmmmsm.","..mmsss.","...sss..","........"},
+    {"........","........",".hh.....","hmmm.hh.","hmms.hmm",".sss.mms",".....ss.","........"},
+    {"........","..hh....",".hhmm...",".hmmms..","..mms.hh","..sss.ms","......ss","........"},
+    {"........","........","..hhh...",".hhhhm..","hhhhmmm.","hhhmmmms",".mmmsss.","........"},
+    {"........","...hh...","..hhhh..",".hhhhhm.","hhhhmmms","hhmmmmss",".mmssss.","........"},
+    {"........","........",".hhh....","hhhhm.hh","hhhmmhhh","mmmssmmm",".sss..ss","........"},
+    {"........","........","....hh..","...hhhh.",".hhhhhhm","hhhmmmms",".mmmsss.","........"}
+};
+static bool relief_apply(ScLandGraphics *s,unsigned type,bool active,unsigned base,uint16_t *vram) {
+    bool enabled=active && (type==SC_LAND_MARS || type==SC_LAND_ARCTIC),changed=false;
+    if(s->relief_valid && (!enabled || s->relief_base!=base)) {
+        for(unsigned t=0;t<18;++t)for(unsigned i=0;i<16;++i) {
+            unsigned at=(s->relief_base+(0x28e + t)*16+i)&32767;
+            if(vram[at]==s->relief_shown[t][i] && vram[at]!=s->relief_original[t][i]) {
+                vram[at]=s->relief_original[t][i];changed=true;
+            }
+        }
+        s->relief_valid=false;
+    }
+    if(!enabled)return changed;
+    bool fresh=!s->relief_valid,dirty=fresh || s->relief_type!=type;
+    s->relief_valid=true;s->relief_base=base;s->relief_type=type;
+    for(unsigned t=0;t<18;++t)for(unsigned i=0;i<16;++i) {
+        unsigned at=(base+(0x28e + t)*16+i)&32767;
+        if(fresh || vram[at]!=s->relief_shown[t][i]) {
+            s->relief_original[t][i]=vram[at];dirty=true;
+        }
+    }
+    if(!dirty)return changed;
+    for(unsigned t=0;t<18;++t) {
+        unsigned shape=type==SC_LAND_MARS?t%3:3+t%4;
+        uint16_t image[16]={0};
+        for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x) {
+            char ink=relief[shape][y][t&4?7-x:x];
+            unsigned ci=ink=='h'?13:ink=='m'?14:ink=='s'?15:12,bit=7-x;
+            image[y]|=(ci&1)<<bit|((ci>>1)&1)<<(bit+8);
+            image[y+8]|=((ci>>2)&1)<<bit|((ci>>3)&1)<<(bit+8);
+        }
+        for(unsigned i=0;i<16;++i) {
+            unsigned at=(base+(0x28e + t)*16+i)&32767;
+            changed|=vram[at]!=image[i];vram[at]=s->relief_shown[t][i]=image[i];
+        }
+    }
+    return changed;
+}
 bool ScLandGraphicsApply(ScLandGraphics *s,unsigned type,unsigned month,bool active,
         unsigned base,uint16_t *vram,uint16_t *cgram) {
-    (void)vram; /* Native CHR is deliberately never rewritten. */
     if(type>=SC_LAND_TYPES)type=0;
-    bool changed=false;
+    bool changed=relief_apply(s,type,active,base,vram);
     if(!active || !type) {
         if(s->valid)for(unsigned i=0;i<32;++i) {
             unsigned at=i<16?16+i:112+i-16;

@@ -113,6 +113,7 @@ static const uint8_t sc_world_step_sites[4096]={
     [1439]=0x40,
     [1441]=0x02,
     [1443]=0x80,
+    [1462]=0x08,
     [1468]=0x80,
     [1469]=0x40,
     [1474]=0x80,
@@ -171,6 +172,7 @@ static const uint8_t sc_world_step_sites[4096]={
     [1881]=0x04,
     [1884]=0x40,
     [1885]=0x80,
+    [1930]=0x08,
     [1939]=0x80,
     [1940]=0x80,
     [1977]=0x40,
@@ -202,4 +204,4 @@ static const uint8_t sc_world_vehicle_sites[4096]={
     [1837]=0x09,
     [1845]=0x48,
 };
-/* Ownership source SHA256: 34a11ab61ffc4a174962b405711b16717707067a4a8079c904bbf8915c13b037 */
+/* Ownership source SHA256: 62c43de3157fcf5c77a199d097ecef1a30755f4eacff78f83291be2465408ab6 */

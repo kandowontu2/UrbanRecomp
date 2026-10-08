@@ -5,7 +5,7 @@ on:
       source_ref: {description: Source commit, required: true, default: main, type: string}
       inputs_release: {description: Temporary private draft inputs, required: true, type: string}
       inputs_sha256: {description: Input archive SHA-256, required: true, type: string}
-      version: {description: Package version, required: true, default: enhanced-v1.0.1, type: string}
+      version: {description: Package version, required: true, default: enhanced-v1.0.2, type: string}
       platform: {description: Platform, required: true, default: both, type: choice, options: [both, android, ios]}
       test_only: {description: Recheck the existing private Android APK without rebuilding, required: false, default: false, type: boolean}
 permissions:

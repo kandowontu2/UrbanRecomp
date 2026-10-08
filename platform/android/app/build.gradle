@@ -7,8 +7,8 @@ android {
         applicationId 'io.github.kandowontu2.urbanrecomp'
         minSdk 26
         targetSdk 35
-        versionCode 10001
-        versionName '1.0.1'
+        versionCode 10002
+        versionName '1.0.2'
         externalNativeBuild { cmake {
             targets 'UrbanRecomp'
             arguments '-DSNESRECOMP_SDL_BACKEND=SDL3', '-DSC_AOT=OFF',

@@ -1,6 +1,7 @@
 #include "sc_scenario_event.h"
 #include "sc_program.h"
 #include "sc_world_guest.h"
+#include "sc_land_type.h"
 #include "snes/interp816.h"
 #include <assert.h>
 #include <stdio.h>
@@ -138,12 +139,74 @@ static void ufo_damage(bool compiled,unsigned size) {
     printf("PASS %s UFO damage size=%u with distant simulation anchor and queued advice\n",compiled?"native":"oracle",size);
     interp816_free(cpu);memset(&guest,0,sizeof guest);
 }
+static void lava_flood(bool compiled,unsigned size,unsigned land,unsigned pc,bool corner) {
+    memset(ram,0,sizeof ram);memset(&guest,0,sizeof guest);ScWorldReset(world);
+    world->active=size!=0;world->huge=size>=2;world->giant=size>=3;
+    world->colossal=size>=4;world->mega=size>=5;world->land_type=land;
+    unsigned width=size?ScWorldWidth(world):120,height=size?ScWorldHeight(world):100;
+    unsigned x=corner?width-1:width-31,y=corner?height-1:height-31;
+    unsigned offset=2*(y*width+x);
+    uint8_t *map=size?world->tiles:ram+0x10200;
+    for(unsigned dy=0;dy<3;++dy)for(unsigned dx=0;dx<3;++dx) {
+        unsigned at=2*((y+dy-1)*width+x+dx-1);
+        if(x+dx-1<width && y+dy-1<height) {map[at]=20;map[at+1]=0;}
+    }
+    /* Bare ground and a tree ignite; water and a building center do not.
+     * Boundary cases exercise the far bank and prohibit wrapping rows. */
+    map[offset-2]=0;map[offset-1]=0;
+    if(!corner) {
+        map[offset+2]=20;map[offset+3]=0;
+        map[offset-2*width]=0x84;map[offset-2*width+1]=0;
+        map[offset+2*width]=1;map[offset+2*width+1]=0;
+    }
+    uint8_t neighbourhood[18];
+    unsigned at=0;
+    for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)
+        if((int)x+dx<(int)width && (int)y+dy<(int)height) {
+            unsigned p=2*((y+dy)*width+x+dx);neighbourhood[at++]=map[p];neighbourhood[at++]=map[p+1];
+        }
+    Interp816 *cpu=interp816_init(NULL,read_bus,write_bus);assert(cpu);
+    cpu->k=cpu->db=3;cpu->pc=pc;cpu->e=cpu->mf=cpu->xf=false;
+    cpu->dp=0x1e00;cpu->sp=0x1ffd;cpu->x=(uint16_t)offset;cpu->a=0x365;
+    world->map_anchor=offset;
+    /* A distant sweep must never anchor the lava damage. */
+    world->coord[2][0]=40;world->coord[2][1]=20;
+    cpu->nmiWanted=true;
+    if(compiled)ScWorldGuestStepPrepared(world,cpu,ram);else ScWorldGuestStep(world,cpu,ram);
+    assert(map[offset-2]==0 && map[offset-1]==0 && map[offset]==20);
+    cpu->nmiWanted=false;cpu->irqWanted=true;cpu->i=false;
+    if(compiled)ScWorldGuestStepPrepared(world,cpu,ram);else ScWorldGuestStep(world,cpu,ram);
+    assert(map[offset-2]==0 && map[offset-1]==0 && map[offset]==20);
+    cpu->irqWanted=false;
+    Interp816 before=*cpu;
+    if(compiled)ScWorldGuestStepPrepared(world,cpu,ram);else ScWorldGuestStep(world,cpu,ram);
+    assert(!memcmp(&before,cpu,sizeof before));
+    ScWorldGuestBeginPrepared(&guest,world,cpu,rom,sizeof rom);
+    if(compiled)assert(ScProgramStep(cpu));else interp816_runOpcode(cpu);
+    assert((map[offset]|map[offset+1]<<8)==0x365);
+    at=0;unsigned fires=0;
+    for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)
+        if((int)x+dx<(int)width && (int)y+dy<(int)height) {
+            unsigned p=2*((y+dy)*width+x+dx),old=neighbourhood[at]|neighbourhood[at+1]<<8;
+            at+=2;unsigned tile=map[p]|map[p+1]<<8;
+            if(!dx && !dy)continue;
+            bool burn=land==SC_LAND_BASALT && ((dx==-1 && !dy) ||
+                (corner?!dx && dy==-1:dx==1 && !dy));
+            assert(tile==(burn?0x7f:old));fires+=tile==0x7f;
+        }
+    assert(fires==(land==SC_LAND_BASALT?2:0));
+    assert(world->coord[2][0]==40 && world->coord[2][1]==20);
+    printf("PASS %s lava flood size=%u land=%s %s %s\n",compiled?"native":"oracle",size,
+        ScLandTypeName(land),pc==0xbc53?"seed":"spread",corner?"far corner":"interior");
+    interp816_free(cpu);memset(&guest,0,sizeof guest);
+}
 int main(int argc,char **argv) {
     assert(argc==2);FILE *f=fopen(argv[1],"rb");assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);
     uint32_t hash=2166136261u;
     for(unsigned i=0;i<sizeof rom;++i)hash=(hash^rom[i])*16777619u;
     assert(ScProgramSelectRom(hash));
+    ScWorldGuestBindRom(rom,sizeof rom);
     for(unsigned compiled=0;compiled<2;++compiled)for(unsigned manual=0;manual<2;++manual)
         for(unsigned disabled=0;disabled<2;++disabled)check(compiled,manual,disabled);
     puts("PASS manual UFO: native/interpreter, zero population, NO DISASTER, untouched ROM/state restoration");
@@ -152,5 +215,10 @@ int main(int argc,char **argv) {
         meltdown(compiled,size,true);meltdown(compiled,size,false);
     }
     for(unsigned compiled=0;compiled<2;++compiled)for(unsigned size=1;size<6;++size)ufo_damage(compiled,size);
+    for(unsigned compiled=0;compiled<2;++compiled)for(unsigned size=0;size<6;++size)
+        for(unsigned land=0;land<SC_LAND_TYPES;++land)for(unsigned corner=0;corner<2;++corner) {
+            lava_flood(compiled,size,land,0xbc53,corner);
+            lava_flood(compiled,size,land,0xadb3,corner);
+        }
     menu();free(world);puts("PASS temporary native Disaster menu selection/back/other-page isolation");
 }
