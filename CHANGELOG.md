@@ -2,6 +2,8 @@
 
 ## Enhanced 1.0.1 — 2026-10-07
 
+- Include the verified Windows single EXE and universal Mac app from Enhanced
+  1.0 alongside the Linux, Android and iOS downloads in the same release.
 - Add a native Linux x86-64 release with bundled SDL3, launcher assets,
   restored soundtrack, credits and licenses. Store saves/settings in the
   user's XDG data directory and use Vulkan acceleration when available.
