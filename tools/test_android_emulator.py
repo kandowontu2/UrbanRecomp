@@ -32,11 +32,18 @@ import re
 x1,y1,x2,y2=map(int,re.findall(r'\d+',play.attrib['bounds']));adb('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2))
 time.sleep(15)
 logs=adb('logcat','-d');(out/'logcat.txt').write_text(logs)
-assert '[mobile] saves/settings:' in logs,'SDL native entry did not start'
+assert 'Running main function SDL_main' in logs,'SDL native entry did not start'
 assert 'Fatal signal' not in logs and 'FATAL EXCEPTION' not in logs,'Native/Java startup crashed'
-assert 'SDLActivity' in logs
 adb('shell','screencap','-p','/sdcard/rom-picker.png');adb('pull','/sdcard/rom-picker.png',str(out/'rom-picker.png'))
+adb('shell','uiautomator','dump','/sdcard/window.xml');picker=adb('shell','cat','/sdcard/window.xml');(out/'rom-picker.xml').write_text(picker)
+assert 'com.android.documentsui' in picker,'Native ROM picker was not presented'
+pid=adb('shell','pidof','io.github.kandowontu2.urbanrecomp').strip()
+assert pid,'App exited while opening the ROM picker'
 adb('shell','input','keyevent','4');time.sleep(2)
 adb('shell','screencap','-p','/sdcard/native-launcher.png');adb('pull','/sdcard/native-launcher.png',str(out/'native-launcher.png'))
+assert adb('shell','pidof','io.github.kandowontu2.urbanrecomp').strip()==pid,'App exited on ROM-picker cancellation'
+adb('shell','input','tap','640','360');time.sleep(3)
+adb('shell','uiautomator','dump','/sdcard/window.xml');reopened=adb('shell','cat','/sdcard/window.xml')
+assert 'com.android.documentsui' in reopened,'ROM picker did not reopen after cancellation'
 key.unlink();apk.unlink()
 print('Android emulator: assets, launcher, native SDL entry and ROM picker passed; production key never used')
