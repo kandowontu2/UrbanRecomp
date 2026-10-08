@@ -92,7 +92,7 @@ jobs:
           python3 tools/build_ios.py device
       - name: Package unsigned device IPA
         run: |
-          python3 tools/package_ios.py "$PACKAGE_VERSION" --app platform-deps/device-game/Release-iphoneos/UrbanRecomp.app --sdl-dir platform-deps/SDL
+          python3 tools/package_ios.py "$PACKAGE_VERSION" --app platform-deps/device-game/UrbanRecomp.app --sdl-dir platform-deps/SDL
           python3 tools/check_mobile_package.py "dist/UrbanRecomp-$PACKAGE_VERSION-ios-arm64-unsigned.ipa" --platform ios
           gh release upload "$INPUTS_RELEASE" "dist/UrbanRecomp-$PACKAGE_VERSION-ios-arm64-unsigned.ipa" "dist/UrbanRecomp-$PACKAGE_VERSION-ios-arm64-unsigned.ipa.sha256" --repo "$GITHUB_REPOSITORY"
       - name: Build and smoke-test the iOS simulator

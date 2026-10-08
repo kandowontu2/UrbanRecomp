@@ -2,7 +2,7 @@
 import json, plistlib, shutil, subprocess, time
 from pathlib import Path
 from platform_assets import stage_assets
-root=Path(__file__).resolve().parents[1];deps=root/'platform-deps';app=deps/'simulator-game/Release-iphonesimulator/UrbanRecomp.app'
+root=Path(__file__).resolve().parents[1];deps=root/'platform-deps';app=deps/'simulator-game/UrbanRecomp.app'
 stage_assets(root,app,deps/'SDL')
 subprocess.run(['codesign','--force','--sign','-',str(app)],check=True)
 devices=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','--json']))['devices']
