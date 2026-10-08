@@ -15,6 +15,7 @@
 <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
 <key>UILaunchScreen</key><dict/>
 <key>UIRequiresFullScreen</key><true/>
+<key>UIApplicationSupportsIndirectInputEvents</key><true/>
 <key>UIStatusBarHidden</key><true/>
 <key>CADisableMinimumFrameDurationOnPhone</key><true/>
 <key>UIFileSharingEnabled</key><true/>
