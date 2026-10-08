@@ -11,7 +11,7 @@ def stage_assets(root: Path, destination: Path, sdl: Path):
         shutil.copy2(root/'docs'/name,destination/name)
     sylt=destination/'sylt_graphics';sylt.mkdir()
     for name in ('sylt_map.bin','sylt_card.bin','PROVENANCE.md'):shutil.copy2(root/'sylt_graphics'/name,sylt/name)
-    music=destination/'music/restored';music.mkdir(parents=True)
+    music=destination/'music/restored';music.mkdir(parents=True,exist_ok=True)
     for n in range(1,22):
         track=root/'music/restored'/f'scity-msu1-{n}.pcm'
         header=track.read_bytes()[:8];size=track.stat().st_size
