@@ -91,5 +91,6 @@ graphics are embedded in the distribution.
 The nuclear meltdown and UFO disaster-menu icons are original pixel art made
 for Enhanced, matching the original game's button size, bevels and UI palette.
 Venus's alien natural vegetation, Desert's three cactus silhouettes, lunar
-rock shading and Moon's cracked-ice texture are also original host-drawn
+rock shading, Swamp's water grass/reeds and Moon's cracked-ice texture are
+also original host-drawn
 pixel art, using the same terrain character format.
