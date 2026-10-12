@@ -923,37 +923,58 @@ and the original map controls. Both rows retain the original cartridge lettering
 and device frame. Generation determines geography; land type determines its art.
 
 Land types are Native, Basalt (dark volcanic ground and lava), Amazon (rainforest
-colors and extra forest patches), Desert (pale sand and dry scrub), Mars (red soil and
-rock), Venus (sulfur terrain and acid seas), Arctic (snow and ice), Swamp
-(wetland soil and vegetation), and Moon (gray lunar dust and dark ice seas).
-Moon generates no natural forests, including Practice and Journey expansions;
-parks can still be planted. Lava/acid retains water's construction rules, and
+colors and extra forest patches), Desert (pale sand, dry scrub and lone cacti), Mars (red soil and
+rock), Venus (sulfur terrain, alien vegetation and acid seas), Arctic (snow and
+ice), Swamp (wetland soil and dense vegetation), and Moon (gray lunar dust and
+permanent pale ice and sparse gray rocks).
+Moon generates rock formations instead of trees, including Practice and Journey
+expansions; parks can still be planted. Lava/acid retains water's construction rules, and
 themed natural features retain forest's amenity and bulldozing rules. Basalt
 floods additionally ignite adjacent bare ground and flammable non-center tiles;
 the native fire simulation then spreads/extinguishes those fires and destroys
 buildings normally. The original flood announcement, spreading and recession
-remain active. Other land types keep ordinary flood behavior.
+remain active. Moon disables manual, automatic and scenario floods before
+damage/news/timers; older saved floods cannot spread or demolish neighbours.
+Other land types keep ordinary flood behavior.
 Each city saves its type, including Journey expansions.
 Older saves use Native. Every new city defaults to Native; loaded cities retain
 their saved theme. Opening a new map also clears the previous city's host
 camera offset, focus target and zoom.
 
-New Mars maps keep about 24% of the original natural forest cells, replacing
-them with three pale rock formations and varied orientations. Desert keeps
-roughly 3% as small rounded scrub patches with refitted native edges. Arctic
-uses four randomized snow-mound shapes. All sizes and generation styles,
+New Mars and Moon maps keep about 24% of the original natural forest cells,
+replacing them with three rock formations and varied orientations. Mars uses
+pale stone; Moon uses lunar grays. Desert keeps roughly 3% as small rounded
+scrub patches with refitted native edges, then scatters lone cacti with three
+silhouettes at approximately one per 256 eligible bare-sand tiles. Cacti have
+a clear neighboring tile in every direction and retain normal forest-tile
+amenities, clearing and fire rules. Arctic
+uses four randomized snow-mound shapes. Venus uses nine alien plant forms,
+with mirrored orientations: three lobed pods, three curling fronds and three
+forked shoots. Single-pixel leaf highlights, shaded irregular canopies and
+thin trunks match the cartridge trees' detail, with seasonal alien color ramps.
+New Swamp maps
+add two native forest-scatter passes, preserving water and connected shores.
+Swamp water also has seasonal grass and reed tufts, denser in the shallows and
+sparser in open channels. These decorate water pixels, retaining animated
+ripples, shoreline outlines and normal water/transport/disaster behavior in
+existing cities as well as new maps.
+All sizes and generation styles,
 Practice and Journey use the same feature scale; Native remains byte-exact.
 Existing city saves retain their terrain density and all player-built parks.
 
-The themes retain original connected shorelines and animated water. Explicit
+The themes retain original connected shorelines. Moon replaces open-water
+animation with a static cracked-ice surface; other themes retain animated water. Explicit
 soil, bank, water and canopy/rock/snow color ramps
 replace the earlier noisy eight-pixel patterns, flat lava and clipped vegetation.
 Red, yellow, orange, metal and other unrelated palette colors stay native.
 The renderer adjusts the small terrain palette and replaces only the eighteen
-natural-forest characters for Mars/Arctic. Character art updates only on entry,
+natural-forest characters for Mars/Moon/Arctic/Venus, three Desert cactus
+characters, Moon's open-water character and Swamp's natural water/shore
+characters. Swamp changes only their water pixels.
+Character art updates only on entry,
 theme changes or cartridge uploads. CPU and GPU paths use the same themed art;
-leaving the city restores native graphics. Water, parks, buildings and menu
-characters remain unchanged.
+leaving the city restores native graphics. Shore outlines, parks, buildings
+and menu characters remain unchanged.
 
 Custom land types follow the saved in-game month. Seasonal palette anchors are
 January (winter), April (spring), July (summer) and October (autumn); the intervening
@@ -966,12 +987,12 @@ not the seasonal calendar; Tab advances seasons as it advances the game clock.
 | Native | Original cartridge seasonal colors, untouched |
 | Basalt | Fresh ash-green vegetation, autumn olive tones, light winter frost; lava stays hot |
 | Amazon | Evergreen rainforest with wet winter/spring and warmer, drier autumn colors |
-| Desert | Fresh spring scrub, warm summer sand, dry autumn scrub, cool winter tones |
+| Desert | Sparse scrub and lone cacti with fresh spring greens, warm summer sand, dry autumn colors and cool winter tones |
 | Mars | Red summer ground with pale stone formations, cooler winter rock frost |
-| Venus | Subtle sulfur-ground and acid-sea color shifts, without snow or freezing |
+| Venus | Detailed lobed pods, curling fronds and forked shoots, green spring/summer leaves, cyan/violet shadows and sulfur/acid color shifts; no snow or freezing |
 | Arctic | White snow mounds with blue shadows; spring melt, summer ground thaw, autumn cooling and deeper winter snow |
-| Swamp | Fresh spring greens, mossy summer, amber autumn, frosted winter vegetation and banks |
-| Moon | Stable gray lunar dust and dark ice seas throughout the year, without natural forests |
+| Swamp | Dense spring greens, mossy summer, amber autumn, frosted winter vegetation and banks |
+| Moon | Stable gray lunar dust, sparse gray rocks and pale cracked ice throughout the year, without trees or floods |
 
 These are visual changes; seasonal ice retains water's construction and transport
 rules. Pan minimaps match the current season; map-selection previews show January,
@@ -1030,9 +1051,11 @@ A full earned-gift queue temporarily lends one slot; placement, cancellation or
 opening Save restores that earned gift. Otherwise the debug choice occupies a
 free native slot and persists like a queued gift.
 
-The real Disaster panel has a temporary third row labelled NUKE and UFO.
-Its buttons use the game's lettering and bevels, with separate artwork rather
-than writes into occupied sprite/tilemap slots. Mouse and ordinary native D-pad
+The real Disaster panel has a centered third row of nuclear meltdown and UFO
+icons. Both use approved 24x24 pixel art, original-style one-pixel bevels and
+the original disaster selection palette. Their host-rendered artwork follows
+native brightness/fades without writes into occupied sprite/tilemap slots.
+Mouse and ordinary native D-pad
 movement share the same full-button hitboxes. Native confirm toggles bits 6/7;
 back closes the panel normally. The host consumes these bits after closing it.
 Disaster triggers are available through this in-game panel; F12 has no disaster
@@ -1045,6 +1068,16 @@ compiled branch. Explicit triggers bypass the random-disaster gate and UFO's
 84,488 population gate without faking population or clearing the saved cheat.
 They retain the original attack/animation and restore mode, scenario index and
 its previous countdown after the original DEC acknowledges completion.
+Manual UFO attacks first queue the original red Dr. Wright visit, replacing
+ordinary queued advice, and wait for its native close routine before beginning
+the attack. The warning uses the original 24-column writer with city-neutral
+text; original Las Vegas events use that text too. Manual attacks do not repeat
+the same warning after finishing. Active UFOs bypass the ordinary-vehicle
+graphics-upload gate (00:bae6), including resumed attacks, so WRAM $7000 reaches
+VRAM $6000 even with no traffic. Hovering UFO OAM slots remain visible while
+firing and do not repeat every 256 pixels in expanded views. At distant zoom,
+the animated native artwork has an 8-pixel minimum without changing map zoom.
+The 00:c798 target hook is also a connected-C execution boundary.
 Manual meltdown finds the native first nuclear center (tile 0x27c) with full map
 coordinates, then invokes the original demolition/radiation/news routine.
 The no-plant path remains a no-op. Regression runs cover all six map sizes,

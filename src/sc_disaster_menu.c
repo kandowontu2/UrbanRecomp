@@ -6,9 +6,9 @@ bool ScScenarioMenuLive(const uint8_t *r) {
 }
 int ScScenarioMenuButton(int x,int y) {
     if(y<SC_DISASTER_BUTTON_Y || y>=SC_DISASTER_BUTTON_Y+SC_DISASTER_BUTTON_H)return -1;
-    if(x>=44 && x<44+SC_DISASTER_BUTTON_W)return 0;
-    if(x>=82 && x<82+SC_DISASTER_BUTTON_W)return 1;
-    return -1;
+    int local=x-SC_DISASTER_BUTTON_X;
+    if(local<0 || local>=SC_DISASTER_BUTTON_COUNT*SC_DISASTER_BUTTON_W)return -1;
+    return local/SC_DISASTER_BUTTON_W;
 }
 void ScScenarioMenuStep(Interp816 *cpu,const uint8_t *ram) {
     if(cpu->k!=1 || cpu->pc!=0xaecc || !ScScenarioMenuLive(ram) || !(word(ram,0xc9)&0x8000))return;

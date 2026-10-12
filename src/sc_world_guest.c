@@ -475,15 +475,28 @@ static bool calendar_step(ScWorld *w,Interp816 *c,uint8_t *r) {
     }
     return false;
 }
-static bool land_flood_step(ScWorld *w,const Interp816 *c,uint8_t *r) {
+static bool land_flood_step(ScWorld *w,Interp816 *c,uint8_t *r) {
+    if(!w || (w->land_type!=SC_LAND_BASALT && w->land_type!=SC_LAND_MOON) ||
+       c->k!=3 || c->e || c->d || c->waiting || c->stopped || c->nmiWanted ||
+       (c->irqWanted && !c->i))return false;
+    if(w->land_type==SC_LAND_MOON) {
+        /* Every automatic/manual/scenario seed calls 03:bc0b. Its no-target
+         * return is 03:bc83; bypass it before demolition, news or flood timers.
+         * Also stop old saved floods before their target demolition (ad94),
+         * and protect the two write boundaries used by native/interpreter runs. */
+        if(c->pc==0xbc0b) {c->pc=0xbc83;return true;}
+        if(c->pc==0xad94) {c->z=true;return true;}
+        if(!c->mf && c->a==0x365 && (c->pc==0xbc53 || c->pc==0xadb3)) {
+            c->pc+=4;return true;
+        }
+        return false;
+    }
     /* US 03:bc53 seeds a flood, 03:adb3 spreads it. Run immediately before
      * their STA, after the native bounds/flammability/demolition checks.
      * The preceding 849e lookup supplies the full destination, not the
      * truncated simulation-sweep coordinates on expanded maps. */
-    if(!w || w->land_type!=SC_LAND_BASALT || c->k!=3 || c->mf ||
-       (c->pc!=0xbc53 && c->pc!=0xadb3) || c->a!=0x365 || !tile_properties ||
-       c->e || c->d || c->waiting || c->stopped || c->nmiWanted ||
-       (c->irqWanted && !c->i))return false;
+    if(w->land_type!=SC_LAND_BASALT || c->mf ||
+       (c->pc!=0xbc53 && c->pc!=0xadb3) || c->a!=0x365 || !tile_properties)return false;
     unsigned width=w->active?ScWorldWidth(w):120,height=w->active?ScWorldHeight(w):100;
     unsigned offset=w->active?w->map_anchor:c->x;
     if(offset==UINT32_MAX || (offset&1) || offset>=width*height*2)return true;

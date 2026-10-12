@@ -1,10 +1,11 @@
-URBANRECOMP ENHANCED 1.0.2
+URBANRECOMP ENHANCED 1.0.3
 ==========================================================
 
-Enhanced 1.0.2 adds varied Mars rocks, Arctic snow mounds, sparse Desert
-vegetation and fires accompanying Basalt lava floods.
+Enhanced 1.0.3 fixes UFO graphics and Dr. Wright warnings, adds Swamp water
+grass and redraws Venus plants with finer detail. It also includes the approved
+disaster icons, Moon ice/rocks and Desert cacti.
 Enhanced 1.0 is versioned separately from the upstream UrbanRecomp engine.
-Downloads: https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.2
+Downloads: https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.3
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
 The runtime, assets, documentation, credits and restored soundtrack are
@@ -25,15 +26,21 @@ Budgets, reports, construction, hidden-city generation, save/load and large
 city work were checked against the original CPU. NATIVE_EXECUTION.md and
 GPU_PERFORMANCE.md contain build controls, validation and performance limits.
 
-Land-type graphics keep the original terrain textures, connected forest/shore
-edges and water animation, with deliberate soil, water/lava and canopy palettes.
-No noisy repeated replacement patterns or cut-up forest tiles remain.
+Land-type graphics keep connected shores and native terrain scale, with
+deliberate soil, water/lava and vegetation palettes. Mars/Moon use sparse
+rocks, Arctic uses snow mounds, Venus has alien plants, and Desert adds lone
+cacti to small scrub patches. These features retain normal forest-tile rules.
+Venus has nine detailed pods, fronds and forked shoots with thin trunks,
+single-pixel leaf highlights, mirrored variations and seasonal colors.
+Swamp adds seasonal grass and reeds in animated water, with denser shallows
+and sparse tufts in open channels. Shore outlines and water gameplay stay intact.
 The seven existing custom themes have seasonal colors driven by the saved game month,
 blending between winter, spring, summer and autumn. Tropical themes stay evergreen,
 lava stays hot, and seasonal ice is visual. Pan minimaps follow the current season;
 new-map previews show January. Native cartridge seasons remain unchanged.
-Moon adds gray lunar terrain with stable year-round colors and no naturally
-generated forests. Football stadiums on Mars, Venus and Moon have dome roofs;
+Moon adds gray lunar terrain, sparse rocks and permanent cracked ice with
+stable year-round colors and no floods. It grows no trees. Football stadiums
+on Mars, Venus and Moon have dome roofs;
 their gameplay behavior remains unchanged. Short city notices retain solid
 paper, readable text and intact borders over zoomed terrain.
 

@@ -9,17 +9,36 @@ static void word(uint8_t *data,unsigned at,unsigned value) { data[at]=value; dat
 static void disaster_buttons_test(void) {
     ScRenderer *r=calloc(1,sizeof *r);Ppu *p=calloc(1,sizeof *p);
     uint8_t ram[0x20000]={0};uint32_t row[256];assert(r && p);
-    r->rom_is_us=r->clipboard_font_valid=true;ScViewport view={256,224,0,0,1,0};
-    for(unsigned i=0;i<32;++i)p->brightnessMult[i]=(uint8_t)(i*8);
-    memset(r->clipboard_font,255,sizeof r->clipboard_font);
+    r->rom_is_us=true;ScViewport view={256,224,0,0,1,0};
+    for(unsigned i=0;i<32;++i)p->brightnessMult[i]=(uint8_t)((i<<3)|(i>>2));
     word(ram,0x1df,2);word(ram,0x379,255);word(ram,0xab5,65535);
     for(unsigned i=0;i<256;++i)row[i]=0xdeadbeef;
-    ScRendererDisasterRow(r,p,view,ram,124,row);
-    assert(row[39]==0xdeadbeef && row[120]==0xdeadbeef && row[62]!=0xdeadbeef && row[100]==row[62]);
-    uint32_t fill=row[62];ram[0x197]=64;ScRendererDisasterRow(r,p,view,ram,124,row);
-    assert(row[62]!=fill && row[100]==fill);
+    ScRendererDisasterRow(r,p,view,ram,112,row);
+    /* Equal 15px margins inside the panel, original 1px bevels, adjacent icons. */
+    assert(row[39]==0xdeadbeef && row[120]==0xdeadbeef);
+    for(unsigned i=0;i<15;++i)assert(row[41+i]==row[104+i]);
+    assert(row[55]==0xff312100 && row[104]==row[55]);
+    assert(row[56]==0xffc6c6de && row[80]==row[56]);
+    assert(row[79]==0xff52527b && row[103]==row[79]);
+    ScRendererDisasterRow(r,p,view,ram,114,row);
+    assert(row[58]==0xffadadd6 && row[62]==0xff42426b && row[82]==row[58]);
+    ram[0x197]=64;ScRendererDisasterRow(r,p,view,ram,114,row);
+    assert(row[58]==0xffffd673 && row[62]==0xffff0000 && row[82]==0xffadadd6);
+    ram[0x197]=128;ScRendererDisasterRow(r,p,view,ram,114,row);
+    assert(row[58]==0xffadadd6 && row[82]==0xffffd673);
+    ram[0x197]=0;ScRendererDisasterRow(r,p,view,ram,120,row);
+    assert(row[84]==0xffefffef); /* White UFO hull pixel. */
+    for(unsigned i=0;i<32;++i)p->brightnessMult[i]/=2;
+    ScRendererDisasterRow(r,p,view,ram,120,row);
+    assert(row[84]==0xff777f77); /* Artwork follows the native fade. */
+    view.core_x=64;ScRendererDisasterRow(r,p,view,ram,120,row);
+    assert(row[148]==0xff777f77);
+    view.core_x=-80;ScRendererDisasterRow(r,p,view,ram,120,row);
+    assert(row[4]==0xff777f77); /* Partially clipped panel still draws safely. */
     for(unsigned i=0;i<256;++i)row[i]=0xdeadbeef;
     word(ram,0x1df,1);ScRendererDisasterRow(r,p,view,ram,124,row);
+    for(unsigned i=0;i<256;++i)assert(row[i]==0xdeadbeef);
+    word(ram,0x1df,2);p->inidisp=0x80;ScRendererDisasterRow(r,p,view,ram,124,row);
     for(unsigned i=0;i<256;++i)assert(row[i]==0xdeadbeef);
     free(p);free(r);
 }
@@ -309,6 +328,27 @@ int main(void) {
     p->oam[0]=(100<<8)|128; p->highOam[0]=1;
     ScRendererLine(&r,p,ram,0,native);
     assert(!r.object_grace[0]);
+    /* The four original UFO slots remain visible through a stationary firing
+     * stage. Exercise actual zoomed pixel composition, not only the timer. */
+    word(ram,0x40,6);word(ram,0xaf1,1);word(ram,0xaef,1);
+    p->oam[248]=(100<<8)|120;p->oam[249]=0x3a00;p->highOam[31]=2;p->cgram[209]=31;
+    r.map_zoom=.5;
+    for(int frame=0;frame<40;++frame) {
+        for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+        assert(r.object_grace[124] && r.pixels[50*512+60]==0xffff0000);
+        assert(r.pixels[178*512+60]!=0xffff0000); /* no repeated UFO every 256 world pixels */
+    }
+    /* Preserve a visible native-art marker at whole-map zoom, without zooming
+     * the city back in. Both ordinary CPU and deferred terrain share it. */
+    word(ram,0xb03,65535);r.map_zoom=.125;
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(r.map_zoom==.125 && r.pixels[11*512+13]==0xffff0000);
+    /* Parked copies and finished UFO sequences do not become stray sprites. */
+    p->oam[248]=(240<<8);p->highOam[31]=3;
+    ScRendererLine(&r,p,ram,0,native);assert(!r.object_grace[124]);
+    word(ram,0xaf1,0);word(ram,0xaef,0);word(ram,0x40,0);
+    word(ram,0xb03,0);
+    r.map_zoom=1;
     /* Large legitimate edits must never be mistaken for a city load. */
     for (int i=0;i<5000;++i) word(ram,0x10200+i*2,7);
     ScRendererLine(&r,p,ram,0,native);
@@ -1027,6 +1067,18 @@ int main(void) {
     assert(ScRendererPixel(&r,96+169,134)==0xffff0000);
     assert(ScRendererPixel(&r,96+42,124)==0xff123456);
     assert(!memcmp(before,p,sizeof *p));
+    /* Added disaster artwork must not hide the free mouse or pad hand. */
+    word(ram,0x14,0);word(ram,0x1df,2);word(ram,0x379,255);word(ram,0xab5,65535);
+    p->vram[0x1000+0xec*16]=0x0080;p->cgram[129]=31;
+    r.menu_pointer_active=true;r.menu_pointer_x=68;r.menu_pointer_y=124;
+    memcpy(before,p,sizeof *p);
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(ScRendererPixel(&r,96+68,124)==0xffff0000 && !memcmp(before,p,sizeof *p));
+    r.menu_pointer_active=false;word(ram,0x1eb,92);word(ram,0x1ed,124);
+    for(int y=0;y<224;++y)ScRendererLine(&r,p,ram,y,native);
+    assert(ScRendererPixel(&r,96+92,124)==0xffff0000 && !memcmp(before,p,sizeof *p));
+    word(ram,0x379,0);word(ram,0xab5,0);r.menu_pointer_active=true;
+    r.menu_pointer_x=170;r.menu_pointer_y=135;
     /* A click starts screen 2 while the title's logo CHR is still loaded.
      * Mouse ownership must not add that tile at the pointer during the fade. */
     word(ram,0x14,1);

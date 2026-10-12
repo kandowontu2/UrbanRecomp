@@ -1,5 +1,6 @@
 #include "sc_renderer.h"
 #include "sc_scenario_event.h"
+#include "sc_disaster_art.h"
 #include "sc_mouse_ui.h"
 #include "sc_city_setup.h"
 #include "sc_land_type.h"
@@ -139,6 +140,10 @@ static unsigned sprite_pixel(const Ppu *p,int slot,int x,int y) {
     int index=slot*2, size=sprite_sizes[PPU_objSize(p)][(p->highOam[index/8]>>(index%8+1))&1];
     return sprite_word_pixel(p,p->oam[index+1],size,x,y);
 }
+static bool ufo_slot(const Ppu *p,int slot) {
+    return slot>=124 && (p->oam[slot*2+1]&0xfff8)==0x3a00;
+}
+static int ufo_y(int raw) {return raw>=224?raw-256:raw;}
 static unsigned vehicle_pixel(const ScRenderer *r,const Ppu *p,const ScVehicleSprite *v,int size,int x,int y) {
     if(!v->rom_chr)return sprite_word_pixel(p,v->attr,size,x,y);
     if(x<0 || y<0 || x>=size || y>=size)return 0;
@@ -253,9 +258,38 @@ static void track_objects(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
             if (dx || dy) r->object_grace[slot]=16;
             else if (r->object_grace[slot]) --r->object_grace[slot];
         }
+        /* The original UFO hovers while firing. Its four native OAM slots
+         * are live even without movement; the vehicle grace heuristic must
+         * not erase them after sixteen frames. Keep parked offscreen copies
+         * excluded, and leave HUD/cursor slot ownership unchanged. */
+        if(city && slot>=124 && u16(ram,0x40)==6 && u16(ram,0xaf1) && u16(ram,0xaef)) {
+            int size=sprite_sizes[PPU_objSize(p)][(p->highOam[slot/4]>>(slot%4*2+1))&1];
+            int x=raw<256?raw:raw-512;
+            r->object_grace[slot]=x<256 && x+size>0 && (y<224 || y+size>256)?16:0;
+        }
         r->object_raw[slot]=raw; r->object_y[slot]=y; r->object_attr[slot]=attr;
     }
     r->objects_valid=city;
+}
+/* At whole-map zoom a 32px UFO can occupy less than one output pixel. Keep
+ * its authentic animated art readable at an 8px minimum, centered on its
+ * projected position. This does not change the map zoom or attack location. */
+static void ufo_overview(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
+    if(!r->zoom_frame || r->map_zoom>=.25 || r->advisor_frame ||
+       u16(ram,0x40)!=6 || !u16(ram,0xaf1) || !u16(ram,0xaef) ||
+       !u16(ram,0xb03) || u16(ram,0xab5) || PPU_forcedBlank(p) ||
+       !r->object_grace[124])return;
+    double cx=r->object_x[124]+16-r->camera_x,cy=ufo_y(r->object_y[124])+16-r->camera_y;
+    ScRendererProjectCity(r,&cx,&cy);
+    int left=r->view.core_x+(int)lround(cx)-4,top=r->view.core_y+(int)lround(cy)-4;
+    static const int slots[]={124,125,127,126};
+    for(int y=0;y<8;++y)for(int x=0;x<8;++x) {
+        int sx=x*4+2,sy=y*4+2,ax=left+x,ay=top+y;
+        if(ax<0 || ax>=r->view.width || ay<0 || ay>=r->view.height ||
+           (r->zoom_hud && (ay<r->view.core_y+46 || ax<r->view.core_x+56)))continue;
+        unsigned ci=sprite_word_pixel(p,p->oam[slots[(sy/16)*2+sx/16]*2+1],16,sx%16,sy%16);
+        if(ci)r->pixels[(size_t)ay*r->view.width+ax]=color(p,ci);
+    }
 }
 static void track_map_swap(ScRenderer *r,const Ppu *p,const uint8_t *ram) {
     if (!city_live(r,p,ram)) {
@@ -352,7 +386,7 @@ static void object_row(const ScRenderer *r,const Ppu *p,int y,uint16_t *pixels) 
         /* Row 0 is on line Y, as the PPU draws it (it evaluates a line's
          * sprites one line early). y+1 put every margin sprite a row above
          * the core's half of the same object -- the train at the seam. */
-        int row=(y-r->object_y[slot])&255;
+        int row=ufo_slot(p,slot)?y-ufo_y(r->object_y[slot]):(y-r->object_y[slot])&255;
         if (row>=64) continue;
         int left=r->object_x[slot]+r->view.core_x;
         for (int dx=0;dx<64;++dx) {
@@ -883,6 +917,9 @@ static bool terrain_objects_grid(ScRenderer *r,const Ppu *p,int y) {
                 left=r->object_x[slot]+r->view.core_x;top=r->object_y[slot];
                 size=sprite_sizes[PPU_objSize(p)][(p->highOam[index/8]>>(index%8+1))&1];
                 attr=p->oam[index+1]|0x10000; /* native OAM wraps Y modulo 256 */
+                /* Expanded/zoomed rows can span many native screens. The UFO
+                 * is one world object, not a repeating 256px OAM strip. */
+                if(ufo_slot(p,slot)) {top=ufo_y(top);attr&=~0x10000u;}
             }
             if(r->camera_x || r->camera_y) {
                 left-=(int)lround(r->camera_x);top-=(int)lround(r->camera_y);
@@ -964,7 +1001,7 @@ static bool terrain_objects(ScRenderer *r,const Ppu *p,int y) {
                (r->pan_frame && slot>=39 && slot<=52) || !r->object_grace[slot]) continue;
             left=r->object_x[slot]+r->view.core_x;
             size=sprite_sizes[PPU_objSize(p)][(p->highOam[index/8]>>(index%8+1))&1];
-            dy=(y-r->object_y[slot])&255;attr=p->oam[index+1];
+            dy=ufo_slot(p,slot)?y-ufo_y(r->object_y[slot]):(y-r->object_y[slot])&255;attr=p->oam[index+1];
         }
         if(dy<0 || dy>=size) continue;
         int begin=left>clip?left:clip,end=left+size;
@@ -2114,20 +2151,26 @@ static uint32_t disaster_ink(const Ppu *p,unsigned rgb) {
         ((uint32_t)p->brightnessMult[((rgb>>8)&255)>>3]<<8)|p->brightnessMult[(rgb&255)>>3];
 }
 void ScRendererDisasterRow(const ScRenderer *r,const Ppu *p,ScViewport v,const uint8_t *ram,int y,uint32_t *out) {
-    if(!r->rom_is_us || !r->clipboard_font_valid || !ScScenarioMenuLive(ram) || PPU_forcedBlank(p) ||
+    if(!r->rom_is_us || !ScScenarioMenuLive(ram) || PPU_forcedBlank(p) ||
        y<SC_DISASTER_BUTTON_Y || y>=SC_DISASTER_BUTTON_Y+SC_DISASTER_BUTTON_H+4)return;
-    uint32_t paper=disaster_ink(p,0x302000),dark=disaster_ink(p,0x505070),light=disaster_ink(p,0xe8e8ff);
-    for(int x=40;x<120;++x)out[v.core_x+x]=(x==40 || x==119 || y>=SC_DISASTER_BUTTON_Y+SC_DISASTER_BUTTON_H+2)?0xff000000:paper;
-    for(unsigned b=0;b<2;++b) {
-        int left=b?82:44,dy=y-SC_DISASTER_BUTTON_Y;
+    uint32_t paper=disaster_ink(p,0x302000);
+    for(int x=40;x<120;++x)if(v.core_x+x>=0 && v.core_x+x<v.width)
+        out[v.core_x+x]=(x==40 || x==119 || y>=SC_DISASTER_BUTTON_Y+SC_DISASTER_BUTTON_H+2)?0xff000000:paper;
+    for(unsigned b=0;b<SC_DISASTER_BUTTON_COUNT;++b) {
+        int left=v.core_x+SC_DISASTER_BUTTON_X+b*SC_DISASTER_BUTTON_W,dy=y-SC_DISASTER_BUTTON_Y;
         if(dy>=SC_DISASTER_BUTTON_H)continue;
         bool selected=(ram[0x197]&(64u<<b))!=0;
-        uint32_t fill=disaster_ink(p,selected?0xffff80:0xb0b0d0),ink=disaster_ink(p,0x000080);
-        for(int dx=0;dx<SC_DISASTER_BUTTON_W;++dx)
-            out[v.core_x+left+dx]=(dy<2 || dx<2)?light:(dy>=SC_DISASTER_BUTTON_H-2 || dx>=SC_DISASTER_BUTTON_W-2)?dark:fill;
-        const char *label=b?"UFO":"NUKE";
-        clipboard_text(r,p,v,label,v.core_x+left+(SC_DISASTER_BUTTON_W-(b?24:32))/2,
-            SC_DISASTER_BUTTON_Y+8,y,out,ink);
+        uint32_t palette[7],light=disaster_ink(p,selected?0xffffff:0xc6c6de),
+            dark=disaster_ink(p,selected?0x42424a:0x52527b);
+        for(unsigned i=0;i<7;++i)palette[i]=disaster_ink(p,sc_disaster_art_colors[selected][i]);
+        for(int dx=0;dx<SC_DISASTER_BUTTON_W;++dx)if(left+dx>=0 && left+dx<v.width) {
+            uint32_t pixel=palette[0];
+            if(dx==SC_DISASTER_BUTTON_W-1 || dy==SC_DISASTER_BUTTON_H-1)pixel=dark;
+            else if(!dx || !dy)pixel=light;
+            else if(dx>=2 && dx<22 && dy>=2 && dy<22)
+                pixel=palette[ScDisasterArtColorIndex(sc_disaster_art[b][dy-2][dx-2])];
+            out[left+dx]=pixel;
+        }
     }
 }
 void ScRendererHudPointer(ScRenderer *r,const Ppu *p) {
@@ -2668,9 +2711,21 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         }
         MEASURE_END(r,SC_RENDER_ROWS,measured);
         measured=MEASURE_BEGIN(r);
+        ufo_overview(r,p,ram);
         for(int y=SC_DISASTER_BUTTON_Y;y<SC_DISASTER_BUTTON_Y+SC_DISASTER_BUTTON_H+4;++y)
             ScRendererDisasterRow(r,p,r->view,ram,y,r->pixels+(size_t)(y+r->view.core_y)*r->view.width);
         city_pointer(r,p,ram);
+        /* The added disaster row covers the guest's old cursor pixels. Draw
+         * its authentic hand last for both free mouse and native pad movement. */
+        if(r->rom_is_us && ScScenarioMenuLive(ram) && !PPU_forcedBlank(p) && (p->screenEnabled[0]&16)) {
+            int left=r->view.core_x+(r->menu_pointer_active?r->menu_pointer_x:(int)u16(ram,0x1eb));
+            int top=r->view.core_y+(r->menu_pointer_active?r->menu_pointer_y:(int)u16(ram,0x1ed));
+            for(int y=0;y<16;++y)for(int x=0;x<16;++x) {
+                uint32_t ink=ScRendererCityHandPixel(p,x,y);
+                if(ink && left+x>=0 && left+x<r->view.width && top+y>=0 && top+y<r->view.height)
+                    r->pixels[(size_t)(top+y)*r->view.width+left+x]=ink;
+            }
+        }
         /* A separate modal mouse hand must win over earlier gift-icon OAM.
          * Compose it last, keeping the native four-piece selection outline. */
         if(r->menu_pointer_active && u16(ram,0x20d)==15 && ram[0xe3]==255 &&

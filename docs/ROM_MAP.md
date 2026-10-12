@@ -2252,6 +2252,25 @@ graphics reading is confirmed.
 
 ### Manual activation in the native build (2026-10-06)
 
+**Further correction (2026-10-11):** the missing graphics on an empty free-play
+city are reproducible. OAM 124-127 contains the UFO's 0x3a00/02/04/06 records and
+WRAM $7000 contains its animated art, but VRAM $6000 is blank. The 00:bada DMA
+dispatcher returns at 00:bae6 when $0ab7 is zero (no ordinary moving objects).
+Force that branch past its gate only for an active UFO ($0040=6, $0af1 and
+$0aef nonzero); the native 00:bb71 upload then transfers $7000 to VRAM $6000.
+This also applies after a state reload without host manual-event metadata.
+The connected C path must stop at 00:bae6 for that hook and at 00:c798 for
+camera following. Zoom rendering must retain stationary UFO slots and avoid
+repeating their native Y coordinates modulo 256 across expanded terrain.
+
+Manual attacks now queue message 0x30 before the attack and defer 03:b96f via
+its original RTS at 03:b9cc until the Wright close edge 01:a63c. The later
+03:be04 publisher skips a duplicate 0x30 visit. The original 01:e592 text
+writer reads generic UFO advice at a virtual 0f:fd00 record; it replaces the
+Las Vegas reference for manual events and the native scenario alike. Native
+and interpreter tests execute the entire writer through its terminator and
+the close edge, alongside the real zero-vehicle DMA dispatcher.
+
 The current trigger sets the native branch carry at 03:b9bf while its manual
 UFO event is armed. Live ROM patches do not change compiled C branches, which
 made the earlier NOP implementation ineffective in native releases. Population

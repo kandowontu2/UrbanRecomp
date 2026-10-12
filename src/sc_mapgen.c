@@ -2085,9 +2085,9 @@ void sc_mapgen_remove_forests(ScMapGenState *st) {
     }
 }
 void sc_mapgen_land_features(ScMapGenPrng *p,ScMapGenState *st,unsigned land) {
-    if(land==SC_LAND_AMAZON) {sc_mapgen_extra_forests(p,st);return;}
-    if(land==SC_LAND_MOON) {sc_mapgen_remove_forests(st);return;}
-    if(land!=SC_LAND_MARS && land!=SC_LAND_DESERT && land!=SC_LAND_ARCTIC)return;
+    if(land==SC_LAND_AMAZON || land==SC_LAND_SWAMP) {sc_mapgen_extra_forests(p,st);return;}
+    if(land!=SC_LAND_MARS && land!=SC_LAND_MOON && land!=SC_LAND_DESERT &&
+       land!=SC_LAND_ARCTIC && land!=SC_LAND_VENUS)return;
     unsigned width=map_width(st),height=map_height(st);
     uint32_t seed=geo_hash(p->s0|((uint32_t)p->s1<<16));
     for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
@@ -2095,7 +2095,7 @@ void sc_mapgen_land_features(ScMapGenPrng *p,ScMapGenState *st,unsigned land) {
         if(tile<20 || tile>=38)continue;
         uint32_t cell=geo_hash(seed+x*374761393u+y*668265263u);
         bool keep=true;
-        if(land==SC_LAND_MARS)keep=cell%100<24;
+        if(land==SC_LAND_MARS || land==SC_LAND_MOON)keep=cell%100<24;
         if(land==SC_LAND_DESERT) {
             /* Rare small, rounded scrub patches, rather than green speckles
              * across the entire desert. Scale in cells, never with map size. */
@@ -2115,6 +2115,30 @@ void sc_mapgen_land_features(ScMapGenPrng *p,ScMapGenState *st,unsigned land) {
         ScMapGenState *previous=g_sc_mapgen_cur;g_sc_mapgen_cur=st;
         sc_mapgen_fit_pass(&fitting,st);sc_mapgen_fit_pass(&fitting,st);
         g_sc_mapgen_cur=previous;
+        /* Reserve three alternate forest images for cacti. Connected scrub
+         * keeps the exact same native edge mask, using its first variant. */
+        for(unsigned i=0;i<width*height;++i) {
+            unsigned tile=st->map[i]&1023;
+            if(tile>=SC_DESERT_CACTUS_FIRST && tile<38)
+                st->map[i]=(st->map[i]&~1023u)|(tile-9);
+        }
+        /* An occasional single cactus in empty sand. Leave one clear tile in
+         * every direction so it never joins scrub or another cactus. Hashing
+         * keeps spacing/density at native tile scale and preserves game RNG. */
+        for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x) {
+            unsigned at=y*width+x;
+            if(st->map[at])continue;
+            uint32_t cell=geo_hash(seed^0xcac715u^x*374761393u^y*668265263u);
+            if(cell%256)continue;
+            bool clear=true;
+            for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx) {
+                int nx=(int)x+dx,ny=(int)y+dy;
+                if(nx<0 || ny<0 || nx>=(int)width || ny>=(int)height)continue;
+                unsigned tile=st->map[(unsigned)ny*width+(unsigned)nx]&1023;
+                if(tile>=20 && tile<40)clear=false;
+            }
+            if(clear)st->map[at]=SC_DESERT_CACTUS_FIRST+(cell>>8)%SC_DESERT_CACTUS_VARIANTS;
+        }
     }
 }
 void sc_mapgen_preview_refresh(ScMapPreview *p,const uint16_t *map,

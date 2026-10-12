@@ -329,7 +329,7 @@ int main(void) {
                 }
             }
         }
-        /* Lunar generation clears forest tiles, preserving all shores/water
+        /* Forest clearing utility preserves all shores/water
          * and every other tile across all styles and selectable sizes. */
         sc_mapgen_remove_forests(again);
         for(unsigned i=0;i<cells;++i) {

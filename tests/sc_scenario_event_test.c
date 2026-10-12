@@ -8,11 +8,13 @@
 #include <string.h>
 #include <stdlib.h>
 static uint8_t ram[0x20000],rom[0x80000];
+static uint8_t io[0x4400];
 static ScWorld *world;
 static ScWorldGuest guest;
 int interp816_opcode_hook(uint32_t pc) {(void)pc;return 0;}
 static uint8_t read_bus(void *ctx,uint32_t a) {
     (void)ctx;uint8_t value;if(ScWorldGuestRead(&guest,a,&value))return value;
+    if(ScScenarioEventMessageRead(ram,a,&value))return value;
     unsigned bank=a>>16,p=a&65535;
     if(bank==0x7e || bank==0x7f)return ram[a-0x7e0000];
     if(p<0x2000)return ram[p];
@@ -24,6 +26,7 @@ static void write_bus(void *ctx,uint32_t a,uint8_t v) {
     unsigned bank=a>>16,p=a&65535;
     if(bank==0x7e || bank==0x7f)ram[a-0x7e0000]=v;
     else if(p<0x2000)ram[p]=v;
+    else if(bank<0x40 && p<sizeof io)io[p]=v;
 }
 static unsigned word(unsigned p) {return ram[p]|(unsigned)ram[p+1]<<8;}
 static void put(unsigned p,unsigned v) {ram[p]=(uint8_t)v;ram[p+1]=(uint8_t)(v>>8);}
@@ -31,7 +34,14 @@ static void check(bool compiled,bool manual,bool disabled) {
     memset(ram,0,sizeof ram);memset(&guest,0,sizeof guest);put(0x3e,1);put(0x40,7);put(0xc0d,291);
     put(0x425,disabled?1:0);put(0x395,1); /* no unrelated random event */
     ScScenarioEvent event={0};
-    if(manual)assert(ScScenarioEventArm(&event,ram,NULL,6,16));
+    if(manual) {
+        assert(ScScenarioEventArm(&event,ram,NULL,6,16));
+        assert(event.ufo_warning_pending && word(0x395)==1 && word(0x397)==0x30);
+        Interp816 close={0};close.k=1;close.pc=0xe59b;
+        ScScenarioEventStep(&event,&close,ram,NULL);close.pc=0xa63c;
+        ScScenarioEventStep(&event,&close,ram,NULL);
+        assert(!event.ufo_warning_pending);
+    }
     Interp816 *cpu=interp816_init(NULL,read_bus,write_bus);assert(cpu);
     cpu->k=cpu->db=3;cpu->pc=0xb84b;cpu->dp=0x1e00;cpu->sp=0x1ffd;
     cpu->e=cpu->mf=cpu->xf=false;put(0x1ffe,0x6fff);
@@ -100,14 +110,16 @@ static void menu(void) {
     memset(ram,0,sizeof ram);put(0x14,0x8000);put(0x379,255);put(0xab5,65535);put(0x1df,2);
     assert(ScScenarioMenuLive(ram));Interp816 cpu={0};cpu.k=1;
     for(unsigned button=0;button<2;++button) {
-        put(0x1eb,button?100:62);put(0x1ed,124);put(0xc9,0x8000);
+        put(0x1eb,button?92:68);put(0x1ed,124);put(0xc9,0x8000);
         cpu.pc=0xaecc;ScScenarioMenuStep(&cpu,ram);
         assert(cpu.pc==0xaee4 && cpu.a==14+button && !cpu.mf);
     }
     put(0xc9,0x40);cpu.pc=0xaecc;ScScenarioMenuStep(&cpu,ram);assert(cpu.pc==0xaecc);
     put(0xc9,0x8000);put(0x1df,1);ScScenarioMenuStep(&cpu,ram);assert(cpu.pc==0xaecc);
-    assert(ScScenarioMenuButton(44,112)==0 && ScScenarioMenuButton(117,135)==1);
-    assert(ScScenarioMenuButton(80,124)<0 && ScScenarioMenuButton(62,136)<0);
+    assert(ScScenarioMenuButton(56,112)==0 && ScScenarioMenuButton(79,135)==0);
+    assert(ScScenarioMenuButton(80,112)==1 && ScScenarioMenuButton(103,135)==1);
+    assert(ScScenarioMenuButton(55,124)<0 && ScScenarioMenuButton(104,124)<0);
+    assert(ScScenarioMenuButton(68,111)<0 && ScScenarioMenuButton(92,136)<0);
 }
 static void ufo_damage(bool compiled,unsigned size) {
     memset(ram,0,sizeof ram);memset(&guest,0,sizeof guest);ScWorldReset(world);
@@ -129,15 +141,76 @@ static void ufo_damage(bool compiled,unsigned size) {
     }
     assert((world->tiles[at]|world->tiles[at+1]<<8)!=0x62);
     assert(world->coord[2][0]==width-40 && world->coord[2][1]==height-40 && !event.damage_anchor);
-    /* The native UFO announcement must override routine queued advice too. */
+    /* The end-of-attack publisher cannot replace advice or repeat the warning. */
     cpu->pc=0xbe04;cpu->sp=0x1ffd;cpu->a=0x30;put(0x1ffe,0x6fff);put(0x395,1);put(0x397,6);
     while(cpu->pc!=0x7000) {
         assert(++steps<20000);ScScenarioEventStep(&event,cpu,ram,world);
         if(compiled)assert(ScProgramStep(cpu));else interp816_runOpcode(cpu);
     }
-    assert(word(0x397)==0x30 && word(0x395)==2);
+    assert(word(0x397)==6 && word(0x395)==1);
     printf("PASS %s UFO damage size=%u with distant simulation anchor and queued advice\n",compiled?"native":"oracle",size);
     interp816_free(cpu);memset(&guest,0,sizeof guest);
+}
+static void ufo_warning(bool compiled,bool manual) {
+    memset(ram,0,sizeof ram);memset(&guest,0,sizeof guest);
+    put(0x3e,2);put(0x395,1);put(0x397,6);
+    ScScenarioEvent event={0};
+    if(manual)assert(ScScenarioEventArm(&event,ram,NULL,6,16));
+    else put(0x397,0x30); /* original scenario gets the same neutral text */
+    Interp816 *cpu=interp816_init(NULL,read_bus,write_bus);assert(cpu);
+    cpu->e=cpu->mf=cpu->xf=false;cpu->sp=0x1ffd;put(0x1ffe,0x6fff);
+    if(manual) {
+        cpu->k=cpu->db=3;cpu->pc=0xb96f;
+        ScScenarioEventStep(&event,cpu,ram,NULL);assert(cpu->pc==0xb9cc);
+        if(compiled)assert(ScProgramStep(cpu));else interp816_runOpcode(cpu);
+        assert(cpu->pc==0x7000 && word(0xc0d)==16 && !word(0xaf1));
+        put(0x397,1);cpu->k=1;cpu->pc=0x8b9f;
+        ScScenarioEventStep(&event,cpu,ram,NULL);
+        assert(word(0x397)==0x30 && word(0x395)==1 && !event.ufo_warning_shown);
+    }
+    cpu->k=cpu->db=1;cpu->pc=0xe592;cpu->dp=0;unsigned steps=0;
+    while(cpu->pc!=0xe5c9) {
+        assert(++steps<15000);ScScenarioEventStep(&event,cpu,ram,NULL);
+        if(compiled)assert(ScProgramStep(cpu));else interp816_runOpcode(cpu);
+    }
+    for(unsigned i=0;i<9*24;++i) {
+        uint8_t ch;assert(ScScenarioEventMessageRead(ram,0x0ffd00+i,&ch));
+        assert(word(0x3948+(i/24)*64+(i%24)*2)==(0x800|ch));
+    }
+    uint8_t ch;assert(ScScenarioEventMessageRead(ram,0x8ffd00+9*24,&ch) && ch==255);
+    assert(!ScScenarioEventMessageRead(ram,0x0ffcfe,&ch));
+    /* A concurrent city-class visit can change the shared queue after the
+     * UFO text was displayed. It must not leave the attack waiting forever. */
+    put(0x397,1);
+    cpu->pc=0xa63c;ScScenarioEventStep(&event,cpu,ram,NULL);
+    if(compiled)assert(ScProgramStep(cpu));else interp816_runOpcode(cpu);
+    assert(!event.ufo_warning_pending && !word(0x397));
+    assert(!ScScenarioEventMessageRead(ram,0x0ffd00,&ch));
+    printf("PASS %s %s UFO: warning before input lock, full native typewriter, adviser close\n",
+        compiled?"native":"oracle",manual?"manual":"scenario");
+    interp816_free(cpu);
+}
+static void ufo_graphics(bool compiled,bool active) {
+    memset(ram,0,sizeof ram);memset(io,0,sizeof io);memset(&guest,0,sizeof guest);
+    /* No vehicles are active ($ab7=0). The UFO still needs its original
+     * WRAM $7000 -> VRAM $6000 dynamic-CHR upload. */
+    put(0x40,6);put(0xaf1,active?0x8000:0);put(0xaef,active?0x8001:0);
+    put(0xb03,65535);put(0xe1,2);
+    ScScenarioEvent event={0};Interp816 *cpu=interp816_init(NULL,read_bus,write_bus);assert(cpu);
+    cpu->pc=0xbada;cpu->sp=0x1ffd;cpu->e=cpu->mf=cpu->xf=false;put(0x1ffe,0x6fff);
+    unsigned steps=0;
+    while(cpu->pc!=0x7000) {
+        assert(++steps<200);ScScenarioEventStep(&event,cpu,ram,NULL);
+        if(compiled)assert(ScProgramStep(cpu));else interp816_runOpcode(cpu);
+    }
+    assert((io[0x420b]==16)==active);
+    if(active) {
+        assert(io[0x2116]==0xe0 && io[0x2117]==0x64); /* final small icon DMA */
+        assert(io[0x4344]==0x7e && io[0x4340]==1 && io[0x4341]==0x18);
+    }
+    assert(!word(0xab7)); /* do not alter ordinary vehicle state */
+    printf("PASS %s UFO graphics upload active=%u without vehicles or manual-event state\n",compiled?"native":"oracle",active);
+    interp816_free(cpu);
 }
 static void lava_flood(bool compiled,unsigned size,unsigned land,unsigned pc,bool corner) {
     memset(ram,0,sizeof ram);memset(&guest,0,sizeof guest);ScWorldReset(world);
@@ -180,10 +253,11 @@ static void lava_flood(bool compiled,unsigned size,unsigned land,unsigned pc,boo
     cpu->irqWanted=false;
     Interp816 before=*cpu;
     if(compiled)ScWorldGuestStepPrepared(world,cpu,ram);else ScWorldGuestStep(world,cpu,ram);
+    if(land==SC_LAND_MOON)before.pc+=4;
     assert(!memcmp(&before,cpu,sizeof before));
     ScWorldGuestBeginPrepared(&guest,world,cpu,rom,sizeof rom);
     if(compiled)assert(ScProgramStep(cpu));else interp816_runOpcode(cpu);
-    assert((map[offset]|map[offset+1]<<8)==0x365);
+    assert((map[offset]|map[offset+1]<<8)==(land==SC_LAND_MOON?20:0x365));
     at=0;unsigned fires=0;
     for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)
         if((int)x+dx<(int)width && (int)y+dy<(int)height) {
@@ -200,6 +274,36 @@ static void lava_flood(bool compiled,unsigned size,unsigned land,unsigned pc,boo
         ScLandTypeName(land),pc==0xbc53?"seed":"spread",corner?"far corner":"interior");
     interp816_free(cpu);memset(&guest,0,sizeof guest);
 }
+static void moon_flood(bool compiled,unsigned size) {
+    memset(ram,0,sizeof ram);memset(&guest,0,sizeof guest);ScWorldReset(world);
+    world->active=size!=0;world->huge=size>=2;world->giant=size>=3;
+    world->colossal=size>=4;world->mega=size>=5;world->land_type=SC_LAND_MOON;
+    /* Actual manual-dispatch and random-dispatch JSRs, then direct initiation. */
+    const unsigned starts[]={0xb8c8,0xb943,0xbc0b};
+    for(unsigned i=0;i<3;++i) {
+        Interp816 *cpu=interp816_init(NULL,read_bus,write_bus);assert(cpu);
+        cpu->k=cpu->db=3;cpu->pc=starts[i];cpu->dp=0x1e00;cpu->sp=0x1ffd;
+        cpu->e=cpu->mf=cpu->xf=false;put(0x1ffe,0x6fff);
+        put(0xc11,0);put(0x3fe,0);put(0x395,1);put(0x397,6);put(0x197,2);
+        unsigned stop=i<2?starts[i]+3:0x7000,steps=0;
+        while(cpu->pc!=stop) {
+            assert(++steps<4);
+            if(compiled)ScWorldGuestStepPrepared(world,cpu,ram);else ScWorldGuestStep(world,cpu,ram);
+            if(compiled)assert(ScProgramStep(cpu));else interp816_runOpcode(cpu);
+        }
+        assert(!word(0xc11) && !word(0x3fe) && word(0x395)==1 && word(0x397)==6 && word(0x197)==2);
+        interp816_free(cpu);
+    }
+    /* A flood loaded from an older build cannot demolish its next neighbour. */
+    Interp816 *cpu=interp816_init(NULL,read_bus,write_bus);assert(cpu);
+    cpu->k=cpu->db=3;cpu->pc=0xad94;cpu->e=cpu->mf=cpu->xf=false;cpu->z=false;
+    if(compiled)ScWorldGuestStepPrepared(world,cpu,ram);else ScWorldGuestStep(world,cpu,ram);
+    assert(cpu->z);
+    if(compiled)assert(ScProgramStep(cpu));else interp816_runOpcode(cpu);
+    assert(cpu->pc==0xadb7);
+    interp816_free(cpu);
+    printf("PASS %s Moon size=%u: manual/random/scenario flood starts and old-flood demolition blocked\n",compiled?"native":"oracle",size);
+}
 int main(int argc,char **argv) {
     assert(argc==2);FILE *f=fopen(argv[1],"rb");assert(f);
     assert(fread(rom,1,sizeof rom,f)==sizeof rom);fclose(f);
@@ -210,7 +314,10 @@ int main(int argc,char **argv) {
     for(unsigned compiled=0;compiled<2;++compiled)for(unsigned manual=0;manual<2;++manual)
         for(unsigned disabled=0;disabled<2;++disabled)check(compiled,manual,disabled);
     puts("PASS manual UFO: native/interpreter, zero population, NO DISASTER, untouched ROM/state restoration");
+    for(unsigned compiled=0;compiled<2;++compiled)for(unsigned manual=0;manual<2;++manual)ufo_warning(compiled,manual);
+    for(unsigned compiled=0;compiled<2;++compiled)for(unsigned active=0;active<2;++active)ufo_graphics(compiled,active);
     world=calloc(1,sizeof *world);assert(world);
+    for(unsigned compiled=0;compiled<2;++compiled)for(unsigned size=0;size<6;++size)moon_flood(compiled,size);
     for(unsigned compiled=0;compiled<2;++compiled)for(unsigned size=0;size<6;++size) {
         meltdown(compiled,size,true);meltdown(compiled,size,false);
     }
@@ -220,5 +327,5 @@ int main(int argc,char **argv) {
             lava_flood(compiled,size,land,0xbc53,corner);
             lava_flood(compiled,size,land,0xadb3,corner);
         }
-    menu();free(world);puts("PASS temporary native Disaster menu selection/back/other-page isolation");
+    menu();free(world);puts("PASS centered native Disaster menu selection/back/other-page isolation");
 }

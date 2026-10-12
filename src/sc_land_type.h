@@ -3,6 +3,9 @@
 #include <stdint.h>
 enum {SC_LAND_NATIVE,SC_LAND_BASALT,SC_LAND_AMAZON,SC_LAND_DESERT,
       SC_LAND_MARS,SC_LAND_VENUS,SC_LAND_ARCTIC,SC_LAND_SWAMP,SC_LAND_MOON,SC_LAND_TYPES};
+/* Three ordinary forest IDs use cactus art on Desert. Their connected native
+ * counterparts are nine IDs earlier, with the same edge masks. */
+enum {SC_DESERT_CACTUS_FIRST=35,SC_DESERT_CACTUS_VARIANTS=3};
 static inline const char *ScLandTypeName(unsigned type) {
     static const char *const names[]={"NATIVE","BASALT","AMAZON","DESERT","MARS","VENUS","ARCTIC","SWAMP","MOON"};
     return names[type<SC_LAND_TYPES?type:0];
@@ -21,8 +24,17 @@ typedef struct {
     bool relief_valid;
     unsigned relief_base,relief_type;
     uint16_t relief_original[18][16],relief_shown[18][16];
+    bool ice_valid;
+    unsigned ice_base;
+    uint16_t ice_original[16],ice_shown[16];
+    bool reeds_valid;
+    unsigned reeds_base;
+    uint16_t reeds_original[17][16],reeds_shown[17][16];
 } ScLandGraphics;
-/* Mars/Arctic replace only natural forest CHR; parks and shores stay native.
+/* Desert cacti and Mars/Moon/Arctic/Venus relief use natural forest CHR only.
+ * Moon freezes open-water CHR; Swamp adds reeds only to water pixels in the
+ * natural shore/open-water characters. Shore outlines, parks and buildings
+ * retain their native pixels.
  * Restore native graphics/uploads when changing themes or leaving the city. */
 bool ScLandGraphicsApply(ScLandGraphics *state,unsigned type,unsigned month,bool active,
     unsigned chr_base,uint16_t *vram,uint16_t *cgram);

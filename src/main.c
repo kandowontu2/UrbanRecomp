@@ -604,6 +604,7 @@ static uint8_t bus_read(void *mem, uint32_t adr) {
   if(s_rom_is_us && g_cpu && ScCitySetupRomRead(g_snes->cart->rom,g_snes->cart->romSize,
         g_ram,((uint32_t)g_cpu->k<<16)|g_cpu->pc,adr,&world_value))return world_value;
   if (ScJourneyMenuRead(adr,g_ram[0x14],&world_value) ||
+       (s_rom_is_us && ScScenarioEventMessageRead(g_ram,adr,&world_value)) ||
        ((s_population.megagopolos_announcing || s_population.gigagopolois_announcing) &&
         ScPopulationMilestoneRead(&s_population,adr,&world_value)) ||
        (s_world.journey_announcing && ScJourneyMessageRead(s_world.journey_notice,adr,&world_value)))
@@ -3750,6 +3751,8 @@ static bool sc_program_host_boundary(const Interp816 *cpu) {
     case 0x9882: /* music command substitution */
     case 0xd19e:case 0xd1fc:case 0xd20a: /* mouse dialog observations */
     case 0xc019:case 0xc0f5:case 0xc154:case 0xbd41: /* vehicles */
+    case 0xc798: /* UFO Go-To observation, including the connected C lane */
+    case 0xbae6: /* UFO dynamic CHR DMA with no ordinary vehicles */
       return true;
     }
     return false;
@@ -3758,13 +3761,14 @@ static bool sc_program_host_boundary(const Interp816 *cpu) {
     if(s_save_dialog_active && cpu->pc==0xad54) return true;
     if(ScTileLookupOwns(cpu->pc)) return true;
     switch(cpu->pc) {
-    case 0xaecc: /* temporary native Disaster menu hitboxes */
+    case 0xaecc: /* native Disaster menu hitboxes */
     case 0x8f05: /* debug gift: native palette update without the four-slot dialog */
     case 0x8907: /* common city initialization before any HUD/palette uploads */
     case 0x8948: /* city entry fade-in */
     case 0xf1ed: /* map generation */
     case 0x8976:case 0x897f: /* warnings, construction, paste, census, power */
-    case 0xe59b:case 0xa63c: /* Journey messages */
+    case 0xe59b:case 0xa63c: /* Wright text and visit close */
+    case 0x8b9f: /* manual UFO warning wins the next adviser poll */
     case 0xcc1a:case 0xcc3a: /* gift dialog observation */
     case 0xa9c4: /* music enable */
     case 0xf11a:case 0xef29:case 0xef86: /* vehicles */
@@ -8670,7 +8674,7 @@ static void scenario_event_tick(void) {
           (unsigned long long)s_frames);
 }
 
-/* The temporary third Disaster row is host artwork plus native hit-testing.
+/* The third Disaster row is host artwork plus native hit-testing.
  * Bits 6/7 remain queued until the real modal menu closes. This avoids writing
  * into occupied OAM slots or changing the original six disaster buttons. */
 static void service_disaster_menu8(void) {

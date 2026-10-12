@@ -1,9 +1,10 @@
 #include "sc_land_type.h"
 #include <stdlib.h>
+#include <string.h>
 
 #define RGB(r,g,b) ((r)|((g)<<5)|((b)<<10))
 #define MOON_PALETTE {RGB(19,19,20),RGB(22,22,23),RGB(12,12,14),RGB(26,26,27), \
-    RGB(10,13,17),RGB(5,7,10),RGB(20,20,21),RGB(13,13,15),RGB(7,7,9),RGB(12,12,13)}
+    RGB(23,27,30),RGB(15,20,25),RGB(20,20,21),RGB(13,13,15),RGB(7,7,9),RGB(12,12,13)}
 typedef struct {
     uint16_t ground,grain,bank,edge,fluid,deep,leaves,shade,outline,trunk;
 } LandPalette;
@@ -56,16 +57,16 @@ static const LandPalette palettes[SC_LAND_TYPES][SC_LAND_SEASONS]={
         {RGB(27,21,19),RGB(29,23,21),RGB(21,15,13),RGB(31,26,23),
          RGB(11,17,21),RGB(6,11,16),RGB(31,30,29),RGB(25,24,23),RGB(17,16,15),RGB(15,5,3)}
     },
-    /* Venus: Subtle sulfur/acid color shifts; no temperate snow or ice. */
+    /* Venus: Sulfur/acid seasons and luminous alien growth; no snow or ice. */
     {
         {RGB(22,24,14),RGB(24,26,16),RGB(16,18,9),RGB(27,29,20),
-         RGB(11,18,8),RGB(7,12,5),RGB(22,25,15),RGB(15,18,9),RGB(9,12,6),RGB(14,12,6)},
+         RGB(11,18,8),RGB(7,12,5),RGB(15,27,12),RGB(8,18,14),RGB(3,8,10),RGB(14,12,6)},
         {RGB(23,22,13),RGB(25,24,15),RGB(17,16,8),RGB(28,27,19),
-         RGB(13,18,7),RGB(8,12,4),RGB(24,25,14),RGB(17,18,8),RGB(10,12,5),RGB(14,12,6)},
+         RGB(13,18,7),RGB(8,12,4),RGB(20,27,10),RGB(10,18,12),RGB(3,8,9),RGB(14,12,6)},
         {RGB(24,20,11),RGB(26,22,13),RGB(18,14,7),RGB(29,25,17),
-         RGB(16,18,6),RGB(10,12,3),RGB(26,22,12),RGB(19,15,7),RGB(12,9,4),RGB(14,12,6)},
+         RGB(16,18,6),RGB(10,12,3),RGB(25,21,13),RGB(15,12,17),RGB(7,6,11),RGB(14,12,6)},
         {RGB(21,21,16),RGB(23,23,18),RGB(15,15,10),RGB(27,27,22),
-         RGB(12,16,9),RGB(7,10,5),RGB(22,23,17),RGB(15,16,11),RGB(9,10,7),RGB(14,12,6)}
+         RGB(12,16,9),RGB(7,10,5),RGB(20,25,18),RGB(10,17,17),RGB(4,8,12),RGB(14,12,6)}
     },
     /* Arctic: Spring melt, short summer thaw, autumn cooling and deep winter snow. */
     {
@@ -89,7 +90,7 @@ static const LandPalette palettes[SC_LAND_TYPES][SC_LAND_SEASONS]={
         {RGB(25,26,24),RGB(27,28,26),RGB(17,19,16),RGB(30,31,28),
          RGB(12,18,19),RGB(6,11,13),RGB(27,27,22),RGB(17,19,15),RGB(8,12,9),RGB(9,7,3)}
     },
-    /* Airless lunar dust and dark ice seas; no Earth-like vegetation/seasons. */
+    /* Airless lunar dust and pale, permanently frozen ice; no vegetation/seasons. */
     {MOON_PALETTE,MOON_PALETTE,MOON_PALETTE,MOON_PALETTE}
 };
 #undef MOON_PALETTE
@@ -156,17 +157,35 @@ static uint16_t land_color(const LandPalette *p,unsigned index,uint16_t native) 
  * Parks use the next character; water, buildings and sprites share none of
  * these. Keep the native palette/footprint and encode original pixel art in
  * its four-plane format so CPU, GPU, preview and native-core views agree. */
-static const char relief[7][8][9]={
+static const char relief[19][8][9]={
     {"........","...hh...","..hmmm..",".hhmmmm.",".hmmmsm.","..mmsss.","...sss..","........"},
     {"........","........",".hh.....","hmmm.hh.","hmms.hmm",".sss.mms",".....ss.","........"},
     {"........","..hh....",".hhmm...",".hmmms..","..mms.hh","..sss.ms","......ss","........"},
     {"........","........","..hhh...",".hhhhm..","hhhhmmm.","hhhmmmms",".mmmsss.","........"},
     {"........","...hh...","..hhhh..",".hhhhhm.","hhhhmmms","hhmmmmss",".mmssss.","........"},
     {"........","........",".hhh....","hhhhm.hh","hhhmmhhh","mmmssmmm",".sss..ss","........"},
-    {"........","........","....hh..","...hhhh.",".hhhhhhm","hhhmmmms",".mmmsss.","........"}
+    {"........","........","....hh..","...hhhh.",".hhhhhhm","hhhmmmms",".mmmsss.","........"},
+    /* Venus: lobed pods, curling fronds and forked shoots. Match the native
+     * trees' single-pixel leaf highlights, shaded scallops and thin trunks;
+     * open gaps distinguish branches instead of filling a solid silhouette. */
+    {"...hm...",".hmhmms.","hmmhmmms",".smmms..","..sts...","...t.hm.","..htms..","...ss..."},
+    {"hms..hm.",".hm.hmms","..mhm.s.","hmmtms..",".smts.h.","..htmm..","...t.s..","..ss...."},
+    {"..hm..h.",".hmms.ms","..tm.hm.","h.tmmms.","hmmt.s..",".shtm...","..mts...","...ss..."},
+    /* Desert: separate saguaro silhouettes, never connected canopy edges. */
+    {"........","...hm...",".h.hms..",".hshms.h",".hmmmmhs","..smms..","...hms..","..ssss.."},
+    {"...hm...","...hms..","...hms.h","...hmshs","h..hmmms","hshmms..",".ssmms..","..ssss.."},
+    {"........","....hm..","....hms.",".h..hms.",".hs.hms.",".hmmmms.","..sshms.","...ssss."},
+    /* Two more of each Venus family, followed by mirrored forms in CHR. */
+    {"..hm.hm.",".hmhmmms","hmmmsms.",".smsmt..","....thm.",".hm.tms.","..mtt...","...ss..."},
+    {".hm...h.","hmms.hms",".smhmm..","..mmts.h","hmmttmms",".smsmt..","...t....","..ss...."},
+    {".hm...h.","hmms.hms",".st..mt.","..thmmt.","hmtms.s.",".shtm...","..mt....","...ss..."},
+    {"..hm....",".hmhms..","hmmsm.hm",".ssmhmms","...t.ss.",".hmtm...","..st....","...ss..."},
+    {"..hm....",".hms..hm","hmm.hmm.",".smmts..","hmmtm.h.",".smttmms","...t.ss.","..ss...."},
+    {"....hm..",".hm.hmms","..mtsms.","...tm.h.","hmmtmms.",".sst.s..","..mt....","...ss..."}
 };
 static bool relief_apply(ScLandGraphics *s,unsigned type,bool active,unsigned base,uint16_t *vram) {
-    bool enabled=active && (type==SC_LAND_MARS || type==SC_LAND_ARCTIC),changed=false;
+    bool enabled=active && (type==SC_LAND_DESERT || type==SC_LAND_MARS ||
+        type==SC_LAND_MOON || type==SC_LAND_ARCTIC || type==SC_LAND_VENUS),changed=false;
     if(s->relief_valid && (!enabled || s->relief_base!=base)) {
         for(unsigned t=0;t<18;++t)for(unsigned i=0;i<16;++i) {
             unsigned at=(s->relief_base+(0x28e + t)*16+i)&32767;
@@ -187,13 +206,21 @@ static bool relief_apply(ScLandGraphics *s,unsigned type,bool active,unsigned ba
     }
     if(!dirty)return changed;
     for(unsigned t=0;t<18;++t) {
-        unsigned shape=type==SC_LAND_MARS?t%3:3+t%4;
         uint16_t image[16]={0};
-        for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x) {
-            char ink=relief[shape][y][t&4?7-x:x];
-            unsigned ci=ink=='h'?13:ink=='m'?14:ink=='s'?15:12,bit=7-x;
-            image[y]|=(ci&1)<<bit|((ci>>1)&1)<<(bit+8);
-            image[y+8]|=((ci>>2)&1)<<bit|((ci>>3)&1)<<(bit+8);
+        if(type==SC_LAND_DESERT && t+20<SC_DESERT_CACTUS_FIRST)
+            memcpy(image,s->relief_original[t],sizeof image);
+        else {
+            unsigned variation=(t%9)/3;
+            unsigned shape=(type==SC_LAND_MARS || type==SC_LAND_MOON)?t%3:
+                type==SC_LAND_VENUS?7+t%3:type==SC_LAND_DESERT?10+t+20-SC_DESERT_CACTUS_FIRST:3+t%4;
+            if(type==SC_LAND_VENUS && variation)shape=13+(variation-1)*3+t%3;
+            bool mirrored=type==SC_LAND_VENUS?t>=9:(t&4)!=0;
+            for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x) {
+                char ink=relief[shape][y][mirrored?7-x:x];
+                unsigned ci=ink=='h'?13:ink=='m'?14:ink=='s'?15:ink=='t'?2:12,bit=7-x;
+                image[y]|=(ci&1)<<bit|((ci>>1)&1)<<(bit+8);
+                image[y+8]|=((ci>>2)&1)<<bit|((ci>>3)&1)<<(bit+8);
+            }
         }
         for(unsigned i=0;i<16;++i) {
             unsigned at=(base+(0x28e + t)*16+i)&32767;
@@ -202,10 +229,105 @@ static bool relief_apply(ScLandGraphics *s,unsigned type,bool active,unsigned ba
     }
     return changed;
 }
+static bool ice_apply(ScLandGraphics *s,unsigned type,bool active,unsigned base,uint16_t *vram) {
+    /* US terrain IDs 1..3 all use BG2 character $370. Shores use $360..36f;
+     * keep their connected outlines and replace only the animated open water. */
+    bool enabled=active && type==SC_LAND_MOON,changed=false;
+    if(s->ice_valid && (!enabled || s->ice_base!=base)) {
+        for(unsigned i=0;i<16;++i) {
+            unsigned at=(s->ice_base+0x370*16+i)&32767;
+            if(vram[at]==s->ice_shown[i] && vram[at]!=s->ice_original[i]) {
+                vram[at]=s->ice_original[i];changed=true;
+            }
+        }
+        s->ice_valid=false;
+    }
+    if(!enabled)return changed;
+    bool fresh=!s->ice_valid,dirty=fresh;
+    s->ice_valid=true;s->ice_base=base;
+    for(unsigned i=0;i<16;++i) {
+        unsigned at=(base+0x370*16+i)&32767;
+        if(fresh || vram[at]!=s->ice_shown[i]) {s->ice_original[i]=vram[at];dirty=true;}
+    }
+    if(!dirty)return changed;
+    static const char ice[8][9]={
+        "...s....","....s...","....hs..","....s..h",
+        "....s...","...s....","..sh....",".s....h."
+    };
+    uint16_t image[16]={0};
+    for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x) {
+        unsigned ci=ice[y][x]=='s'?10:ice[y][x]=='h'?3:4,bit=7-x;
+        image[y]|=(ci&1)<<bit|((ci>>1)&1)<<(bit+8);
+        image[y+8]|=((ci>>2)&1)<<bit|((ci>>3)&1)<<(bit+8);
+    }
+    for(unsigned i=0;i<16;++i) {
+        unsigned at=(base+0x370*16+i)&32767;
+        changed|=vram[at]!=image[i];vram[at]=s->ice_shown[i]=image[i];
+    }
+    return changed;
+}
+static bool reeds_apply(ScLandGraphics *s,unsigned type,bool active,unsigned base,uint16_t *vram) {
+    /* $360..36f are natural connected shores, $370 is animated open water.
+     * Paint only native water/shadow pixels, retaining the bank silhouette
+     * and animation underneath. Open water has a smaller tuft so channels
+     * remain readable. The existing foliage ramp supplies seasonal colors. */
+    bool enabled=active && type==SC_LAND_SWAMP,changed=false;
+    if(s->reeds_valid && (!enabled || s->reeds_base!=base)) {
+        for(unsigned t=0;t<17;++t)for(unsigned i=0;i<16;++i) {
+            unsigned at=(s->reeds_base+(0x360+t)*16+i)&32767;
+            if(vram[at]==s->reeds_shown[t][i] && vram[at]!=s->reeds_original[t][i]) {
+                vram[at]=s->reeds_original[t][i];changed=true;
+            }
+        }
+        s->reeds_valid=false;
+    }
+    if(!enabled)return changed;
+    bool fresh=!s->reeds_valid,dirty=fresh;
+    s->reeds_valid=true;s->reeds_base=base;
+    for(unsigned t=0;t<17;++t)for(unsigned i=0;i<16;++i) {
+        unsigned at=(base+(0x360+t)*16+i)&32767;
+        if(fresh || vram[at]!=s->reeds_shown[t][i]) {
+            s->reeds_original[t][i]=vram[at];dirty=true;
+        }
+    }
+    if(!dirty)return changed;
+    static const char grass[3][8][9]={
+        {"........",".h..h...",".hm.h..h","..hhm.hm","...hmmms","...mss..","........","........"},
+        {"........",".....h..","..h..hm.","h.hm.hh.","hm.hmmms",".mmss...","..ss....","........"},
+        {"........","........","....h...","..h.h...","...hms..","...mss..","........","........"}
+    };
+    for(unsigned t=0;t<17;++t) {
+        uint16_t image[16]={0};
+        for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x) {
+            unsigned bit=7-x,lo=s->reeds_original[t][y],hi=s->reeds_original[t][y+8];
+            unsigned ci=((lo>>bit)&1)|(((lo>>(bit+8))&1)<<1)|
+                (((hi>>bit)&1)<<2)|(((hi>>(bit+8))&1)<<3);
+            char ink=grass[t==16?2:t%2][y][t&4?7-x:x];
+            if(ci==4 || ci==10) {
+                if(ink=='h')ci=13;
+                else if(ink=='m')ci=14;
+                else if(ink=='s')ci=15;
+            }
+            image[y]|=(ci&1)<<bit|((ci>>1)&1)<<(bit+8);
+            image[y+8]|=((ci>>2)&1)<<bit|((ci>>3)&1)<<(bit+8);
+        }
+        for(unsigned i=0;i<16;++i) {
+            unsigned at=(base+(0x360+t)*16+i)&32767;
+            changed|=vram[at]!=image[i];vram[at]=s->reeds_shown[t][i]=image[i];
+        }
+    }
+    return changed;
+}
 bool ScLandGraphicsApply(ScLandGraphics *s,unsigned type,unsigned month,bool active,
         unsigned base,uint16_t *vram,uint16_t *cgram) {
     if(type>=SC_LAND_TYPES)type=0;
     bool changed=relief_apply(s,type,active,base,vram);
+    /* Restore either water skin before the other captures its native frame. */
+    if(!active || type!=SC_LAND_MOON)
+        changed|=ice_apply(s,type,active,base,vram);
+    changed|=reeds_apply(s,type,active,base,vram);
+    if(active && type==SC_LAND_MOON)
+        changed|=ice_apply(s,type,active,base,vram);
     if(!active || !type) {
         if(s->valid)for(unsigned i=0;i<32;++i) {
             unsigned at=i<16?16+i:112+i-16;

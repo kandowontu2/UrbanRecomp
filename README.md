@@ -31,10 +31,11 @@ cities. Music runs on its own thread, with the restored 19-track set and
 the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) and
 [performance evidence and remaining limits](docs/GPU_PERFORMANCE.md).
 
-**UrbanRecomp Enhanced 1.0.2 includes fresh builds for all five platforms.** Get the
+**UrbanRecomp Enhanced 1.0.3 includes fresh builds for all five platforms.** Get the
 [Windows x64 EXE, universal macOS app, Linux x86-64 package, signed Android APK
-or iPhone/iPad sideloading IPA](https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.2).
-All five packages include the latest biome and lava-flood improvements.
+or iPhone/iPad sideloading IPA](https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.3).
+All five packages include UFO visibility and warning fixes, Swamp water grass,
+detailed Venus plants, new disaster buttons, Moon ice/rocks and Desert cacti.
 Android supports ARM64/x86-64; the iOS IPA requires user signing.
 See [mobile controls and installation](docs/MOBILE.md).
 The Windows package is one portable EXE; run it and select your own clean US ROM.
@@ -416,9 +417,9 @@ explain the revised city and its limits. The calendar supports years through
 including when the image is dimmed. Click a gift or use arrows and Enter, then
 place it normally. Earned gifts in a full queue are retained.
 
-The in-game **Disasters** panel has temporary **NUKE** and **UFO** buttons below
-the original six. Select an event, then close the panel to start it. NUKE needs
-an existing nuclear plant. These
+The in-game **Disasters** panel has **nuclear meltdown** and **UFO** icons centered
+below the original six buttons. Select an event, then close the panel to start it.
+A meltdown needs an existing nuclear plant. These
 explicit events also work with **CHEAT NO DISASTER** enabled; that setting
 continues suppressing automatic disasters.
 

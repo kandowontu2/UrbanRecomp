@@ -95,9 +95,12 @@ Native pollution uses two smoothing passes. Sources: US `03:9c11..9fa6`,
 Natural forests, water and shores also supply terrain amenity through their
 tile IDs. They have no resident capacity. Bulldozing them to bare ground can
 reduce nearby land value. Terrain themes and seasons retain these rules;
-Moon removes natural forests but player-built parks still work. New Mars maps
-retain about 24% of natural forest cells as pale rocks; Desert retains roughly
-3% as scrub patches. Arctic snow mounds replace tree art at the same density.
+New Mars and Moon maps retain about 24% of natural forest cells as rocks;
+Moon uses lunar grays and grows no trees. Desert retains roughly 3% as scrub
+patches, with occasional isolated cacti in bare sand. The cacti and rocks use
+ordinary forest tile IDs/properties, so they supply the same amenity, clearing
+and fire behavior. Player-built parks still work on every theme. Arctic snow
+mounds replace tree art at the same density.
 Surviving rocks, scrub and snow keep the native terrain-amenity rules. Existing
 city terrain and player-built parks are preserved. Basalt floods additionally
 ignite adjacent land/flammable tiles and run the original fire simulation.

@@ -1,5 +1,30 @@
 # Enhanced fork changelog
 
+## Enhanced 1.0.3 — 2026-10-11
+
+- Redraw Venus foliage with fine leaf highlights, curling branches, lobed pods
+  and thin trunks in the original trees' pixel style. Add nine plant forms and
+  mirrored variants, with greener spring/summer and seasonal alien shading.
+- Add seasonal grass and reeds to Swamp water and shallows while preserving
+  connected shorelines, visible animated water and normal water gameplay.
+- Fix invisible UFO attacks when no ordinary vehicles are active: upload the
+  native animated UFO graphics independently and retain hovering sprites.
+  Follow attack targets in the compiled execution path, prevent repeated UFO
+  copies in expanded views and keep an 8-pixel marker at distant zoom levels.
+- Announce manual UFO attacks with Dr. Wright before input locks for the attack.
+  Replace the Las Vegas-specific warning with city-neutral UFO advice, including
+  the original scenario, and avoid repeating the warning after manual attacks.
+- Replace the temporary nuclear meltdown and UFO disaster text buttons with
+  approved 24x24 pixel art matching the original buttons and selection palette.
+- Center both icons on the Disaster panel's third row and align their full-size
+  mouse and keyboard/controller hitboxes. Keep artwork sharp through fades.
+- Give Moon permanent pale ice with a static cracked surface. Prevent manual,
+  automatic and scenario floods, and stop old saved floods from spreading.
+- Add denser natural foliage to new Swamp maps.
+- Scatter occasional lone cacti among Desert scrub, using three silhouettes
+  and ordinary forest-tile gameplay. Give new Moon maps sparse, varied gray
+  rocks at Mars's density while retaining permanent ice and flood prevention.
+
 ## Enhanced 1.0.2 — 2026-10-07
 
 - Make Mars natural terrain much sparser, with three pale rock formations and
