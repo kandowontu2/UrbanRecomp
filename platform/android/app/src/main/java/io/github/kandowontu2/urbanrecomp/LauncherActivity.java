@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 
 public final class LauncherActivity extends Activity {
+    private static final Object ASSET_LOCK = new Object();
     private TextView status;
     private Button play, choose;
     private boolean ready;
@@ -33,10 +34,19 @@ public final class LauncherActivity extends Activity {
         choose.setOnClickListener(v-> {Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);intent.addCategory(Intent.CATEGORY_OPENABLE);intent.setType("*/*");startActivityForResult(intent,1);});
         play.setOnClickListener(v->startActivity(new Intent(this,GameActivity.class)));
         new Thread(()-> {try {
-            File marker=new File(getFilesDir(),"assets-1.0.1.ready");
-            if(!marker.exists()) {copyAssets("",getFilesDir());Files.write(marker.toPath(),new byte[]{1});}
-            ready=true;runOnUiThread(()->refresh(""));
-        }catch(IOException e) {runOnUiThread(()->status.setText("Assets could not be prepared: "+e.getMessage()));} },"UrbanRecomp assets").start();
+            // Activity recreation may leave the previous extraction running.
+            // Serialize workers and check the current package's marker inside
+            // the lock, so only one worker owns each temporary asset file.
+            synchronized(ASSET_LOCK) {
+                String version=getPackageManager().getPackageInfo(getPackageName(),0).versionName;
+                File marker=new File(getFilesDir(),"assets-"+version+".ready");
+                if(!marker.exists()) {copyAssets("",getFilesDir());Files.write(marker.toPath(),new byte[]{1});}
+            }
+            ready=true;runOnUiThread(()-> {if(!isFinishing()&&!isDestroyed())refresh("");});
+        }catch(IOException|android.content.pm.PackageManager.NameNotFoundException e) {
+            android.util.Log.e("UrbanRecomp assets","Asset preparation failed",e);
+            runOnUiThread(()-> {if(!isFinishing()&&!isDestroyed())status.setText("Assets could not be prepared: "+e.getMessage());});
+        } },"UrbanRecomp assets").start();
     }
     private void refresh(String message) {
         choose.setEnabled(ready);boolean rom=new File(getFilesDir(),"simcity-us.sfc").isFile();play.setEnabled(ready);

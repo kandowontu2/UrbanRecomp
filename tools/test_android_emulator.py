@@ -12,6 +12,9 @@ adb('install',str(apk));adb('logcat','-c')
 adb('shell','wm','size','1280x720')
 adb('shell','input','keyevent','82');adb('shell','wm','dismiss-keyguard')
 print(adb('shell','am','start','-W','-n','io.github.kandowontu2.urbanrecomp/.LauncherActivity'))
+# A second Activity must share the first worker's completed extraction rather
+# than race over the same .tmp files during first-launch asset preparation.
+print(adb('shell','am','start','-W','-n','io.github.kandowontu2.urbanrecomp/.LauncherActivity'))
 play=None
 for attempt in range(12):
     time.sleep(5)

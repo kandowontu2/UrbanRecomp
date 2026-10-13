@@ -20,6 +20,9 @@
 - Protect fixed HUD pixels from development redraws and preserve the fax font
   while leaving the scenario selector. Keep the new progress panel clear of
   tool prices and prevent mouse placement behind it.
+- Apply the same HUD protection in deferred CPU and Vulkan rendering.
+- Fix concurrent Android asset extraction after launcher recreation. Refresh
+  bundled assets and documentation on version upgrades while preserving saves.
 
 ## Enhanced 1.0.3 — 2026-10-11
 
