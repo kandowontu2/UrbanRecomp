@@ -130,6 +130,7 @@ static ScFleet *s_fleet;
 #include "sc_journey.h"
 #include "sc_city_setup.h"
 #include "sc_land_type.h"
+#include "sc_mars_scenario.h"
 #include "sc_test_city.h"
 static ScWorld s_world;
 static ScPopulation s_population;
@@ -605,6 +606,7 @@ static uint8_t bus_read(void *mem, uint32_t adr) {
         g_ram,((uint32_t)g_cpu->k<<16)|g_cpu->pc,adr,&world_value))return world_value;
   if (ScJourneyMenuRead(adr,g_ram[0x14],&world_value) ||
        (s_rom_is_us && ScScenarioEventMessageRead(g_ram,adr,&world_value)) ||
+       (s_rom_is_us && ScMarsScenarioMessageRead(&s_world,adr,&world_value)) ||
        ((s_population.megagopolos_announcing || s_population.gigagopolois_announcing) &&
         ScPopulationMilestoneRead(&s_population,adr,&world_value)) ||
        (s_world.journey_announcing && ScJourneyMessageRead(s_world.journey_notice,adr,&world_value)))
@@ -1005,6 +1007,7 @@ static void ws_fill_margins(void);
 static void ws_fill_flat_margins(void);
 static void ws_hide_backdrop_furniture(void);
 static void sylt_place_card(void);
+static bool s_ninth_scenario;
 static void sylt_write_brief_tilemap(void);
 /* Briefing page geometry -- up here because the composer is called from the
  * opcode loop, which comes earlier in this file than the composer itself. */
@@ -1069,8 +1072,28 @@ static void handle_pos_stuff(void) {
       s_custom_renderer.map_preview_frame=ScRendererMapPreviewVisible(g_ppu,g_ram);
       s_custom_renderer.terrain_style=(unsigned)s_terrain_style;
       s_custom_renderer.land_type=(unsigned)s_land_type;
-      if(ScLandGraphicsApply(&s_land_graphics,s_world.land_type,ram_w(0xb55),host_map_screen_live(),
-          PPU_bgTileAdr(g_ppu,1),g_ppu->vram,g_ppu->cgram))ScPpuVramChanged();
+      if(s_world.mars_status) {
+        /* Monthly goals follow the live calendar, not stock scenarios'
+         * yearly checkpoints. Repeated frames do not award additional time. */
+        ScMarsScenarioObserve(&s_world,&s_population,g_ram,g_snes->cart->rom);
+        ScMarsScenarioInspect(&s_world,&s_population,g_ram,g_snes->cart->rom,&s_custom_renderer.mars_stats);
+      }
+      bool land_changed=s_world.mars_status?
+          ScLandGraphicsTerraform(&s_land_graphics,s_world.mars_progress,ram_w(0xb55),host_map_screen_live(),
+              PPU_bgTileAdr(g_ppu,1),g_ppu->vram,g_ppu->cgram):
+          ScLandGraphicsApply(&s_land_graphics,s_world.land_type,ram_w(0xb55),host_map_screen_live(),
+              PPU_bgTileAdr(g_ppu,1),g_ppu->vram,g_ppu->cgram);
+      if(land_changed)ScPpuVramChanged();
+      /* $0C is already loading the fax while old selector registers remain.
+       * Its new body font shares VRAM with the selector's second map page. */
+      if(screen==0x0b && PPU_mode(g_ppu)==0 &&
+         PPU_bgTilemapAdr(g_ppu,0)==0x3000 && PPU_bgTilemapWider(g_ppu,0) &&
+         s_custom_renderer.minimap_font_valid) {
+        selector_extend_tilemap();
+        if(s_ninth_scenario)sylt_place_card();
+        ScMarsScenarioCard(g_ppu->vram,PPU_bgTilemapAdr(g_ppu,0),s_custom_renderer.minimap_font);
+        ScPpuVramChanged();
+      }
       if(ScLandStadiumApply(&s_stadium_graphics,s_world.land_type,host_map_screen_live(),
           PPU_bgTileAdr(g_ppu,1),g_ppu->vram))ScPpuVramChanged();
       s_custom_renderer.setup_size=s_world.active?(s_world.mega?5:s_world.colossal?4:s_world.giant?3:s_world.huge?2:1):0;
@@ -2857,13 +2880,13 @@ static int      s_card_count;
 enum { kMaxSurf = 4 };
 static uint8_t *s_surf[kMaxSurf]; static uint32_t s_surf_len[kMaxSurf];
 static int      s_surf_count;
-static bool s_ninth_scenario;
 /* Declared here rather than beside load_sylt_map(): the arm is set from the
  * selector hook and the swap runs in the opcode loop, both of which come
  * earlier in this file. */
 static uint8_t *s_sylt_map;
 static long s_sylt_map_len;
 static bool s_sylt_map_armed;   /* only when the ninth column is confirmed */
+static bool s_mars_map_armed;
 /* Set once Sylt's map is actually in place, cleared on the way back to the
  * selector. Index 8 is the practice map as well, so "$0040 == 8" alone
  * cannot tell the two apart after the arm has been consumed. */
@@ -2909,7 +2932,7 @@ static void ninth_scenario_hook(unsigned bank, unsigned pc) {
                     * column, and clear it for every other choice so a stale
                     * arm can never hand Sylt's map to another scenario --
                     * index 8 is the PRACTICE map, so that matters. */
-      s_sylt_map_armed = (g_ram[0x52] == 4);
+      s_sylt_map_armed = (g_ram[0x52] == 4 && g_ram[0x54] == 0);
       break;
     case 0xdebb:   /* 03:deb2 and 03:deb8 have just stored the selection
                     * cursor's x and y. They come from the EIGHT-entry tables
@@ -2947,12 +2970,9 @@ static void ninth_scenario_hook(unsigned bank, unsigned pc) {
                     * 03:ddc7 branch taken when no direction is pressed, so
                     * the index stays right on idle frames too */
       if (g_ram[0x52] == 4) {
-        g_ram[0x40] = 8;
+        g_ram[0x40] = 8+(g_ram[0x54]&1);
         g_ram[0x41] = 0;
-        /* One row only. Without this, Down on the ninth column runs 03:de0e's
-         * row*3+col and lands on 7 -- the Free card -- while the cursor
-         * sprite sits on an empty second row that has no card at all. */
-        g_ram[0x54] = 0;
+        /* Mars occupies the lower row of the new column. */
       }
       break;
     case 0xde31:   /* after 03:de2f STA $22 -- and necessarily here rather
@@ -3136,7 +3156,7 @@ static int  s_replay_free;          /* 0 off, 1 armed, 2 active */
  * cursor movement -- which is precisely the common case. */
 static int replay_index_now(void) {
   int col = g_ram[0x52], row = g_ram[0x54] & 1;
-  if (s_ninth_scenario && col == 4) return 8;
+  if (col == 4) return 8+row;
   if (col == 3) return 6 + row;
   return row * 3 + col;
 }
@@ -4500,6 +4520,19 @@ static bool run_one_frame(void) {
      *
      * 03:ce61 is the scenario equivalent -- map in place, about to return. */
     if (s_ninth_scenario) ninth_scenario_hook(cpu->k, cpu->pc);
+    if(s_rom_is_us) {
+      ScMarsScenarioSelectorStep(cpu,g_ram,s_ninth_scenario);
+      if(cpu->k==3 && cpu->pc==0xddb6) {
+        if(ram_w(0x40)==SC_MARS_SCENARIO) {ram_set_w(0x52,4);ram_set_w(0x54,1);}
+        s_mars_map_armed=false;
+      }
+      if(cpu->k==3 && cpu->pc==0xde4d) {
+        s_mars_map_armed=ram_w(0x52)==4 && ram_w(0x54)==1;
+        /* Borrow only practice's valid fax/map pointers while loading.
+         * All scenario-9 rules and city data are supplied below. */
+        if(s_mars_map_armed)ram_set_w(0x40,8);
+      }
+    }
     if (s_rom_is_us) {
       /* The city setup enables terrain before HUD uploads and the original
        * fade-in task are ready. Keep this transient view behind black. */
@@ -4856,6 +4889,8 @@ static bool run_one_frame(void) {
          * after this. */
         sylt_write_brief_tilemap();
     }
+    if(s_rom_is_us && s_mars_map_armed && cpu->k==0 && cpu->pc==0x9106 &&
+       s_scpk_src==0x0bfbe7u)sylt_write_brief_tilemap();
     /* Translated briefings, same exit hook, generalised to the twelve
      * packets. Placed AFTER Sylt so its own briefing still wins on the
      * packet the two share (0B:FBE7, the free-play welcome block Sylt
@@ -4894,7 +4929,7 @@ static bool run_one_frame(void) {
                     g_ram[0x14] == 0x0b ? "  <-- SCENARIO SELECTOR" : "");
           }
         }
-        const bool sylt_owns = s_ninth_scenario && s_sylt_map_armed &&
+        const bool sylt_owns = ((s_ninth_scenario && s_sylt_map_armed) || s_mars_map_armed) &&
                                s_brief_decomp_src == 0x0bfbe7u;
         if (!sylt_owns) {
           if (s_bp_count &&
@@ -5029,6 +5064,7 @@ static bool run_one_frame(void) {
     }
     if (s_rom_fnv == SC_ROM_FNV_US) {
       ScScenarioEventStep(&s_scenario_event,cpu,g_ram,&s_world);
+      ScMarsScenarioStep(&s_world,&s_population,cpu,g_ram,g_snes->cart->rom);
       /* Capture native Go-To/attack targets when its pan routine starts.
        * The renderer applies them after tracking the native camera movement. */
       if(cpu->k==0 && cpu->pc==0xc798 && ram_w(0x3fe) && host_map_screen_live()) {
@@ -5071,6 +5107,21 @@ static bool run_one_frame(void) {
       ScWorldGuestVehiclesPrepared(&s_world, cpu, g_ram, g_snes->multiplyA);
     }
     if (s_rom_fnv == SC_ROM_FNV_US && cpu->k == 3) {
+      if(cpu->pc==0xce8b && s_mars_map_armed) {
+        bool ok=ScMarsScenarioGenerate(&s_world,&s_population,g_ram,g_snes->cart->rom,g_snes->cart->romSize);
+        s_mars_map_armed=false;
+        if(!ok)fprintf(stderr,"[Mars] colony generation failed\n");
+        cpu->mf=cpu->xf=false; /* native initializer starts with REP #$30 */
+        cpu->pc=0xcec8; /* native seed tables have only eight entries */
+        reset_refresh_clocks();ScRendererResetHistory(&s_custom_renderer);
+      }
+      if(cpu->pc==0xc690 && s_world.mars_status==1) {
+        /* c79d clears all spatial fields after the scenario seed. Publish
+         * the colony's real scans after that clear, before its first fade. */
+        ScConstructionRefreshPower(g_ram,&s_world,g_snes->cart->rom,g_snes->cart->romSize);
+        ScConstructionPrimeFields(g_ram,g_snes->cart->rom,g_snes->cart->romSize);
+        ScMarsScenarioObserve(&s_world,&s_population,g_ram,g_snes->cart->rom);
+      }
       if(cpu->pc==0xcbe2 && s_test_saving)test_city_finish_save();
       else if(cpu->pc==0xcbe2 && !s_world.test_city) {population_saved_city(true);world_saved_city(true);}
       if(cpu->pc==0xc8ce) {
@@ -5795,7 +5846,7 @@ static void selector_hint_margin_sprites(void) {
   const int scroll = ScSelector_Scroll(g_ppu, sc_bus_rom_read, NULL);
   if (scroll < 0) return;
   ScSelSprite want[SC_SEL_MAX_SPRITES];
-  const int nw = ScSelector_Sprites(want, scroll, selector_won(), false,
+  const int nw = ScSelector_Sprites(want, scroll, selector_won(), false, false,
                                     sc_bus_rom_read, NULL);
   static int diag = -1;
   if (diag < 0) diag = getenv("SC_MARK_DIAG") != NULL;
@@ -5918,11 +5969,11 @@ static void title_sign_align(void) {
 }
 /* Sylt's pin, and its mark once won, in slots the selector leaves parked. */
 static void selector_sylt_sprites(void) {
-  if (!s_ninth_scenario || !g_ppu || !selector_on_screen()) return;
+  if (!s_rom_is_us || !g_ppu || !selector_on_screen()) return;
   const int scroll = ScSelector_Scroll(g_ppu, sc_bus_rom_read, NULL);
   if (scroll < 0) return;
   ScSelSprite all[SC_SEL_MAX_SPRITES];
-  const int n = ScSelector_Sprites(all, scroll, selector_won(), true,
+  const int n = ScSelector_Sprites(all, scroll, selector_won(), s_ninth_scenario, true,
                                    sc_bus_rom_read, NULL);
   /* Spare slots: the ones parked at X = 384, from the top down. */
   int slot = 127;
@@ -7774,7 +7825,9 @@ static bool save_state(const char *path) {
   if(themed && ScLandGraphicsApply(&s_land_graphics,0,ram_w(0xb55),false,land_base,g_ppu->vram,g_ppu->cgram))ScPpuVramChanged();
   ScMusicLock();snes_saveload(g_snes, &fs.base);ScMusicUnlock();
   if(domed && ScLandStadiumApply(&s_stadium_graphics,s_world.land_type,true,stadium_base,g_ppu->vram))ScPpuVramChanged();
-  if(themed && ScLandGraphicsApply(&s_land_graphics,s_world.land_type,ram_w(0xb55),true,land_base,g_ppu->vram,g_ppu->cgram))ScPpuVramChanged();
+  if(themed && (s_world.mars_status?
+       ScLandGraphicsTerraform(&s_land_graphics,s_world.mars_progress,ram_w(0xb55),true,land_base,g_ppu->vram,g_ppu->cgram):
+       ScLandGraphicsApply(&s_land_graphics,s_world.land_type,ram_w(0xb55),true,land_base,g_ppu->vram,g_ppu->cgram)))ScPpuVramChanged();
   interp816_saveload(g_cpu, &fs.base);
   fs.base.func(&fs.base, &s_frames, sizeof(s_frames));
   fs.base.func(&fs.base, &g_ppu->vramPointer, kScPpuBusBytes);
@@ -7829,7 +7882,7 @@ static bool load_state(const char *path) {
   fs.f = f;
   fs.ok = true;
   test_city_restore_sram();s_test_load_pending=s_test_generate_pending=s_test_saving=s_test_menu_pending=false;
-  s_test_setup=false;
+  s_test_setup=false;s_mars_map_armed=false;
   ScSram_Hold();   /* the saved cities on disk stay the player's */
   s_mouse_dialog=SC_MOUSE_DIALOG_NONE;
   s_save_dialog_pending=s_save_dialog_active=false;
@@ -7877,6 +7930,11 @@ static bool load_state(const char *path) {
     }
   }
   ScWorldYearMirror(&s_world,g_ram);
+  /* The practice donor is only a pointer to the Mars fax while loading.
+   * Re-arm a quicksave taken on that briefing, before the city is created. */
+  if(!s_world.mars_status && ram_w(0x3e)==3 && ram_w(0x40)==8 &&
+     ram_w(0x52)==4 && ram_w(0x54)==1 && g_ram[0x14]>=12 && g_ram[0x14]<=15)
+    s_mars_map_armed=true;
   if(s_world.test_city)ScTestCityRepairName(g_ram);
   g_ppu->lastBrightnessMult = 0xff;   /* rebuild the brightness tables */
   ScRendererResetCamera(&s_custom_renderer);
@@ -9176,12 +9234,14 @@ static void sc_dma_vram_notify(uint8_t aBank, uint16_t aAdr, uint16_t vmadd,
  * again anyway -- and covers a map row the upload finishes late. */
 static void selector_after_upload(void) {
   if (g_ram[0x14] != 0x0a) { s_sel_upload_seen = false; return; }
-  if (!s_sel_upload_seen || !g_ppu || !s_ninth_scenario || !s_rom_is_us) return;
+  if (!s_sel_upload_seen || !g_ppu || !s_rom_is_us) return;
   if (PPU_bgTilemapAdr(g_ppu, 0) != 0x3000 || !PPU_bgTilemapWider(g_ppu, 0))
     return;
   selector_extend_tilemap();
   place_translated_cards();   /* cards first: see 03:ddb6 */
-  sylt_place_card();
+  if(s_ninth_scenario)sylt_place_card();
+  if(s_custom_renderer.minimap_font_valid)
+    ScMarsScenarioCard(g_ppu->vram,PPU_bgTilemapAdr(g_ppu,0),s_custom_renderer.minimap_font);
 }
 
 static void sc_dma_vram_install(void) {
@@ -9402,14 +9462,25 @@ static const char *const kSyltBody[] = {
 };
 
 static void sylt_write_brief_tilemap(void) {
+  static const char *const mars_body[]={
+    "Coal and factories", "poisoned our colony.",
+    "Turn Mars green in", "five years.", "",
+    "Plant 2400 park tiles.", "Pollution: 8 or less.", "Hot spots cover at",
+    "most one percent.", "Keep 50000 people.", "Power at least 95 of",
+    "every 100 zones.",
+    "Hold all goals for 12", "consecutive months.",
+    "Use cleaner power.", "", "Deadline April 2055."
+  };
   uint8_t *dst = &g_ram[0x8000];          /* $7E8000 */
   for (int i = 0; i < SC_BRIEF_COLS * SC_BRIEF_ROWS; i++) {
     dst[i * 2]     = (uint8_t)(SC_BRIEF_BLANK & 0xffu);
     dst[i * 2 + 1] = (uint8_t)(SC_BRIEF_BLANK >> 8);
   }
-  brief_put(dst, 2, 5, "Sylt, Germany 2047", 0x000u, 0x030u);
-  for (int i = 0; i < (int)(sizeof(kSyltBody) / sizeof(kSyltBody[0])); i++)
-    brief_put(dst, 4 + i, 4, kSyltBody[i], 0x690u, 0x6C0u);
+  brief_put(dst, 2, 5, s_mars_map_armed?"Terraforming Mars 2050":"Sylt, Germany 2047", 0x000u, 0x030u);
+  const char *const *body=s_mars_map_armed?mars_body:kSyltBody;
+  int lines=s_mars_map_armed?sizeof mars_body/sizeof *mars_body:sizeof kSyltBody/sizeof *kSyltBody;
+  for (int i = 0; i < lines; i++)
+    brief_put(dst, 4 + i, 4, body[i], 0x690u, 0x6C0u);
   fprintf(stderr, "[sylt] briefing tilemap written to $7E8000");
   fputc('\n', stderr);
 }
@@ -11914,6 +11985,11 @@ int main(int argc, char **argv) {
       mouse_city_hit=inside && !mouse_navigation_hit && s_mouse_dialog==SC_MOUSE_DIALOG_NONE && s_custom_video.enabled &&
           ScRendererCityPoint(&s_custom_renderer,g_ram,mouse_target_x,mouse_target_y,
               &mouse_city_x,&mouse_city_y);
+      bool mars_hud_hit=inside && s_custom_video.enabled &&
+          ScRendererMarsHudHit(&s_custom_renderer,mouse_target_x+pointer_view.core_x,mouse_target_y+pointer_view.core_y);
+      if(mars_hud_hit && !s_build_active && !s_clip_drag) {
+        mouse_raw_left=false;mouse_buttons&=~SDL_BUTTON(SDL_BUTTON_LEFT);
+      }
       int view_x,view_y;
       bool mouse_view_hit=inside && s_custom_video.enabled && s_mouse_dialog==SC_MOUSE_DIALOG_NONE &&
           ScRendererViewPoint(&s_custom_renderer,g_ram,mouse_target_x,mouse_target_y,&view_x,&view_y);
@@ -11979,6 +12055,10 @@ int main(int argc, char **argv) {
               s_custom_renderer.pointer_active=true;s_custom_renderer.pointer_hud=true;
               s_custom_renderer.pointer_x=gx;s_custom_renderer.pointer_y=gy;
             }
+          }
+          if(mars_hud_hit && !right) {
+            s_custom_renderer.pointer_active=true;
+            s_custom_renderer.pointer_x=mouse_target_x;s_custom_renderer.pointer_y=mouse_target_y;
           }
           mouse_target_valid = true;
           s_mouse_dir = 0;

@@ -136,6 +136,30 @@ uint32_t ScLandPreviewColor(unsigned type,unsigned tile,uint32_t native,
     r=(r>255?255:r)*brightness/15;g=(g>255?255:g)*brightness/15;b=(b>255?255:b)*brightness/15;
     return 0xff000000u|(r<<16)|(g<<8)|b;
 }
+static LandPalette terraform_green(unsigned month) {
+    LandPalette p=land_palette(SC_LAND_AMAZON,month);
+    p.ground=(uint16_t)(14|(22<<5)|(9<<10));
+    p.grain=(uint16_t)(18|(25<<5)|(12<<10));
+    p.bank=(uint16_t)(10|(16<<5)|(6<<10));
+    p.edge=(uint16_t)(22|(28<<5)|(16<<10));
+    return p;
+}
+uint32_t ScLandTerraformPreviewColor(unsigned progress,unsigned tile,uint32_t native,
+        unsigned brightness,unsigned month) {
+    if(progress>=1000)return native;
+    uint32_t mars=ScLandPreviewColor(SC_LAND_MARS,tile,native,brightness,month);
+    if(!progress)return mars;
+    LandPalette p=terraform_green(month);
+    uint16_t c=tile>0 && tile<20?p.fluid:tile>=20?p.leaves:p.ground;
+    uint32_t green=0xff000000u;
+    for(unsigned channel=0;channel<3;++channel)
+        green|=(((c>>(channel*5))&31)*255*brightness/(31*15))<<((2-channel)*8);
+    uint32_t a=progress<=600?mars:green,b=progress<=600?green:native,out=0xff000000u;
+    unsigned part=progress<=600?progress*1000/600:(progress-600)*1000/400;
+    for(unsigned shift=0;shift<24;shift+=8)
+        out|=((((a>>shift)&255)*(1000-part)+((b>>shift)&255)*part+500)/1000)<<shift;
+    return out;
+}
 /* Use actual terrain roles, leaving unrelated roofs/walls/metal colors native. */
 static uint16_t land_color(const LandPalette *p,unsigned index,uint16_t native) {
     switch(index) {
@@ -318,8 +342,14 @@ static bool reeds_apply(ScLandGraphics *s,unsigned type,bool active,unsigned bas
     }
     return changed;
 }
-bool ScLandGraphicsApply(ScLandGraphics *s,unsigned type,unsigned month,bool active,
-        unsigned base,uint16_t *vram,uint16_t *cgram) {
+static uint16_t terraform_mix(uint16_t a,uint16_t b,unsigned part) {
+    unsigned out=0;
+    for(unsigned shift=0;shift<15;shift+=5)
+        out|=((((a>>shift)&31)*(1000-part)+((b>>shift)&31)*part+500)/1000)<<shift;
+    return (uint16_t)out;
+}
+static bool graphics_apply(ScLandGraphics *s,unsigned type,unsigned month,bool active,
+        unsigned base,uint16_t *vram,uint16_t *cgram,unsigned progress) {
     if(type>=SC_LAND_TYPES)type=0;
     bool changed=relief_apply(s,type,active,base,vram);
     /* Restore either water skin before the other captures its native frame. */
@@ -343,9 +373,26 @@ bool ScLandGraphicsApply(ScLandGraphics *s,unsigned type,unsigned month,bool act
         unsigned at=i<16?16+i:112+i-16;
         if(fresh || cgram[at]!=s->shown_palette[i])s->palette[i]=cgram[at];
         uint16_t result=land_color(&p,i,s->palette[i]);
+        if(progress && progress<1000) {
+            LandPalette green=terraform_green(month);
+            /* Living soil rather than a scaled Mars tint; return every native
+             * role exactly to its cartridge color at the final endpoint. */
+            uint16_t mid=land_color(&green,i,s->palette[i]);
+            result=progress<=600?terraform_mix(result,mid,progress*1000/600):
+                terraform_mix(mid,s->palette[i],(progress-600)*1000/400);
+        }
         changed|=cgram[at]!=result;cgram[at]=s->shown_palette[i]=result;
     }
     return changed;
+}
+bool ScLandGraphicsApply(ScLandGraphics *s,unsigned type,unsigned month,bool active,
+        unsigned base,uint16_t *vram,uint16_t *cgram) {
+    return graphics_apply(s,type,month,active,base,vram,cgram,0);
+}
+bool ScLandGraphicsTerraform(ScLandGraphics *s,unsigned progress,unsigned month,bool active,
+        unsigned base,uint16_t *vram,uint16_t *cgram) {
+    if(progress>=1000)return graphics_apply(s,SC_LAND_NATIVE,month,active,base,vram,cgram,0);
+    return graphics_apply(s,SC_LAND_MARS,month,active,base,vram,cgram,progress);
 }
 
 static const unsigned stadium_chars[SC_STADIUM_CHARS]={

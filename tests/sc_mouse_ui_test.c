@@ -131,12 +131,14 @@ int main(void) {
   put(0x14,11); put(0x42,0); put(0x16,0);
   assert(point(100,130) && word(0x52)==1 && word(0x54)==1 && word(0x40)==4);
   assert(!point(82,80));
-  put(0x52,2); assert(!ScMouseUiScenarioScroll(r,1,true)); /* locked */
+  put(0x52,2); assert(ScMouseUiScenarioScroll(r,1,true)); /* Mars skips locked cards */
+  assert(word(0x40)==9 && word(0x52)==4 && word(0x54)==1);
+  assert(ScMouseUiScenarioScroll(r,-1,true) && word(0x52)==2);
   put(0x42,0x8000); assert(ScMouseUiScenarioScroll(r,1,true));
   assert(word(0x40)==7 && word(0x22)==80);
-  assert(ScMouseUiScenarioScroll(r,1,true)); assert(word(0x40)==8 && word(0x54)==0);
+  assert(ScMouseUiScenarioScroll(r,1,true)); assert(word(0x40)==9 && word(0x54)==1);
   put(0x16,160); assert(point(180,50) && word(0x40)==8);
-  assert(!point(180,130)); /* Sylt has no second row */
+  assert(point(180,130) && word(0x40)==9); /* Mars shares the fifth column */
   put(0x14,17); put(0x44,2);
   assert(!point(100,140)); assert(point(100,170) && word(0x421)==1);
   put(0x14,0x8000); assert(!ScMouseUiPoint(r,100,100,true,true).handled);

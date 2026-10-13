@@ -378,6 +378,28 @@ int main(void) {
     ScLandStadiumApply(&stadium,SC_LAND_MARS,true,0,vram);
     ScLandStadiumApply(&stadium,0,false,0,vram);
     assert(!memcmp(vram,original,sizeof original));
-    puts("PASS: all-size lone cacti and lunar rocks, Swamp water reeds, seasonal relief art, native restoration, preview fades and stadium-only domes");
+    /* Mars progress keeps all native roof/steel/UI colors, becomes green,
+     * restores exact current native palette/CHR, and survives regression. */
+    memcpy(original_palette,palette,sizeof palette);
+    for(unsigned month=1;month<=12;++month) {
+        uint32_t native=0xffc6b58c,green=ScLandTerraformPreviewColor(600,0,native,15,month);
+        assert(((green>>8)&255)>((green>>16)&255));
+        assert(ScLandTerraformPreviewColor(0,0,native,15,month)==ScLandPreviewColor(SC_LAND_MARS,0,native,15,month));
+        assert(ScLandTerraformPreviewColor(1000,0,native,15,month)==native);
+        assert(ScLandGraphicsTerraform(&graphics,0,month,true,0,vram,palette));
+        uint16_t red=palette[23];
+        ScLandGraphicsTerraform(&graphics,600,month,true,0,vram,palette);
+        assert(((palette[23]>>5)&31)>(palette[23]&31));
+        assert(palette[23]!=red);
+        for(unsigned at=0;at<256;++at)
+            if(at!=19 && at!=20 && at!=23 && at!=26 && at!=27 && at!=28 && at!=29 && at!=30 && at!=31 &&
+               at!=114 && at!=124 && at!=125 && at!=126 && at!=127)assert(palette[at]==original_palette[at]);
+        ScLandGraphicsTerraform(&graphics,999,month,true,0,vram,palette);
+        ScLandGraphicsTerraform(&graphics,1000,month,true,0,vram,palette);
+        assert(!memcmp(palette,original_palette,sizeof palette));
+        assert(!memcmp(vram,original,sizeof vram));
+        assert(!ScLandGraphicsTerraform(&graphics,1000,month,true,0,vram,palette));
+    }
+    puts("PASS: seasonal terrain/foliage, water skins, stadium domes, and reversible Mars-to-green-to-native terraforming palettes");
     return 0;
 }

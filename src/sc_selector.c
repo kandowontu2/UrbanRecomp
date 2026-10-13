@@ -105,7 +105,7 @@ static void put(ScSelSprite *s, int x, int y, const Rec *r, bool host) {
 }
 
 int ScSelector_Sprites(ScSelSprite out[SC_SEL_MAX_SPRITES], int scroll,
-                       unsigned won, bool sylt, ScSelRomRead rd, void *ctx) {
+                       unsigned won, bool sylt, bool mars, ScSelRomRead rd, void *ctx) {
   Rec pins[8], mark[8];
   const int np = record(kPinRecord, pins, rd, ctx);
   const int nm = record(kMarkRecord, mark, rd, ctx);
@@ -120,10 +120,10 @@ int ScSelector_Sprites(ScSelSprite out[SC_SEL_MAX_SPRITES], int scroll,
     for (int i = 0; i < nm; i++)
       put(&out[n++], bx + mark[i].dx, by + mark[i].dy, &mark[i], false);
   }
-  if (!sylt || np < 1) return n;
+  if (np < 1) return n;
   /* Pin: Las Vegas's (entry 0) one column on, in Rio's colour -- the entry
    * at +40/+28, which is Rio's card. */
-  for (int i = 0; i < np; i++) {
+  for (int i = 0; sylt && i < np; i++) {
     if (pins[i].dx != 40 || pins[i].dy != 28) continue;
     Rec pin = pins[i];
     pin.large = pins[0].large;
@@ -131,11 +131,20 @@ int ScSelector_Sprites(ScSelSprite out[SC_SEL_MAX_SPRITES], int scroll,
         kPinBaseY + pins[0].dy, &pin, true);
     break;
   }
-  if (won & 0x100u) {
+  if (sylt && (won & 0x100u)) {
     const int bx = word(rd, ctx, kMarkX + kLasVegas * 2u) - scroll + kColumnStep;
     const int by = word(rd, ctx, kMarkY + kLasVegas * 2u);
     for (int i = 0; i < nm; i++)
       put(&out[n++], bx + mark[i].dx, by + mark[i].dy, &mark[i], true);
+  }
+  if(!mars)return n;
+  Rec mars_pin=pins[0];
+  put(&out[n++],kPinBaseX-scroll+pins[0].dx+kColumnStep,
+      kPinBaseY+pins[0].dy+88,&mars_pin,true);
+  if(won & 0x200u) {
+    int bx=word(rd,ctx,kMarkX+kLasVegas*2u)-scroll+kColumnStep;
+    int by=word(rd,ctx,kMarkY+kLasVegas*2u)+88;
+    for(int i=0;i<nm;++i)put(&out[n++],bx+mark[i].dx,by+mark[i].dy,&mark[i],true);
   }
   return n;
 }

@@ -1808,12 +1808,26 @@ bool ScRendererWindowToGuest(const ScRenderer *r,ScVideoRect d,
         (cx<0 || cx>=256 || cy<0 || cy>=224)) return false;
     *gx=cx; *gy=cy; return true;
 }
+static ScVideoRect mars_status_rect(const ScRenderer *r) {
+    bool compact=r->view.width<360;unsigned count=compact?7:4;
+    int left=compact?60:r->view.width-248,right=left+(compact?192:244);
+    if(right>r->view.width-4)right=r->view.width-4;
+    int top=r->view.height-(int)count*9-6;
+    return (ScVideoRect){left,top,right-left,r->view.height-3-top};
+}
+bool ScRendererMarsHudHit(const ScRenderer *r,int x,int y) {
+    if(!r || !r->world || !r->world->mars_status || !r->city_input ||
+       r->advisor_frame || r->map_hold || !r->clipboard_font_valid)return false;
+    ScVideoRect rect=mars_status_rect(r);
+    return in_rect(x,y,rect.x,rect.y,rect.w,rect.h);
+}
 static bool land_point(const ScRenderer *r,const uint8_t *ram,
                        int x,int y,int *wx,int *wy,bool view) {
     if (!(view?r->land_view_frame:r->city_input) || r->advisor_frame || r->map_hold) return false;
     if (x+r->view.core_x<0 || x+r->view.core_x>=r->view.width ||
         y+r->view.core_y<0 || y+r->view.core_y>=r->view.height) return false;
     if (!view && u16(ram,0x1d7) && ((y>=0 && y<46) || in_rect(x,y,0,46,56,178))) return false;
+    if(!view && ScRendererMarsHudHit(r,x+r->view.core_x,y+r->view.core_y))return false;
     int px=r->scroll_x+r->scroll_adjust_x+zoom_local(r,x,false),py=r->scroll_y+r->scroll_adjust_y+zoom_local(r,y,true);
     int width=r->world && r->world->active?ScWorldWidth(r->world):120;
     int height=r->world && r->world->active?ScWorldHeight(r->world):100;
@@ -1880,6 +1894,9 @@ static void fresh_city_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) 
     bool clear_warning=false,warning_cell=false,edited=false;
     for (int x=0;x<256;++x) {
         bool land=!u16(ram,0x1d7) || (y>=46 && x>=56);
+        /* Changed world cells under the fixed HUD must not replace its
+         * transparent/backdrop pixels with buildings from the city cache. */
+        if(!land)continue;
         if(cache_live && land) {
             int cell=(sx+x)/8;
             if(cell!=staged_cell) {
@@ -2217,6 +2234,43 @@ void ScRendererClipboardRow(const ScRenderer *r,const Ppu *p,ScViewport v,
         }
     }
 }
+static void mars_status(ScRenderer *r,const Ppu *p) {
+    if(!r->world || !r->world->mars_status || !r->city_input || r->map_hold ||
+       !r->clipboard_font_valid || PPU_forcedBlank(p))return;
+    const ScMarsStats *s=&r->mars_stats;
+    char lines[7][40];unsigned count=4;
+    snprintf(lines[0],40,"MARS %u%% %uM LEFT CLEAN %u/%u",r->world->mars_progress/10,s->months_left,r->world->mars_clean_months,SC_MARS_CLEAN_MONTHS);
+    if(r->world->mars_status==2)snprintf(lines[0],40,"TERRAFORMING COMPLETE!");
+    if(r->world->mars_status==3)snprintf(lines[0],40,"FIVE-YEAR DEADLINE OVER");
+    snprintf(lines[1],40,"PARKS %u/%u POL %u/%u",s->parks,SC_MARS_PARKS,s->pollution,SC_MARS_POLLUTION);
+    unsigned hot=s->pollution_cells?(s->hot_cells*1000+s->pollution_cells-1)/s->pollution_cells:0;
+    snprintf(lines[2],40,"HOT %u.%u%%/%u%% PWR %u%%/%u%%",hot/10,hot%10,SC_MARS_HOT_PERCENT,s->zones?s->powered*100/s->zones:0,SC_MARS_POWER_PERCENT);
+    snprintf(lines[3],40,"PEOPLE %llu/%u",(unsigned long long)s->population,SC_MARS_POPULATION);
+    bool compact=r->view.width<360;
+    if(compact) {
+        count=7;
+        snprintf(lines[0],40,"MARS %u%% %uM LEFT",r->world->mars_progress/10,s->months_left);
+        if(r->world->mars_status==2)snprintf(lines[0],40,"TERRAFORMING COMPLETE!");
+        if(r->world->mars_status==3)snprintf(lines[0],40,"FIVE-YEAR DEADLINE OVER");
+        snprintf(lines[1],40,"PARKS %u/%u",s->parks,SC_MARS_PARKS);
+        snprintf(lines[2],40,"POLLUTION %u/%u",s->pollution,SC_MARS_POLLUTION);
+        snprintf(lines[3],40,"HOT %u.%u%%/%u%%",hot/10,hot%10,SC_MARS_HOT_PERCENT);
+        snprintf(lines[4],40,"POWER %u%%/%u%%",s->zones?s->powered*100/s->zones:0,SC_MARS_POWER_PERCENT);
+        snprintf(lines[5],40,"PEOPLE %llu/%u",(unsigned long long)s->population,SC_MARS_POPULATION);
+        snprintf(lines[6],40,"CLEAN MONTHS %u/%u",r->world->mars_clean_months,SC_MARS_CLEAN_MONTHS);
+    }
+    /* Screen pixels, never terrain pixels: status stays sharp at every zoom. */
+    ScVideoRect rect=mars_status_rect(r);
+    int left=rect.x,top=rect.y,right=rect.x+rect.w;
+    uint32_t ink=0xff000000|(uint32_t)p->brightnessMult[31]<<16|
+        (uint32_t)p->brightnessMult[27]<<8|p->brightnessMult[20];
+    for(int y=top;y<r->view.height-3;++y){
+        uint32_t *row=r->pixels+(size_t)y*r->view.width;
+        for(int x=left;x<right;++x)row[x]=hud_ground(p);
+        if(y==top || y==r->view.height-4)for(int x=left;x<right;++x)row[x]=ink;
+        for(unsigned n=0;n<count;++n)clipboard_text(r,p,r->view,lines[n],left+4,top+2+(int)n*9,y,row,ink);
+    }
+}
 ScVideoRect ScRendererMinimapView(const ScRenderer *r,const uint8_t *ram) {
     bool large=r->world && r->world->active;
     int width=(large?ScWorldWidth(r->world):120)*8,height=(large?ScWorldHeight(r->world):100)*8;
@@ -2328,7 +2382,9 @@ static void city_hud_row(ScRenderer *r,const Ppu *p,const uint8_t *ram,int y) {
             unsigned tile=r->world->active?ScWorldCell(r->world,wx,wy):u16(ram,0x10200+(wy*120+wx)*2);
             if((tile&0x3ff)<38) {
                 int at=core+200+shift+x;
-                out[at]=ScLandPreviewColor(r->world->land_type,tile&0x3ff,out[at],PPU_brightness(p),u16(ram,0xb55));
+                out[at]=r->world->mars_status?
+                    ScLandTerraformPreviewColor(r->world->mars_progress,tile&0x3ff,out[at],PPU_brightness(p),u16(ram,0xb55)):
+                    ScLandPreviewColor(r->world->land_type,tile&0x3ff,out[at],PPU_brightness(p),u16(ram,0xb55));
             }
         }
     }
@@ -2612,7 +2668,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         r->land_view_frame=city_live(r,p,ram) && u16(ram,0xd7)==2 && u16(ram,0x1df)==6;
         bool hud=city_live(r,p,ram) && !r->advisor_frame && !r->land_view_frame && u16(ram,0x1d7) &&
             (p->screenEnabled[0]&3)==3 && !u16(ram,0x379);
-        r->split_hud=hud && r->view.width>256;
+        r->split_hud=hud && (r->view.width>256 || (r->world && r->world->mars_status));
         r->pan_frame=city_live(r,p,ram) && !r->advisor_frame && !u16(ram,0x379) &&
             (p->screenEnabled[0]&16) && (p->oam[81]&255)==0x66 && (p->oam[80]>>8)==46 &&
             sprite_x(p,40)<256; /* high X bit parks the hidden minimap */
@@ -2642,7 +2698,7 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
             int scroll=ScSelector_Scroll(p,rom_read,r);
             if (scroll>=0)
                 r->selector_count=ScSelector_Sprites(r->selector,scroll,
-                    ram[0x42]|((unsigned)ram[0x43]<<8),r->sylt,rom_read,r);
+                    ram[0x42]|((unsigned)ram[0x43]<<8),r->sylt,r->rom_is_us,rom_read,r);
         }
         r->sign_count=ScTitleSign_Sprites(r->sign,SC_SIGN_MAX_SPRITES,rom_read,r);
         uint64_t measured=MEASURE_BEGIN(r);
@@ -2715,6 +2771,18 @@ void ScRendererLine(ScRenderer *r,const Ppu *p,const uint8_t *ram,int line,const
         for(int y=SC_DISASTER_BUTTON_Y;y<SC_DISASTER_BUTTON_Y+SC_DISASTER_BUTTON_H+4;++y)
             ScRendererDisasterRow(r,p,r->view,ram,y,r->pixels+(size_t)(y+r->view.core_y)*r->view.width);
         city_pointer(r,p,ram);
+        /* Keep construction outlines behind the passive status panel; mouse
+         * hover shows the authentic hand and never builds an obscured tile. */
+        mars_status(r,p);
+        if(r->pointer_active && !r->pointer_hidden &&
+           ScRendererMarsHudHit(r,r->view.core_x+r->pointer_x,r->view.core_y+r->pointer_y)) {
+            int left=r->view.core_x+r->pointer_x,top=r->view.core_y+r->pointer_y;
+            for(int y=0;y<16;++y)for(int x=0;x<16;++x) {
+                uint32_t ink=ScRendererCityHandPixel(p,x,y);
+                if(ink && left+x>=0 && left+x<r->view.width && top+y>=0 && top+y<r->view.height)
+                    r->pixels[(size_t)(top+y)*r->view.width+left+x]=ink;
+            }
+        }
         /* The added disaster row covers the guest's old cursor pixels. Draw
          * its authentic hand last for both free mouse and native pad movement. */
         if(r->rom_is_us && ScScenarioMenuLive(ram) && !PPU_forcedBlank(p) && (p->screenEnabled[0]&16)) {

@@ -11,6 +11,14 @@ enhancements. Windows packages are available from
 
 ## Implemented
 
+Terraforming Mars is available on the scenario selector's fifth column, below
+Sylt's position, without unlocking the other scenarios. Scroll right with the
+keyboard/controller or by moving the mouse to the selector's right edge. Turn
+a coal-powered industrial colony into an Earth-like environment within five
+years. Maintain 2,400 parks, 50,000 people, pollution at most 8, 95% powered
+zones and at most 1% pollution hot spots for twelve consecutive months.
+See [the scenario rules and validation](TERRAFORMING_MARS.md).
+
 The map-selection screen's GENERATION arrows select Native (default),
 Procedural, Islands, Lakes, Rivers, Fractal, Continent, Delta or Atolls. Move Up from NEXT to the
 selector, then use Left/Right to change the type; Down returns to NEXT.

@@ -31,11 +31,12 @@ cities. Music runs on its own thread, with the restored 19-track set and
 the wider city view. See the [changelog](CHANGELOG.md), [credits](CREDITS.md) and
 [performance evidence and remaining limits](docs/GPU_PERFORMANCE.md).
 
-**UrbanRecomp Enhanced 1.0.3 includes fresh builds for all five platforms.** Get the
+**UrbanRecomp Enhanced 1.0.4 includes fresh builds for all five platforms.** Get the
 [Windows x64 EXE, universal macOS app, Linux x86-64 package, signed Android APK
-or iPhone/iPad sideloading IPA](https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.3).
-All five packages include UFO visibility and warning fixes, Swamp water grass,
-detailed Venus plants, new disaster buttons, Moon ice/rocks and Desert cacti.
+or iPhone/iPad sideloading IPA](https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.4).
+All five packages include Terraforming Mars, a five-year cleanup scenario
+with stricter park, pollution, population and power goals. See the
+[scenario guide](docs/TERRAFORMING_MARS.md).
 Android supports ARM64/x86-64; the iOS IPA requires user signing.
 See [mobile controls and installation](docs/MOBILE.md).
 The Windows package is one portable EXE; run it and select your own clean US ROM.

@@ -15,7 +15,7 @@ int main(void) {
         w->colossal=size>=4;w->mega=size>=5;w->land_type=type;w->development_speed=20;
         w->center_valid=true;w->center_x=44;w->center_y=22;
         w->calendar_year=120345;
-        assert(ScWorldEncode(w,encoded,bytes) && encoded[7]==8);
+        assert(ScWorldEncode(w,encoded,bytes) && encoded[7]==10);
         assert(ScWorldDecode(copy,encoded,bytes));
         assert(copy->land_type==type && copy->active==w->active && copy->center_valid);
         assert(copy->center_x==44 && copy->center_y==22 && copy->development_speed==20 && copy->calendar_year==120345);

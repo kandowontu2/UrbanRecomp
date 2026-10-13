@@ -17,7 +17,7 @@ typedef struct {
   bool host;         /* Sylt's: the game never puts it in OAM */
 } ScSelSprite;
 
-enum { SC_SEL_MAX_SPRITES = 8 + 8 * 8 + 1 + 8 };
+enum { SC_SEL_MAX_SPRITES = 8 + 8 * 8 + 2 * (1 + 8) };
 
 /* The selector shows on $0A (fade-in), $0B and $0C (fade-out to the fax). */
 static inline bool ScSelector_OnScreen(unsigned screen) {
@@ -36,8 +36,9 @@ int ScSelector_Scroll(const Ppu *ppu, ScSelRomRead rd, void *ctx);
 
 /* Every pin and win-mark sprite at that scroll: the game's -- the eight pins,
  * and a mark for each of bits 0-7 of `won` -- then, with `sylt`, the ninth
- * card's pin and, for bit 8, its mark. Returns the count. */
+ * card's pin and, for bit 8, its mark. `mars` adds the lower fifth-column
+ * card and its bit-9 mark only for hosts supporting that scenario. */
 int ScSelector_Sprites(ScSelSprite out[SC_SEL_MAX_SPRITES], int scroll,
-                       unsigned won, bool sylt, ScSelRomRead rd, void *ctx);
+                       unsigned won, bool sylt, bool mars, ScSelRomRead rd, void *ctx);
 
 #endif

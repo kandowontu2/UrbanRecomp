@@ -29,6 +29,11 @@ typedef struct ScWorld {
     uint8_t development_speed; /* city default; zero in legacy states means 1x */
     uint8_t land_type; /* city terrain graphics; legacy records use Native */
     uint32_t calendar_year; /* 0 imports the native year; otherwise 1..999999 */
+    /* Host scenario 9, fixed 2050..2055. v10 expands the clean-month streak. */
+    uint16_t mars_progress; /* 0..1000; Native palette only after success */
+    uint8_t mars_status; /* 0 ordinary city, 1 active, 2 won, 3 lost */
+    uint8_t mars_sample,mars_clean_months,mars_notice;
+    bool mars_announcing;
     bool scan_spread; /* resumable, bijective city scan across distant districts */
     uint16_t scan_x, scan_y;
     uint16_t center_x,center_y;

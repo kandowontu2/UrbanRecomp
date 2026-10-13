@@ -59,12 +59,14 @@ ScMouseUiResult ScMouseUiDialogPoint(ScMouseDialog dialog, uint8_t *r,
 }
 bool ScMouseUiScenarioScroll(uint8_t *r, int direction, bool ninth) {
   if (word(r, 0x14) != 11) return false;
-  int maxcol = (word(r, 0x42) & 0x8000) ? (ninth ? 4 : 3) : 2;
+  int maxcol = 4;
   int col = (int)word(r, 0x52) + (direction < 0 ? -1 : 1);
+  bool unlocked=word(r,0x42)&0x8000;
+  if(col==3 && !unlocked)col+=direction<0?-1:1;
   if (col < 0 || col > maxcol) return false;
-  int row = col == 4 ? 0 : (word(r, 0x54) & 1);
+  int row = col == 4 && (!ninth || !unlocked) ? 1 : (word(r, 0x54) & 1);
   put(r, 0x52, col); put(r, 0x54, row);
-  put(r, 0x40, col == 4 ? 8 : col == 3 ? 6 + row : row * 3 + col);
+  put(r, 0x40, col == 4 ? 8+row : col == 3 ? 6 + row : row * 3 + col);
   put(r, 0x22, col >= 3 ? (col - 2) * 80 : col == 0 ? 0 : word(r, 0x22));
   return true;
 }
@@ -190,15 +192,17 @@ ScMouseUiResult ScMouseUiPoint(uint8_t *r, int x, int y,
     }
     break;
   case 11: { /* Scenario cards: 03:df10/df00, including the host's Sylt. */
-    int maxcol = (word(r, 0x42) & 0x8000) ? (ninth ? 4 : 3) : 2;
+    int maxcol = 4;
     for (int col = 0; col <= maxcol; ++col) {
-      for (int row = 0; row < (col == 4 ? 1 : 2); ++row) {
+      if(col==3 && !(word(r,0x42)&0x8000))continue;
+      for (int row = 0; row < 2; ++row) {
+        if(col==4 && row==0 && (!ninth || !(word(r,0x42)&0x8000)))continue;
         int bx = 16 + col * 80 - (int)word(r, 0x16);
         if (!box(x, y, bx, 39 + row * 88, 64, 72)) continue;
         result.hit = true;
         if (select) {
           put(r, 0x52, col); put(r, 0x54, row);
-          put(r, 0x40, col == 4 ? 8 : col == 3 ? 6 + row : row * 3 + col);
+          put(r, 0x40, col == 4 ? 8+row : col == 3 ? 6 + row : row * 3 + col);
           put(r, 0x22, col >= 3 ? (col - 2) * 80 : col == 0 ? 0 : word(r, 0x22));
         }
       }

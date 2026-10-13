@@ -74,7 +74,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/gen)
 endif()
 
 set(SC_APP_SOURCES
-    src/main.c src/sc_scenario_event.c src/sc_debug_gift.c
+    src/main.c src/sc_scenario_event.c src/sc_mars_scenario.c src/sc_debug_gift.c
     src/sc_macos.c
     src/sc_world.c
     src/sc_world_guest.c src/sc_postpass.c src/sc_sweep.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c src/sc_infrastructure.c
@@ -262,8 +262,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set_target_properties(UrbanRecomp PROPERTIES MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/platform/ios/Info.plist.in"
         MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.kandowontu2.UrbanRecomp"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.0.3"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.3"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.0.4"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.4"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
         XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO")
@@ -548,7 +548,7 @@ endif()
 # useful when the default one is configured without src/gen.
 if(SC_GEN_SOURCES)
     add_executable(UrbanRecompAOT EXCLUDE_FROM_ALL
-        src/main.c src/sc_scenario_event.c src/sc_debug_gift.c
+        src/main.c src/sc_scenario_event.c src/sc_mars_scenario.c src/sc_debug_gift.c
         src/sc_world.c
         src/sc_world_guest.c src/sc_postpass.c src/sc_sweep.c src/sc_power_traversal.c src/sc_zoning.c src/sc_smoothing.c src/sc_service.c src/sc_density.c src/sc_tile_lookup.c src/sc_land.c src/sc_transport.c src/sc_infrastructure.c
         src/sc_development.c
@@ -720,6 +720,15 @@ add_executable(UrbanRecompCityGrowthTest EXCLUDE_FROM_ALL tests/sc_city_growth_t
 target_include_directories(UrbanRecompCityGrowthTest PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${SNESRECOMP_ROOT}/runner/src)
 sc_configure_native_program(UrbanRecompCityGrowthTest)
+add_executable(UrbanRecompMarsScenarioTest EXCLUDE_FROM_ALL tests/sc_mars_scenario_test.c
+    src/sc_mars_scenario.c src/sc_land_type.c ${SC_CITY_GROWTH_SOURCES})
+target_include_directories(UrbanRecompMarsScenarioTest PRIVATE src ${SNESRECOMP_ROOT}/runner/src)
+sc_configure_native_program(UrbanRecompMarsScenarioTest)
+if(MSVC)
+    target_compile_options(UrbanRecompMarsScenarioTest PRIVATE /UNDEBUG)
+else()
+    target_compile_options(UrbanRecompMarsScenarioTest PRIVATE -UNDEBUG)
+endif()
 if(MSVC)
     target_compile_options(UrbanRecompCityGrowthTest PRIVATE /UNDEBUG)
 else()

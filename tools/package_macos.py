@@ -57,7 +57,7 @@ for n in range(1,22):
     track_count+=1
 for name in ('LICENSE','CREDITS.md','CHANGELOG.md','THIRD_PARTY_NOTICES.md'):
     shutil.copy2(root/name,resources/name)
-for name in ('PC_ENHANCEMENTS.md','TEST_CITY_LAYOUT.md','PLACEMENT_EFFECTS.md','GPU_PERFORMANCE.md','NATIVE_EXECUTION.md','MACOS_BUILD.md'):
+for name in ('PC_ENHANCEMENTS.md','TEST_CITY_LAYOUT.md','PLACEMENT_EFFECTS.md','TERRAFORMING_MARS.md','GPU_PERFORMANCE.md','NATIVE_EXECUTION.md','MACOS_BUILD.md'):
     shutil.copy2(root/'docs'/name,resources/name)
 licenses=resources/'licenses';licenses.mkdir()
 for path in (root/'licenses').glob('*.txt'):shutil.copy2(path,licenses/path.name)

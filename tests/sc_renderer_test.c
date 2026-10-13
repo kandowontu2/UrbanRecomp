@@ -147,7 +147,26 @@ static void free_camera_test(void) {
     free(r);free(world);
     puts("PASS: fractional host camera, no idle drift, preserved zoom/native camera and full 1920x1600/3840x3200 bounds");
 }
+static void mars_hud_test(void) {
+    ScRenderer *r=calloc(1,sizeof *r);ScWorld *w=calloc(1,sizeof *w);
+    uint8_t ram[0x20000]={0};assert(r && w);word(ram,0x1d7,65535);
+    r->world=w;w->mars_status=1;r->city_input=r->clipboard_font_valid=true;
+    r->view=(ScViewport){256,224,0,0,1,0};r->map_zoom=1;
+    int x,y;
+    assert(ScRendererMarsHudHit(r,100,180));
+    assert(!ScRendererCityPoint(r,ram,100,180,&x,&y));
+    assert(ScRendererCityPoint(r,ram,100,120,&x,&y));
+    assert(!ScRendererMarsHudHit(r,30,180)); /* tool price remains accessible */
+    r->view.width=448;r->map_zoom=.25;r->zoom_frame=true;
+    assert(ScRendererMarsHudHit(r,210,190));
+    assert(!ScRendererCityPoint(r,ram,210,190,&x,&y));
+    assert(!ScRendererMarsHudHit(r,100,190));
+    r->advisor_frame=true;assert(!ScRendererMarsHudHit(r,210,190));
+    r->advisor_frame=false;w->mars_status=0;assert(!ScRendererMarsHudHit(r,210,190));
+    free(w);free(r);
+}
 int main(void) {
+    mars_hud_test();
     disaster_buttons_test();
     free_camera_test();
     Ppu *p=calloc(1,sizeof(*p)), *before=malloc(sizeof(*p));

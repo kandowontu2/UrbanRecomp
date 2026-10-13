@@ -94,3 +94,7 @@ Venus's alien natural vegetation, Desert's three cactus silhouettes, lunar
 rock shading, Swamp's water grass/reeds and Moon's cracked-ice texture are
 also original host-drawn
 pixel art, using the same terrain character format.
+
+Terraforming Mars is an original Enhanced scenario, city blueprint and
+host-drawn scenario-card illustration. It uses the player-loaded native
+fonts, selector palette, adviser presentation and existing credited music.

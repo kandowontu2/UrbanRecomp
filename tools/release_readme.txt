@@ -1,11 +1,13 @@
-URBANRECOMP ENHANCED 1.0.3
+URBANRECOMP ENHANCED 1.0.4
 ==========================================================
 
-Enhanced 1.0.3 fixes UFO graphics and Dr. Wright warnings, adds Swamp water
-grass and redraws Venus plants with finer detail. It also includes the approved
-disaster icons, Moon ice/rocks and Desert cacti.
+Enhanced 1.0.4 adds Terraforming Mars: clean up a polluted coal-powered
+colony in five years. Plant 2,400 park tiles, retain 50,000 people, lower
+pollution to 8 or less, limit hot spots to 1% and power 95% of zones.
+Hold all goals for twelve months to restore Native terrain. The bundled
+TERRAFORMING_MARS.md explains the rules and validation.
 Enhanced 1.0 is versioned separately from the upstream UrbanRecomp engine.
-Downloads: https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.3
+Downloads: https://github.com/kandowontu2/UrbanRecomp/releases/tag/enhanced-v1.0.4
 
 Run the single portable EXE and choose your own clean US SimCity SNES ROM.
 The runtime, assets, documentation, credits and restored soundtrack are

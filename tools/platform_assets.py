@@ -7,7 +7,7 @@ def stage_assets(root: Path, destination: Path, sdl: Path):
     destination.mkdir(parents=True,exist_ok=True)
     for name in ('LICENSE','CREDITS.md','CHANGELOG.md','THIRD_PARTY_NOTICES.md'):
         shutil.copy2(root/name,destination/name)
-    for name in ('MOBILE.md','PC_ENHANCEMENTS.md','TEST_CITY_LAYOUT.md','PLACEMENT_EFFECTS.md','GPU_PERFORMANCE.md','NATIVE_EXECUTION.md'):
+    for name in ('MOBILE.md','PC_ENHANCEMENTS.md','TEST_CITY_LAYOUT.md','PLACEMENT_EFFECTS.md','TERRAFORMING_MARS.md','GPU_PERFORMANCE.md','NATIVE_EXECUTION.md'):
         shutil.copy2(root/'docs'/name,destination/name)
     sylt=destination/'sylt_graphics';sylt.mkdir()
     for name in ('sylt_map.bin','sylt_card.bin','PROVENANCE.md'):shutil.copy2(root/'sylt_graphics'/name,sylt/name)

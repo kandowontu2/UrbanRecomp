@@ -16,6 +16,8 @@ enum {SC_LAND_SPRING,SC_LAND_SUMMER,SC_LAND_AUTUMN,SC_LAND_WINTER,SC_LAND_SEASON
 ScLandColors ScLandTypeColors(unsigned type,unsigned month);
 uint32_t ScLandPreviewColor(unsigned type,unsigned tile,uint32_t native,
     unsigned brightness,unsigned month);
+uint32_t ScLandTerraformPreviewColor(unsigned progress,unsigned tile,uint32_t native,
+    unsigned brightness,unsigned month);
 
 typedef struct {
     bool valid;
@@ -37,6 +39,10 @@ typedef struct {
  * retain their native pixels.
  * Restore native graphics/uploads when changing themes or leaving the city. */
 bool ScLandGraphicsApply(ScLandGraphics *state,unsigned type,unsigned month,bool active,
+    unsigned chr_base,uint16_t *vram,uint16_t *cgram);
+/* 0 Mars, 600 living green soil, 1000 exact current native seasonal palette.
+ * This is scenario progress, not a new land type or a permanent palette patch. */
+bool ScLandGraphicsTerraform(ScLandGraphics *state,unsigned progress,unsigned month,bool active,
     unsigned chr_base,uint16_t *vram,uint16_t *cgram);
 
 enum {SC_STADIUM_CHARS=33};

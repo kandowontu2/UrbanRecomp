@@ -1,5 +1,26 @@
 # Enhanced fork changelog
 
+## Enhanced 1.0.4 — 2026-10-12
+
+- Add Terraforming Mars, a fifth-column scenario available without completing
+  the stock scenarios. Begin in April 2050 with a powered 120x100 industrial
+  colony, 20 coal plants, developed factories and $60,000 for cleanup.
+- Terraform within five years: plant 2,400 park tiles, reduce average pollution
+  to 8 or less and hot spots to 1% of the map, retain 50,000 people and power
+  at least 95% of zones. Hold all goals for twelve consecutive monthly checks.
+- Gradually blend red Martian soil into living green land as parks and cleanup
+  improve. Successful terraforming restores the exact current Native palette
+  and foliage, including the minimap and ordinary stadium graphics.
+- Add a native scenario card and briefing, a fixed-size progress panel,
+  Dr. Wright success/failure messages and an independent completion mark.
+  Keep the briefing's line breaks within the original fax page.
+- Save the deadline, progress, clean streak and result with the city. Continue
+  reading existing world/city records from versions 2 through 9. Active Mars
+  saves from the easier rules restart qualification; completed wins remain.
+- Protect fixed HUD pixels from development redraws and preserve the fax font
+  while leaving the scenario selector. Keep the new progress panel clear of
+  tool prices and prevent mouse placement behind it.
+
 ## Enhanced 1.0.3 — 2026-10-11
 
 - Redraw Venus foliage with fine leaf highlights, curling branches, lobed pods

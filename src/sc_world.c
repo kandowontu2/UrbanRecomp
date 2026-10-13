@@ -1,5 +1,6 @@
 #include "sc_world.h"
 #include "sc_land_type.h"
+#include "sc_mars_scenario.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -183,8 +184,8 @@ static size_t encoded_size(unsigned version) {
     for(unsigned i=0;i<SC_WORLD_FIELDS;++i) n+=encoded_field_size(version,i);
     return n;
 }
-size_t ScWorldEncodedVersionSize(unsigned v) {return v>=2 && v<=8?encoded_size(v):0;}
-size_t ScWorldEncodedSize(void) { return encoded_size(8); }
+size_t ScWorldEncodedVersionSize(unsigned v) {return v>=2 && v<=10?encoded_size(v):0;}
+size_t ScWorldEncodedSize(void) { return encoded_size(10); }
 bool ScWorldAdvanceScan(ScWorld *w) {
     unsigned width=ScWorldWidth(w),height=ScWorldHeight(w);
     if(w->scan_spread) {
@@ -206,7 +207,10 @@ bool ScWorldAdvanceScan(ScWorld *w) {
 }
 bool ScWorldEncode(const ScWorld *w,uint8_t *p,size_t size) {
     if (size!=ScWorldEncodedSize() || w->calendar_year>SC_CALENDAR_YEAR_MAX || w->land_type>=SC_LAND_TYPES || (w->development_speed && !ScWorldDevelopmentSpeedValid(w->development_speed))) return false;
-    memset(p,0,88); memcpy(p,"SCWORLD",7); p[7]=8;
+    if(w->mars_status>3 || w->mars_progress>1000 || w->mars_sample>61 ||
+       w->mars_clean_months>SC_MARS_CLEAN_MONTHS || w->mars_notice>3 || (!w->mars_status &&
+       (w->mars_progress || w->mars_sample || w->mars_clean_months || w->mars_notice || w->mars_announcing)))return false;
+    memset(p,0,88); memcpy(p,"SCWORLD",7); p[7]=10;
     put(p+8,ScWorldWidth(w)); put(p+10,ScWorldHeight(w));
     p[12]=w->active; p[13]=w->mega?4:w->colossal?3:w->giant?2:w->huge?1:0; p[14]=w->test_city; p[15]=w->scan_spread | (w->development_speed<<1); put32(p+16,w->map_anchor);
     put32(p+20,(uint32_t)size); put32(p+24,SC_WORLD_FIELDS);
@@ -218,6 +222,9 @@ bool ScWorldEncode(const ScWorld *w,uint8_t *p,size_t size) {
     for(unsigned i=0;i<3;++i) put32(p+64+4*i,w->field_anchor[i]);
     put32(p+76,w->field_scan);
     put32(p+80,w->calendar_year);
+    put32(p+84,w->mars_status | ((uint32_t)w->mars_progress<<2) |
+        ((uint32_t)w->mars_sample<<12) | ((uint32_t)w->mars_clean_months<<19) |
+        ((uint32_t)w->mars_notice<<23) | ((uint32_t)w->mars_announcing<<25));
     memcpy(p+88,w->tiles,SC_WORLD_MAX_TILE_BYTES);
     size_t at=88+SC_WORLD_MAX_TILE_BYTES;
     for(unsigned i=0;i<SC_WORLD_FIELDS;++i) {
@@ -226,7 +233,7 @@ bool ScWorldEncode(const ScWorld *w,uint8_t *p,size_t size) {
     return true;
 }
 bool ScWorldDecode(ScWorld *w,const uint8_t *p,size_t size) {
-    if(size<48 || memcmp(p,"SCWORLD",7) || (p[7]<2 || p[7]>8)) return false;
+    if(size<48 || memcmp(p,"SCWORLD",7) || (p[7]<2 || p[7]>10)) return false;
     bool legacy=p[7]==2,huge=!legacy && p[13]!=0,giant=p[7]>=4 && p[13]>=2,colossal=p[7]>=5 && p[13]>=3,mega=p[7]>=6 && p[13]==4;
     unsigned width=mega?3840:colossal?1920:giant?960:huge?480:240,height=mega?3200:colossal?1600:giant?800:huge?400:200,bytes=width*height*2;
     if(size!=encoded_size(p[7]) || word(p+8)!=width || word(p+10)!=height ||
@@ -237,13 +244,27 @@ bool ScWorldDecode(ScWorld *w,const uint8_t *p,size_t size) {
     if(!legacy && (word(p+40)>width || word(p+42)>height)) return false;
     if(!legacy && (p[7]>=7?p[60]>>1>=SC_LAND_TYPES:p[60]>1)) return false;
     if(!legacy && (p[61]>1 || p[62]>2 || p[63]>5 || (!p[61] && (p[62] || p[63])))) return false;
-    if(p[7]>=8 && (get32(p+80)>SC_CALENDAR_YEAR_MAX || get32(p+84)))return false;
+    uint32_t mars=p[7]>=9?get32(p+84):0;
+    if(p[7]>=8 && (get32(p+80)>SC_CALENDAR_YEAR_MAX || (p[7]==8 && get32(p+84))))return false;
+    unsigned clean_months=(mars>>19)&(p[7]>=10?15:7);
+    unsigned notice=(mars>>(p[7]>=10?23:22))&(p[7]>=10?3:7);
+    if((mars>>26) || ((mars>>2)&1023)>1000 || ((mars>>12)&127)>61 ||
+       clean_months>(p[7]>=10?SC_MARS_CLEAN_MONTHS:6) || notice>3 || (!(mars&3) && mars))return false;
     ScWorldReset(w);w->active=p[12]!=0;w->huge=huge;w->giant=giant;w->colossal=colossal;w->mega=mega;w->map_anchor=get32(p+16);
     w->test_city=p[7]>=5 && p[14]!=0;
     w->scan_spread=p[7]>=5 && (p[15]&1)!=0;
     w->development_speed=p[7]>=6?p[15]>>1:0;
     w->land_type=p[7]>=7?p[60]>>1:0;
     w->calendar_year=p[7]>=8?get32(p+80):0;
+    w->mars_status=mars&3;w->mars_progress=(mars>>2)&1023;w->mars_sample=(mars>>12)&127;
+    w->mars_clean_months=clean_months;w->mars_notice=notice;w->mars_announcing=(mars>>25)&1;
+    /* v9 used easier goals. Retain the city and deadline, but don't award
+     * its old six-month qualification toward the new twelve-month challenge.
+     * Completed scenarios keep their earned result and completion mark. */
+    if(p[7]==9 && w->mars_status==1){
+        w->mars_progress=0;w->mars_sample=0;w->mars_clean_months=0;
+        w->mars_notice=0;w->mars_announcing=false;
+    }else if(p[7]==9 && w->mars_status==2)w->mars_clean_months=SC_MARS_CLEAN_MONTHS;
     for(unsigned i=0;i<3;++i) w->bank_anchor[i]=get32(p+28+i*4);
     if(!legacy) {
         w->scan_x=word(p+40);w->scan_y=word(p+42);
@@ -273,11 +294,11 @@ void ScWorldMirror(const ScWorld *w,uint8_t *r) {
 }
 size_t ScWorldCitiesSize(void) { return 24+2*(16+ScWorldEncodedSize()); }
 void ScWorldCitiesInit(uint8_t *p) {
-    memset(p,0,ScWorldCitiesSize()); memcpy(p,"SCWCITY",7); p[7]=8;
+    memset(p,0,ScWorldCitiesSize()); memcpy(p,"SCWCITY",7); p[7]=10;
     put32(p+8,(uint32_t)ScWorldEncodedSize()); put32(p+12,(uint32_t)ScWorldCitiesSize()); put32(p+16,2);
 }
 bool ScWorldCitiesValid(const uint8_t *p,size_t size) {
-    return size==ScWorldCitiesSize() && !memcmp(p,"SCWCITY",7) && p[7]==8 &&
+    return size==ScWorldCitiesSize() && !memcmp(p,"SCWCITY",7) && p[7]==10 &&
         get32(p+8)==ScWorldEncodedSize() && get32(p+12)==size && get32(p+16)==2;
 }
 static uint32_t city_hash(const uint8_t *r,unsigned slot) {
@@ -313,7 +334,7 @@ bool ScWorldCitiesUpgrade(uint8_t *out,const uint8_t *p,size_t size) {
     if(ScWorldCitiesValid(p,size)) {memcpy(out,p,size);return true;}
     if(size<24) return false;
     size_t old=ScWorldEncodedVersionSize(p[7]);
-    if(size!=24+2*(16+old) || memcmp(p,"SCWCITY",7) || (p[7]<2 || p[7]>7) || get32(p+8)!=old || get32(p+12)!=size || get32(p+16)!=2) return false;
+    if(size!=24+2*(16+old) || memcmp(p,"SCWCITY",7) || (p[7]<2 || p[7]>9) || get32(p+8)!=old || get32(p+12)!=size || get32(p+16)!=2) return false;
     ScWorld *w=malloc(sizeof *w);if(!w) return false;
     ScWorldCitiesInit(out);
     for(unsigned slot=0;slot<2;++slot) {

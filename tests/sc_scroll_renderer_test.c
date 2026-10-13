@@ -35,6 +35,20 @@ int main(void) {
         ScViewport view=centered?(ScViewport){684,300,214,38,1,0}:(ScViewport){448,224,0,0,1,0};
         assert(ScRendererResize(r,view));assert(ScRendererDeferTerrain(r,deferred!=0));
         frame(r,p,ram,native);assert(!r->scroll_repair);
+        /* Buildings developing under the fixed HUD must never show through
+         * its transparent pixels, including native-size maps and CPU repair. */
+        uint32_t header=ScRendererPixel(r,view.core_x+80,view.core_y+24);
+        uint32_t toolbar=ScRendererPixel(r,view.core_x+24,view.core_y+96);
+        if(size) {
+            ScWorldPutCell(world,cx+10,cy+3,1);
+            ScWorldPutCell(world,cx+3,cy+12,1);
+        } else {
+            word(map,2*((cy+3)*width+cx+10),1);
+            word(map,2*((cy+12)*width+cx+3),1);
+        }
+        frame(r,p,ram,native);
+        assert(ScRendererPixel(r,view.core_x+80,view.core_y+24)==header);
+        assert(ScRendererPixel(r,view.core_x+24,view.core_y+96)==toolbar);
         if(size) {
             /* A placed tile must bypass stale native staging on the next
              * frame even when its region and the rest of a huge map are

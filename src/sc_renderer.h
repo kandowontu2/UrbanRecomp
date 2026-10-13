@@ -5,6 +5,7 @@
 #include "sc_vehicles.h"
 #include "sc_world.h"
 #include "sc_population.h"
+#include "sc_mars_scenario.h"
 #include "sc_terrain.h"
 #include "sc_mapgen.h"
 #include <stdint.h>
@@ -71,6 +72,7 @@ typedef struct ScRenderer {
     bool rom_is_us;
     const ScWorld *world;
     const ScPopulation *population;
+    ScMarsStats mars_stats; /* captured by the host before scanout */
     int wood_layer, wood_period;
     uint16_t wood_rows[32];
     bool title_live;
@@ -168,6 +170,8 @@ void ScRendererClipboardRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,
 /* Restore the live HUD hand above host-added COPY/PASTE labels. */
 void ScRendererDisasterRow(const ScRenderer *r,const Ppu *ppu,ScViewport view,const uint8_t *ram,int y,uint32_t *out);
 void ScRendererHudPointer(ScRenderer *r,const Ppu *ppu);
+/* Canvas coordinates; the passive Mars status panel owns its mouse area. */
+bool ScRendererMarsHudHit(const ScRenderer *r,int x,int y);
 uint32_t ScRendererHandPixel(const Ppu *ppu,int x,int y);
 uint32_t ScRendererCityHandPixel(const Ppu *ppu,int x,int y);
 bool ScRendererMinimapFont(ScRenderer *r,const uint8_t *tiles,size_t size);
