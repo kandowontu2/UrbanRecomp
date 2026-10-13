@@ -205,7 +205,7 @@ void main(uint3 id : SV_DispatchThreadID) {
    uint base=t.staged&65535,staged_roof=t.staged>>16;
    bool bad=(r.math&2048) && land && (!(t.attributes&0x100000) || base!=(t.expected&65535) ||
        ((r.main_mask&1) && staged_roof!=(t.expected>>16) && !(staged_roof==0x1376 && needs_power)));
-   if((t.attributes&0x40000) || needs_power || clear || bad) {
+   if(land && ((t.attributes&0x40000) || needs_power || clear || bad)) {
     native_pixel=false;overlay.x=0x80000000|0x40000000|((clear || bad)?0x20000000:0);
     if(!land) overlay.y|=0x80000000;
    }

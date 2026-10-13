@@ -167,6 +167,8 @@ static bool native_repair(const ScTerrainFrame *f,unsigned x,unsigned y,
     int local=(int)x-(int)row->core_x;
     if(!(row->math&SC_ROW_NATIVE_REPAIR) || local<0 || local>=256) return false;
     bool land=!(row->math&SC_ROW_CITY_HUD) || (!(row->math&SC_ROW_HUD_TOP) && local>=56);
+    /* Match the CPU compositor: edited city cells never replace fixed UI. */
+    if(!land) return false;
     bool warning=land && (tile->attributes&SC_TILE_POWER_WARNING);
     unsigned native_bg=ScTerrainNativeTile(f,y,0,(local+f->native[y].phase[0])/8).attributes;
     bool clear=land && (tile->attributes&SC_TILE_CLEAR_WARNING) && native_bg==0x1376;
